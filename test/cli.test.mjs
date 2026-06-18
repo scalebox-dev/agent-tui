@@ -90,7 +90,7 @@ test("workbench command parser and reducer handle local workflow state", () => {
     kind: "search",
     query: "auth flow",
   });
-  assert.deepEqual(parseWorkbenchCommand("/unknown"), { kind: "help" });
+  assert.deepEqual(parseWorkbenchCommand("/unknown"), { kind: "invalid", command: "unknown" });
   assert.deepEqual(parseWorkbenchCommand("/context"), { kind: "context" });
   assert.deepEqual(parseWorkbenchCommand("/new release notes"), { kind: "new_conversation", name: "release notes" });
   assert.deepEqual(parseWorkbenchCommand("/new"), { kind: "new_conversation", name: undefined });
@@ -107,6 +107,9 @@ test("workbench command parser and reducer handle local workflow state", () => {
   assert.deepEqual(parseWorkbenchCommand("/switch-profile work"), { kind: "switch_profile", name: "work" });
   assert.deepEqual(parseWorkbenchCommand("/switch-profile"), { kind: "switch_profile", name: undefined });
   assert.deepEqual(parseWorkbenchCommand("/config"), { kind: "config" });
+  assert.deepEqual(parseWorkbenchCommand("/config preset pro-search"), { kind: "config", field: "preset", value: "pro-search" });
+  assert.deepEqual(parseWorkbenchCommand("/config preset none"), { kind: "config", field: "preset", value: "none" });
+  assert.deepEqual(parseWorkbenchCommand("/config nope"), { kind: "invalid", command: "config nope" });
   assert.deepEqual(parseWorkbenchCommand("/access"), { kind: "access" });
   assert.deepEqual(parseWorkbenchCommand("/access full"), { kind: "access", mode: "full" });
   assert.deepEqual(parseWorkbenchCommand("/access approval"), { kind: "access", mode: "approval" });
@@ -165,10 +168,19 @@ test("workbench command parser and reducer handle local workflow state", () => {
 });
 
 test("chat options default to pro-search unless model or preset is explicit", () => {
-  assert.equal(normalizeChatOptions(["hi"], {}).preset, "pro-search");
-  assert.equal(normalizeChatOptions(["hi"], { preset: "code-agent" }).preset, "code-agent");
-  assert.equal(normalizeChatOptions(["hi"], { model: "provider/model" }).preset, undefined);
-  assert.equal(normalizeChatOptions(["hi"], { model: "provider/model" }).model, "provider/model");
+  const defaultOptions = normalizeChatOptions(["hi"], {});
+  assert.equal(defaultOptions.preset, "pro-search");
+  assert.equal(defaultOptions.presetExplicit, false);
+  assert.equal(defaultOptions.modelExplicit, false);
+
+  const presetOptions = normalizeChatOptions(["hi"], { preset: "code-agent" });
+  assert.equal(presetOptions.preset, "code-agent");
+  assert.equal(presetOptions.presetExplicit, true);
+
+  const modelOptions = normalizeChatOptions(["hi"], { model: "provider/model" });
+  assert.equal(modelOptions.preset, undefined);
+  assert.equal(modelOptions.model, "provider/model");
+  assert.equal(modelOptions.modelExplicit, true);
 });
 
 test("agent stream events map into workbench turn events", () => {

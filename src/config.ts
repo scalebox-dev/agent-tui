@@ -29,6 +29,7 @@ export interface CLIConfig {
   activeProfile: string;
   profiles: Record<string, Profile>;
   conversations: Record<string, ConversationState>;
+  workbench: WorkbenchPreferences;
 }
 
 export interface ConversationState {
@@ -36,6 +37,10 @@ export interface ConversationState {
   profile: string;
   previousResponseId?: string;
   updatedAt: number;
+}
+
+export interface WorkbenchPreferences {
+  defaultPreset?: string | null;
 }
 
 const authProfileSchema = z.discriminatedUnion("type", [
@@ -67,10 +72,15 @@ const conversationSchema = z.object({
   updatedAt: z.number(),
 });
 
+const workbenchPreferencesSchema = z.object({
+  defaultPreset: z.string().nullable().optional(),
+}).default({});
+
 const cliConfigSchema = z.object({
   activeProfile: z.string().default("default"),
   profiles: z.record(z.string(), profileSchema).default({}),
   conversations: z.record(z.string(), conversationSchema).default({}),
+  workbench: workbenchPreferencesSchema,
 });
 
 export async function loadConfig(): Promise<CLIConfig> {
@@ -114,7 +124,34 @@ export async function activeProfile(profileName?: string): Promise<Profile> {
 }
 
 export function emptyConfig(): CLIConfig {
-  return { activeProfile: "default", profiles: {}, conversations: {} };
+  return { activeProfile: "default", profiles: {}, conversations: {}, workbench: {} };
+}
+
+export async function loadWorkbenchPreferences(): Promise<WorkbenchPreferences> {
+  const config = await loadConfig();
+  return config.workbench;
+}
+
+export async function updateWorkbenchPreferences(patch: { defaultPreset?: string | null | undefined }): Promise<WorkbenchPreferences> {
+  const config = await loadConfig();
+  const next: WorkbenchPreferences = { ...config.workbench };
+  if ("defaultPreset" in patch) {
+    if (patch.defaultPreset === undefined) {
+      delete next.defaultPreset;
+    } else if (patch.defaultPreset === null) {
+      next.defaultPreset = null;
+    } else {
+      const value = patch.defaultPreset.trim();
+      if (value) {
+        next.defaultPreset = value;
+      } else {
+        delete next.defaultPreset;
+      }
+    }
+  }
+  config.workbench = next;
+  await saveConfig(config);
+  return next;
 }
 
 export function redactSecret(value: string): string {

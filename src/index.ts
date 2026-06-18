@@ -227,7 +227,7 @@ function agentChatCommand() {
     .option("--context-query <text>", "include local search matches in context")
     .option("--max-context-files <n>", "local context file limit")
     .option("--max-context-bytes <n>", "local context byte limit")
-    .option("--access <mode>", "local workspace access mode: approval or full", "approval")
+    .option("--access <mode>", "local workspace access mode: approval or full")
     .option("--restart", "start the conversation from a fresh response")
     .addOption(new Option("--no-stream", "wait for final response instead of streaming"))
     .action(async (prompt: string[], options: ChatOptions) => {

@@ -1,11 +1,18 @@
 import React, { useEffect, useReducer, useRef, useState } from "react";
 import { Box, Text, useApp, useInput } from "ink";
 import { createLocalWorkspaceToolRegistry } from "@agent-api/sdk/local";
-import { defaultBaseURL } from "../config.js";
+import {
+  defaultBaseURL,
+  loadWorkbenchPreferences,
+  updateWorkbenchPreferences,
+  type WorkbenchPreferences,
+} from "../config.js";
 import {
   conversationSummary,
   clearPresetToolCatalogCache,
   deleteConversation,
+  isAvailablePreset,
+  listAvailablePresets,
   listConversations,
   resumeAgentAfterLocalApproval,
   runAgentTurn,
@@ -30,6 +37,7 @@ import {
 import {
   deleteProfile,
   formatDeviceUserCode,
+  getAuthStatus,
   loginWithAPIKey,
   openBrowserURL,
   refreshActiveProfileIfNeeded,
@@ -318,8 +326,10 @@ function WorkbenchApp({
   const pendingApprovalInvalidInputsRef = useRef(0);
   const authRefreshWarningShownRef = useRef(false);
   const [draft, setDraft] = useState("");
+  const [spinnerFrame, setSpinnerFrame] = useState(0);
   const [runPreset, setRunPreset] = useState(options.preset);
   const [runModel, setRunModel] = useState(options.model);
+  const [workbenchPreferences, setWorkbenchPreferences] = useState<WorkbenchPreferences>({});
   const [state, dispatch] = useReducer(
     workbenchReducer,
     {
@@ -329,6 +339,25 @@ function WorkbenchApp({
     },
     createInitialWorkbenchState,
   );
+
+  useEffect(() => {
+    let mounted = true;
+    loadWorkbenchPreferences()
+      .then((preferences) => {
+        if (!mounted) return;
+        setWorkbenchPreferences(preferences);
+        if (!options.presetExplicit && !options.modelExplicit) {
+          setRunPreset(effectiveDefaultPreset(preferences, options.preset));
+        }
+      })
+      .catch((error) => {
+        if (!mounted) return;
+        dispatch({ type: "activity.add", level: "warning", text: `Config preferences unavailable: ${userFacingError(error)}` });
+      });
+    return () => {
+      mounted = false;
+    };
+  }, [options.modelExplicit, options.presetExplicit]);
 
   useEffect(() => {
     let mounted = true;
@@ -431,6 +460,13 @@ function WorkbenchApp({
     pendingApprovalInvalidInputsRef.current = 0;
   }, [state.pendingLocalTool?.id]);
 
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setSpinnerFrame((frame) => frame + 1);
+    }, state.busy ? 120 : 500);
+    return () => clearInterval(interval);
+  }, [state.busy]);
+
   async function submit(input: string) {
     if (state.pendingLocalTool) {
       const pendingApprovalCommand = parsePendingApprovalCommand(input);
@@ -475,6 +511,14 @@ function WorkbenchApp({
 
   async function runCommand(command: NonNullable<ReturnType<typeof parseWorkbenchCommand>>) {
     switch (command.kind) {
+      case "invalid":
+        dispatch({
+          type: "message.add",
+          role: "system",
+          text: `Unknown command: /${command.command}\nType /help for supported commands.`,
+        });
+        dispatch({ type: "activity.add", level: "warning", text: `Unknown command: /${command.command}` });
+        return;
       case "quit":
         app.exit();
         return;
@@ -499,10 +543,10 @@ function WorkbenchApp({
         onSwitchProfile(command.name);
         return;
       case "auth_status":
-        dispatch({ type: "message.add", role: "system", text: `Authenticated profile: ${profileName}` });
+        await showAuthStatus();
         return;
       case "config":
-        dispatch({ type: "message.add", role: "system", text: runConfigText({ profileName, runPreset, runModel, accessMode: state.accessMode, contextEnabled: state.contextEnabled }) });
+        await runConfigCommand(command);
         return;
       case "context":
         dispatch({ type: "context.toggle" });
@@ -515,12 +559,7 @@ function WorkbenchApp({
         dispatch({ type: "access.set", mode: command.mode });
         return;
       case "preset":
-        if (!command.value) {
-          dispatch({ type: "message.add", role: "system", text: `Preset: ${runPreset || "none"}. Use /preset <name> or /preset none.` });
-          return;
-        }
-        setRunPreset(normalizeOptionalSetting(command.value, ["none", "off", "clear"]));
-        dispatch({ type: "activity.add", text: `Preset: ${normalizeOptionalSetting(command.value, ["none", "off", "clear"]) || "none"}` });
+        await runPresetCommand(command.value);
         return;
       case "model":
         if (!command.value) {
@@ -565,6 +604,114 @@ function WorkbenchApp({
       case "reject":
         rejectPendingEdit();
         return;
+    }
+  }
+
+  async function runConfigCommand(command: Extract<NonNullable<ReturnType<typeof parseWorkbenchCommand>>, { kind: "config" }>) {
+    if (!command.field) {
+      dispatch({
+        type: "message.add",
+        role: "system",
+        text: runConfigText({
+          profileName,
+          runPreset,
+          runModel,
+          accessMode: state.accessMode,
+          contextEnabled: state.contextEnabled,
+          defaultPreset: workbenchPreferences.defaultPreset,
+        }),
+      });
+      return;
+    }
+
+    if (command.field === "preset") {
+      if (!command.value) {
+        dispatch({
+          type: "message.add",
+          role: "system",
+          text: `Default preset: ${formatDefaultPreset(workbenchPreferences.defaultPreset)}. Use /config preset <name>, /config preset none, or /config preset reset.`,
+        });
+        return;
+      }
+      const normalized = normalizeDefaultPreset(command.value);
+      if (typeof normalized === "string" && !(await validatePresetName(normalized))) {
+        return;
+      }
+      const preferences = await updateWorkbenchPreferences({ defaultPreset: normalized });
+      setWorkbenchPreferences(preferences);
+      if (!options.presetExplicit && !options.modelExplicit) {
+        setRunPreset(effectiveDefaultPreset(preferences, options.preset));
+      }
+      dispatch({
+        type: "message.add",
+        role: "system",
+        text: `Saved default preset: ${formatDefaultPreset(preferences.defaultPreset)}.`,
+      });
+      dispatch({ type: "activity.add", level: "success", text: `Default preset saved: ${formatDefaultPreset(preferences.defaultPreset)}` });
+    }
+  }
+
+  async function runPresetCommand(value?: string) {
+    if (!value) {
+      dispatch({
+        type: "message.add",
+        role: "system",
+        text: await presetListText(`Preset: ${runPreset || "none"}. Use /preset <name> or /preset none.`),
+      });
+      return;
+    }
+    const normalized = normalizeOptionalSetting(value, ["none", "off", "clear"]);
+    if (normalized && !(await validatePresetName(normalized))) {
+      return;
+    }
+    setRunPreset(normalized);
+    dispatch({ type: "activity.add", text: `Preset: ${normalized || "none"}` });
+  }
+
+  async function validatePresetName(preset: string) {
+    try {
+      if (await isAvailablePreset(profileName, preset)) return true;
+      dispatch({
+        type: "message.add",
+        role: "system",
+        text: await presetListText(`Unknown preset: ${preset}`),
+      });
+      dispatch({ type: "activity.add", level: "warning", text: `Unknown preset: ${preset}` });
+      return false;
+    } catch (error) {
+      dispatch({ type: "message.add", role: "system", text: `Could not validate preset "${preset}": ${userFacingError(error)}` });
+      dispatch({ type: "activity.add", level: "error", text: "Preset catalog unavailable" });
+      return false;
+    }
+  }
+
+  async function presetListText(prefix: string) {
+    try {
+      const presets = await listAvailablePresets(profileName);
+      return [
+        prefix,
+        "",
+        "Available presets:",
+        ...formatPresetList(presets),
+      ].join("\n");
+    } catch (error) {
+      return [
+        prefix,
+        "",
+        `Available presets could not be loaded: ${userFacingError(error)}`,
+      ].join("\n");
+    }
+  }
+
+  async function showAuthStatus() {
+    dispatch({ type: "activity.add", text: "Checking auth status" });
+    try {
+      const status = await getAuthStatus(profileName);
+      dispatch({ type: "message.add", role: "system", text: authStatusText(status) });
+      dispatch({ type: "activity.add", level: "success", text: "Auth status ready" });
+    } catch (error) {
+      dispatch({ type: "message.add", role: "system", text: userFacingError(error) });
+      dispatch({ type: "activity.add", level: "error", text: "Auth status failed" });
     }
   }
 
@@ -910,7 +1057,13 @@ function WorkbenchApp({
       <Box marginTop={1}>
         <Box flexDirection="column" width="72%" paddingRight={1}>
           {state.messages.map((message) => (
-            <MessageBlock busy={state.busy} key={message.id} message={message} />
+            <MessageBlock
+              active={message.id === state.activeAssistantMessageId}
+              busy={state.busy}
+              key={message.id}
+              message={message}
+              spinnerFrame={spinnerFrame}
+            />
           ))}
         </Box>
         <Box flexDirection="column" width="28%" borderStyle="single" borderColor="gray" paddingX={1}>
@@ -924,7 +1077,16 @@ function WorkbenchApp({
       </Box>
       <Box borderStyle="single" borderColor={state.busy ? "yellow" : "green"} paddingX={1}>
         <Text color={state.busy ? "yellow" : "green"}>{state.busy ? "working" : "you"} </Text>
-        <Text>{state.busy ? "waiting for agent..." : draft}</Text>
+        {state.busy ? (
+          <Text>
+            <Text color="yellow">{spinnerGlyph(spinnerFrame)}</Text> waiting for agent {elapsedDots(spinnerFrame)}
+          </Text>
+        ) : (
+          <Text>
+            {draft}
+            <Cursor visible={cursorVisible(spinnerFrame)} />
+          </Text>
+        )}
       </Box>
       <Box paddingX={1}>
         <Text color="gray">/help /auth /login /logout /switch-profile /delete-profile /config /preset /model /access /context /quit</Text>
@@ -1011,11 +1173,24 @@ function Header({
   );
 }
 
-function MessageBlock({ busy, message }: { busy: boolean; message: WorkbenchMessage }) {
+function MessageBlock({
+  active,
+  busy,
+  message,
+  spinnerFrame,
+}: {
+  active: boolean;
+  busy: boolean;
+  message: WorkbenchMessage;
+  spinnerFrame: number;
+}) {
+  const waiting = message.role === "assistant" && busy && active && !message.text;
   return (
     <Box flexDirection="column" marginBottom={message.role === "system" ? 0 : 1}>
       <Text color={roleColor(message.role)}>{roleLabel(message.role)}</Text>
-      <Text>{message.text || (message.role === "assistant" && busy ? "..." : "")}</Text>
+      <Text>
+        {message.text || (waiting ? `${spinnerGlyph(spinnerFrame)} thinking ${elapsedDots(spinnerFrame)}` : "")}
+      </Text>
     </Box>
   );
 }
@@ -1037,6 +1212,22 @@ function modelLabel(model?: string, provider?: string) {
   return model || provider || "unknown";
 }
 
+function Cursor({ visible }: { visible: boolean }) {
+  return visible ? <Text inverse> </Text> : <Text> </Text>;
+}
+
+function cursorVisible(frame: number) {
+  return frame % 2 === 0;
+}
+
+function spinnerGlyph(frame: number) {
+  return ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"][frame % 10];
+}
+
+function elapsedDots(frame: number) {
+  return ".".repeat((Math.floor(frame / 4) % 3) + 1);
+}
+
 function createConversationName() {
   const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..+$/, "").replace("T", "-");
   return `thread-${stamp}`;
@@ -1056,12 +1247,14 @@ function normalizeOptionalSetting(value: string, clearValues: string[]) {
 function runConfigText({
   accessMode,
   contextEnabled,
+  defaultPreset,
   profileName,
   runModel,
   runPreset,
 }: {
   accessMode: string;
   contextEnabled: boolean;
+  defaultPreset?: string | null;
   profileName: string;
   runModel?: string;
   runPreset?: string;
@@ -1069,10 +1262,69 @@ function runConfigText({
   return [
     `Profile: ${profileName}`,
     `Preset: ${runPreset || "none"}`,
+    `Default preset: ${formatDefaultPreset(defaultPreset)}`,
     `Model: ${runModel || "auto"}`,
     `Local workspace context/tools: ${contextEnabled ? "on" : "off"}`,
     `Local workspace access: ${accessMode}`,
   ].join("\n");
+}
+
+function normalizeDefaultPreset(value: string) {
+  const trimmed = value.trim();
+  const lowered = trimmed.toLowerCase();
+  if (!trimmed || lowered === "reset" || lowered === "default" || lowered === "builtin") return undefined;
+  if (["none", "off", "disable", "disabled"].includes(lowered)) return null;
+  return trimmed;
+}
+
+function formatDefaultPreset(value: string | null | undefined) {
+  if (value === undefined) return "built-in (pro-search)";
+  return value ?? "none";
+}
+
+function effectiveDefaultPreset(preferences: WorkbenchPreferences, builtInPreset?: string) {
+  if ("defaultPreset" in preferences) return preferences.defaultPreset ?? undefined;
+  return builtInPreset;
+}
+
+function formatPresetList(presets: Awaited<ReturnType<typeof listAvailablePresets>>) {
+  if (presets.length === 0) return ["- none returned by this endpoint"];
+  return presets.map((preset) => {
+    const description = preset.description ? ` - ${preset.description}` : "";
+    return `- ${preset.preset}${description}`;
+  });
+}
+
+function authStatusText(status: Awaited<ReturnType<typeof getAuthStatus>>) {
+  return [
+    `Profile: ${status.profile}`,
+    `Endpoint: ${status.baseURL}`,
+    `Auth: ${status.authType === "api_key" ? "API key" : "Browser session"}`,
+    `Account: ${summarizeMe(status.me)}`,
+  ].join("\n");
+}
+
+function summarizeMe(me: unknown) {
+  if (!me || typeof me !== "object") return "available";
+  const obj = me as Record<string, unknown>;
+  const candidates = [
+    obj.email,
+    obj.name,
+    obj.username,
+    obj.user_id,
+    obj.id,
+    nestedString(obj.user, "email"),
+    nestedString(obj.user, "name"),
+    nestedString(obj.user, "id"),
+  ];
+  const picked = candidates.find((value): value is string => typeof value === "string" && value.trim() !== "");
+  return picked || "available";
+}
+
+function nestedString(value: unknown, key: string) {
+  if (!value || typeof value !== "object") return undefined;
+  const nested = (value as Record<string, unknown>)[key];
+  return typeof nested === "string" ? nested : undefined;
 }
 
 async function applyLocalToolApproval(

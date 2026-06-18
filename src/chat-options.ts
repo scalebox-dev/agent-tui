@@ -18,14 +18,18 @@ export type ChatOptions = {
 };
 
 export function normalizeChatOptions(promptParts: string[], options: ChatOptions) {
-  const preset = options.preset || (options.model ? undefined : "pro-search");
+  const presetExplicit = options.preset !== undefined;
+  const modelExplicit = options.model !== undefined && options.model !== "";
+  const preset = presetExplicit ? options.preset : (modelExplicit ? undefined : "pro-search");
   return {
     profile: options.profile,
     promptParts,
     file: options.file,
     stdin: options.stdin,
     preset,
+    presetExplicit,
     model: options.model,
+    modelExplicit,
     stream: options.stream !== false,
     conversation: options.conversation || "default",
     continueConversation: true,

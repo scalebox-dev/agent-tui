@@ -7,6 +7,8 @@ export {
   agentResponseFailureMessage,
   agentTurnEventFromStreamEvent,
   clearPresetToolCatalogCache,
+  isAvailablePreset,
+  listAvailablePresets,
   resolveAgentRequestTools,
   resumeAgentAfterLocalApproval,
   runAgent,

@@ -58,6 +58,7 @@ export type WorkbenchAction =
   | { type: "conversation.set"; name: string };
 
 export type WorkbenchCommand =
+  | { kind: "invalid"; command: string }
   | { kind: "quit" }
   | { kind: "help" }
   | { kind: "clear" }
@@ -66,7 +67,7 @@ export type WorkbenchCommand =
   | { kind: "delete_profile" }
   | { kind: "switch_profile"; name?: string }
   | { kind: "auth_status" }
-  | { kind: "config" }
+  | { kind: "config"; field?: "preset"; value?: string }
   | { kind: "context" }
   | { kind: "workspace" }
   | { kind: "access"; mode?: WorkspaceAccessMode }
@@ -211,8 +212,14 @@ export function parseWorkbenchCommand(input: string): WorkbenchCommand | null {
     case "auth":
       return { kind: "auth_status" };
     case "config":
-    case "settings":
-      return { kind: "config" };
+    case "settings": {
+      const [field, ...valueParts] = rest;
+      if (!field) return { kind: "config" };
+      if (field === "preset") {
+        return { kind: "config", field, value: valueParts.join(" ").trim() || undefined };
+      }
+      return { kind: "invalid", command: `${name} ${field}` };
+    }
     case "context":
       return { kind: "context" };
     case "access": {
@@ -260,7 +267,7 @@ export function parseWorkbenchCommand(input: string): WorkbenchCommand | null {
     case "reject":
       return { kind: "reject" };
     default:
-      return { kind: "help" };
+      return { kind: "invalid", command: name };
   }
 }
 
@@ -291,7 +298,8 @@ export function helpText() {
     "/logout          leave current session and return to auth gate",
     "/switch-profile  switch/sign in with a different profile",
     "/delete-profile  delete current saved profile and return to auth",
-    "/config          show current run configuration",
+    "/config          show current run configuration and saved defaults",
+    "/config preset   save default preset; use none/off for no preset, reset for built-in",
     "/preset [name]   show or set preset; use none/off to clear",
     "/model [name]    show or set explicit model; use auto/none/off to clear",
     "/access [mode]   show or set local access: approval or full",

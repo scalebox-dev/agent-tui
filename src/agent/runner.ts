@@ -26,7 +26,9 @@ export interface AgentRunOptions {
   file?: string;
   stdin?: boolean;
   preset?: string;
+  presetExplicit?: boolean;
   model?: string;
+  modelExplicit?: boolean;
   stream?: boolean;
   conversation?: string;
   continueConversation?: boolean;
@@ -83,6 +85,11 @@ type ToolListResponse = Awaited<ReturnType<PresetToolCatalogClient["tools"]["lis
 export interface ResolveAgentRequestToolsOptions {
   baseURL?: string;
   cacheTTLMS?: number;
+}
+
+export interface PresetSummary {
+  preset: string;
+  description?: string;
 }
 
 const defaultCatalogCacheTTLMS = 10 * 60_000;
@@ -198,6 +205,35 @@ export async function resumeAgentAfterLocalApproval(
     localWorkspace.registry,
     onEvent,
   );
+}
+
+export async function listAvailablePresets(profileName?: string): Promise<PresetSummary[]> {
+  const runtimeProfile = await resolveRuntimeProfile(profileName);
+  const presets = await cachedPresetCatalog(
+    runtimeProfile.profile.baseURL,
+    defaultCatalogCacheTTLMS,
+    () => runtimeProfile.client.presets.list(),
+  );
+  return presets.data
+    .map((preset) => {
+      const item = preset as { preset?: unknown; name?: unknown; description?: unknown };
+      const name = typeof item.preset === "string"
+        ? item.preset
+        : typeof item.name === "string"
+          ? item.name
+          : "";
+      return {
+        preset: name,
+        description: typeof item.description === "string" ? item.description : undefined,
+      };
+    })
+    .filter((preset) => preset.preset.length > 0)
+    .sort((a, b) => a.preset.localeCompare(b.preset));
+}
+
+export async function isAvailablePreset(profileName: string | undefined, preset: string): Promise<boolean> {
+  const available = await listAvailablePresets(profileName);
+  return available.some((item) => item.preset === preset);
 }
 
 async function runAgentTurnWithLocalTools(

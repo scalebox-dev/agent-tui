@@ -20,6 +20,13 @@ export interface RuntimeProfile {
   client: AgentAPI;
 }
 
+export interface AuthStatus {
+  profile: string;
+  baseURL: string;
+  authType: Profile["auth"]["type"];
+  me?: unknown;
+}
+
 export class AuthSessionExpiredError extends Error {
   readonly profile: string;
   readonly baseURL: string;
@@ -115,6 +122,23 @@ export async function resolveRuntimeProfile(profileName?: string): Promise<Runti
   };
 }
 
+export async function getAuthStatus(profileName?: string): Promise<AuthStatus> {
+  const runtime = await resolveRuntimeProfile(profileName);
+  const response = await fetch(`${runtime.profile.baseURL}/v1/me`, {
+    headers: { Authorization: `Bearer ${runtime.token}` },
+  });
+  const payload = await response.json().catch(() => undefined);
+  if (!response.ok) {
+    throw new Error(errorMessageFromPayload(payload) || `whoami failed with ${response.status}`);
+  }
+  return {
+    profile: runtime.profile.name,
+    baseURL: runtime.profile.baseURL,
+    authType: runtime.profile.auth.type,
+    me: payload,
+  };
+}
+
 export async function refreshActiveProfileIfNeeded(profileName?: string, refreshWindowMs = 60_000): Promise<{ profile: Profile; refreshed: boolean }> {
   const profile = await activeProfile(profileName);
   const shouldRefresh = browserAccessTokenExpiresWithin(profile, refreshWindowMs);
@@ -190,6 +214,19 @@ export function profileSummary(profile: Profile, active = false) {
     ? `api_key ${redactSecret(profile.auth.apiKey)}`
     : `browser ${redactSecret(profile.auth.accessToken)}`;
   return `${active ? "*" : " "} ${profile.name}\t${profile.baseURL}\t${auth}`;
+}
+
+function errorMessageFromPayload(payload: unknown) {
+  if (payload && typeof payload === "object") {
+    const error = (payload as { error?: unknown }).error;
+    if (error && typeof error === "object") {
+      const message = (error as { message?: unknown }).message;
+      if (typeof message === "string") return message;
+    }
+    const message = (payload as { message?: unknown }).message;
+    if (typeof message === "string") return message;
+  }
+  return "";
 }
 
 function normalizeBaseURL(baseURL?: string) {
