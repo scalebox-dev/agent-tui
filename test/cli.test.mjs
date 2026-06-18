@@ -71,11 +71,11 @@ test("agent conversation manager lists, shows, and deletes local conversation st
   assert.match(emptyOut, /No agent conversations yet/);
 });
 
-test("workspace status inspects a local directory", async () => {
-  const root = await mkdtemp(join(tmpdir(), "agent-api-cli-workspace-"));
-  await writeFile(join(root, "README.md"), "# Test Workspace\n");
+test("workdir status inspects a local directory", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-api-cli-workdir-"));
+  await writeFile(join(root, "README.md"), "# Test Workdir\n");
 
-  const { stdout } = await execFileAsync("node", [bin, "workspace", "status", "--path", root]);
+  const { stdout } = await execFileAsync("node", [bin, "workdir", "status", "--path", root]);
   const status = JSON.parse(stdout);
 
   assert.equal(status.root, root);
@@ -91,7 +91,9 @@ test("workbench command parser and reducer handle local workflow state", () => {
     query: "auth flow",
   });
   assert.deepEqual(parseWorkbenchCommand("/unknown"), { kind: "invalid", command: "unknown" });
-  assert.deepEqual(parseWorkbenchCommand("/context"), { kind: "context" });
+  assert.deepEqual(parseWorkbenchCommand("/context"), { kind: "context", enabled: undefined });
+  assert.deepEqual(parseWorkbenchCommand("/context on"), { kind: "context", enabled: true });
+  assert.deepEqual(parseWorkbenchCommand("/context off"), { kind: "context", enabled: false });
   assert.deepEqual(parseWorkbenchCommand("/new release notes"), { kind: "new_conversation", name: "release notes" });
   assert.deepEqual(parseWorkbenchCommand("/new"), { kind: "new_conversation", name: undefined });
   assert.deepEqual(parseWorkbenchCommand("/switch release"), { kind: "switch_conversation", name: "release" });
@@ -115,6 +117,10 @@ test("workbench command parser and reducer handle local workflow state", () => {
   assert.deepEqual(parseWorkbenchCommand("/access approval"), { kind: "access", mode: "approval" });
   assert.deepEqual(parseWorkbenchCommand("/preset pro-search"), { kind: "preset", value: "pro-search" });
   assert.deepEqual(parseWorkbenchCommand("/model auto"), { kind: "model", value: "auto" });
+  assert.deepEqual(parseWorkbenchCommand("/workdir"), { kind: "workdir", enabled: undefined });
+  assert.deepEqual(parseWorkbenchCommand("/workdir on"), { kind: "workdir", enabled: true });
+  assert.deepEqual(parseWorkbenchCommand("/workdir off"), { kind: "workdir", enabled: false });
+  assert.deepEqual(parseWorkbenchCommand("/local on"), { kind: "workdir", enabled: true });
   assert.equal(parseWorkbenchCommand("plain prompt"), null);
   assert.deepEqual(parsePendingApprovalCommand("/apply"), { kind: "apply" });
   assert.deepEqual(parsePendingApprovalCommand("/yes"), { kind: "apply" });
@@ -140,7 +146,7 @@ test("workbench command parser and reducer handle local workflow state", () => {
   const pendingLocalTool = workbenchReducer(switchedConversation, {
     type: "local_tool.pending.set",
     approval: {
-      name: "local_workspace",
+      name: "local_workdir",
       action: "write",
       arguments: { action: "write", path: "notes.txt", content: "hello\n" },
       preview: undefined,
@@ -148,14 +154,14 @@ test("workbench command parser and reducer handle local workflow state", () => {
       responseID: "resp_local",
     },
   });
-  assert.equal(pendingLocalTool.pendingLocalTool?.name, "local_workspace");
+  assert.equal(pendingLocalTool.pendingLocalTool?.name, "local_workdir");
   assert.equal(pendingLocalTool.pendingLocalTool?.action, "write");
   const clearedLocalTool = workbenchReducer(pendingLocalTool, { type: "local_tool.pending.clear" });
   assert.equal(clearedLocalTool.pendingLocalTool, null);
 
-  const withWorkspace = workbenchReducer(clearedLocalTool, {
-    type: "workspace.set",
-    workspace: {
+  const withWorkdir = workbenchReducer(clearedLocalTool, {
+    type: "workdir.set",
+    workdir: {
       root: "/tmp/example",
       name: "example",
       fileCount: 2,
@@ -163,8 +169,8 @@ test("workbench command parser and reducer handle local workflow state", () => {
       scanTruncated: false,
     },
   });
-  assert.equal(withWorkspace.workspace?.name, "example");
-  assert.match(withWorkspace.activities.at(-1)?.text ?? "", /Workspace loaded/);
+  assert.equal(withWorkdir.workdir?.name, "example");
+  assert.match(withWorkdir.activities.at(-1)?.text ?? "", /Workdir loaded/);
 });
 
 test("chat options default to pro-search unless model or preset is explicit", () => {
@@ -232,7 +238,7 @@ test("agent failed response message includes response identity and code", () => 
   }), "Agent response resp_failed model=provider/model failed: The model request failed. Please try again. (model_call_failed)");
 });
 
-test("agent request tools preserve preset tools when appending local workspace tools", async () => {
+test("agent request tools preserve preset tools when appending local workdir tools", async () => {
   const calls = [];
   const client = {
     presets: {
@@ -266,14 +272,14 @@ test("agent request tools preserve preset tools when appending local workspace t
   const tools = await resolveAgentRequestTools(client, "pro-search", [
     {
       type: "function",
-      name: "local_workspace",
-      description: "Local workspace",
+      name: "local_workdir",
+      description: "Local workdir",
       parameters: { type: "object" },
     },
   ]);
 
   assert.deepEqual(calls, ["presets", "tools"]);
-  assert.deepEqual(tools.map((tool) => tool.name), ["smart_web_search", "fetch_url", "local_workspace"]);
+  assert.deepEqual(tools.map((tool) => tool.name), ["smart_web_search", "fetch_url", "local_workdir"]);
   assert.equal(tools[0].type, "search");
   assert.equal(tools[2].type, "function");
 });
@@ -283,7 +289,7 @@ test("agent request tools do not fetch catalogs without a preset", async () => {
     presets: { async list() { throw new Error("should not fetch presets"); } },
     tools: { async list() { throw new Error("should not fetch tools"); } },
   };
-  const localTools = [{ type: "function", name: "local_workspace" }];
+  const localTools = [{ type: "function", name: "local_workdir" }];
 
   const tools = await resolveAgentRequestTools(client, undefined, localTools);
 
@@ -323,8 +329,8 @@ test("agent request tools cache platform preset and tool catalogs by base URL", 
   const localTools = [
     {
       type: "function",
-      name: "local_workspace",
-      description: "Local workspace",
+      name: "local_workdir",
+      description: "Local workdir",
       parameters: { type: "object" },
     },
   ];
@@ -333,6 +339,6 @@ test("agent request tools cache platform preset and tool catalogs by base URL", 
   const tools = await resolveAgentRequestTools(client, "pro-search", localTools, { baseURL: "https://api.test/" });
 
   assert.deepEqual(calls, ["presets", "tools"]);
-  assert.deepEqual(tools.map((tool) => tool.name), ["smart_web_search", "local_workspace"]);
+  assert.deepEqual(tools.map((tool) => tool.name), ["smart_web_search", "local_workdir"]);
   clearPresetToolCatalogCache("https://api.test");
 });

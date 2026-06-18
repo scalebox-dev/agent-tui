@@ -3,7 +3,7 @@ export {
   type AgentTurnEvent,
   type AgentTurnResult,
   type LocalToolApprovalRequest,
-  type WorkspaceAccessMode,
+  type WorkdirAccessMode,
   agentResponseFailureMessage,
   agentTurnEventFromStreamEvent,
   clearPresetToolCatalogCache,

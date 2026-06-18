@@ -8,7 +8,7 @@ import { normalizeChatOptions, type ChatOptions } from "./chat-options.js";
 import { ChatApp } from "./tui/chat.js";
 import { activeProfile, loadConfig, redactSecret } from "./config.js";
 import { cliVersion, runtime } from "./runtime/index.js";
-import { openWorkspace } from "./workspace/index.js";
+import { openWorkdir } from "./workdir/index.js";
 import {
   deleteProfile,
   listProfiles,
@@ -69,12 +69,12 @@ program
   .addCommand(agentDeleteCommand());
 
 program
-  .command("workspace")
+  .command("workdir")
   .alias("ws")
-  .description("Inspect and package local workspace context")
-  .addCommand(workspaceStatusCommand())
-  .addCommand(workspaceSummaryCommand())
-  .addCommand(workspaceContextCommand());
+  .description("Inspect and package local workdir context")
+  .addCommand(workdirStatusCommand())
+  .addCommand(workdirSummaryCommand())
+  .addCommand(workdirContextCommand());
 
 program
   .command("doctor")
@@ -222,12 +222,12 @@ function agentChatCommand() {
     .option("--model <name>", "explicit model")
     .option("--file <path>", "read prompt text from file")
     .option("--stdin", "read prompt text from stdin")
-    .option("--workspace <path>", "attach local workspace context")
+    .option("--workdir <path>", "attach local workdir context")
     .option("--local-context", "attach current directory context")
     .option("--context-query <text>", "include local search matches in context")
     .option("--max-context-files <n>", "local context file limit")
     .option("--max-context-bytes <n>", "local context byte limit")
-    .option("--access <mode>", "local workspace access mode: approval or full")
+    .option("--access <mode>", "local workdir access mode: approval or full")
     .option("--restart", "start the conversation from a fresh response")
     .addOption(new Option("--no-stream", "wait for final response instead of streaming"))
     .action(async (prompt: string[], options: ChatOptions) => {
@@ -236,7 +236,7 @@ function agentChatCommand() {
       const normalized = normalizeChatOptions(promptParts, options);
       const shouldUseWorkbench = process.stdin.isTTY && (
         !hasOneShotInput ||
-        Boolean(normalized.workspace && normalized.accessMode === "approval" && promptParts.length > 0 && !options.file && !options.stdin)
+        Boolean(normalized.workdir && normalized.accessMode === "approval" && promptParts.length > 0 && !options.file && !options.stdin)
       );
       if (shouldUseWorkbench) {
         const app = render(React.createElement(ChatApp, { options: normalized }));
@@ -284,19 +284,19 @@ function agentDeleteCommand() {
     });
 }
 
-function workspaceStatusCommand() {
+function workdirStatusCommand() {
   return new Command("status")
-    .description("Show local workspace status")
-    .option("--path <path>", "workspace path", process.cwd())
+    .description("Show local workdir status")
+    .option("--path <path>", "workdir path", process.cwd())
     .action(async (options: { path: string }) => {
-      const workspace = await openWorkspace({ path: options.path });
+      const workdir = await openWorkdir({ path: options.path });
       const [summary, snapshot] = await Promise.all([
-        workspace.summarize(),
-        workspace.snapshot(),
+        workdir.summarize(),
+        workdir.snapshot(),
       ]);
       console.log(JSON.stringify({
-        root: workspace.root,
-        name: workspace.name,
+        root: workdir.root,
+        name: workdir.name,
         fileCount: summary.file_count,
         totalBytes: summary.total_bytes,
         snapshotFiles: snapshot.files.length,
@@ -305,20 +305,20 @@ function workspaceStatusCommand() {
     });
 }
 
-function workspaceSummaryCommand() {
+function workdirSummaryCommand() {
   return new Command("summary")
-    .description("Summarize local workspace files")
-    .option("--path <path>", "workspace path", process.cwd())
+    .description("Summarize local workdir files")
+    .option("--path <path>", "workdir path", process.cwd())
     .action(async (options: { path: string }) => {
-      const workspace = await openWorkspace({ path: options.path });
-      console.log(JSON.stringify(await workspace.summarize(), null, 2));
+      const workdir = await openWorkdir({ path: options.path });
+      console.log(JSON.stringify(await workdir.summarize(), null, 2));
     });
 }
 
-function workspaceContextCommand() {
+function workdirContextCommand() {
   return new Command("context")
     .description("Build the local context package that can be sent to the agent")
-    .option("--path <path>", "workspace path", process.cwd())
+    .option("--path <path>", "workdir path", process.cwd())
     .option("--query <text>", "include local search matches")
     .option("--max-files <n>", "maximum files to include")
     .option("--max-bytes <n>", "maximum bytes to include")
@@ -330,8 +330,8 @@ function workspaceContextCommand() {
       maxBytes?: string;
       content?: boolean;
     }) => {
-      const workspace = await openWorkspace({ path: options.path });
-      const context = await workspace.packageContext({
+      const workdir = await openWorkdir({ path: options.path });
+      const context = await workdir.packageContext({
         query: options.query,
         maxFiles: optionalNumber(options.maxFiles, "--max-files"),
         maxBytes: optionalNumber(options.maxBytes, "--max-bytes"),

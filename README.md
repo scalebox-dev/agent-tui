@@ -26,7 +26,7 @@ agent-api
 agent-api auth login
 agent-api profiles list
 agent-api agent chat
-agent-api workspace status
+agent-api workdir status
 agent-api doctor
 ```
 
@@ -53,16 +53,16 @@ Inside the workbench, configure the agent run dynamically:
 /config          show current run configuration
 /preset <name>   set preset; /preset none clears it
 /model <name>    set explicit model; /model auto clears it
-/access full     allow local workspace actions without approval
-/access approval require approval for local workspace actions
-/context         toggle local workspace context/tools for each turn
+/access full     allow local workdir actions without approval
+/access approval require approval for local workdir actions
+/context         toggle local workdir context/tools for each turn
 /new [name]      start a fresh conversation
 /switch <name>   switch conversation handle
 ```
 
-The current working directory is loaded as the local workspace. Local workspace
+The current working directory is loaded as the local workdir. Local workdir
 tools are only exposed to the model when you enable local context with
-`/context` or start with `--workspace`.
+`/context` or start with `--workdir`.
 
 ## Authentication
 
@@ -106,7 +106,7 @@ agent-api agent chat "Summarize the current release status" --preset pro-search
 Start the interactive TUI with explicit options:
 
 ```bash
-agent-api agent chat --conversation release --workspace .
+agent-api agent chat --conversation release --workdir .
 ```
 
 Named conversations continue automatically:
@@ -118,37 +118,37 @@ agent-api agent list
 agent-api agent show release
 ```
 
-Attach local workspace context:
+Attach local workdir context:
 
 ```bash
 agent-api agent chat "Review this project and suggest next steps" \
-  --workspace . \
+  --workdir . \
   --context-query auth \
   --max-context-files 80
 ```
 
 The CLI sends local context as bounded, secret-aware project context. The remote Agent API remains the core execution path.
 
-Workspace access defaults to approval mode:
+Workdir access defaults to approval mode:
 
 ```bash
-agent-api agent chat --workspace . --access approval
+agent-api agent chat --workdir . --access approval
 ```
 
-Use full access only for trusted workspaces. In full access mode, valid edit proposals are previewed and applied automatically:
+Use full access only for trusted workdirs. In full access mode, valid edit proposals are previewed and applied automatically:
 
 ```bash
-agent-api agent chat --workspace . --access full
+agent-api agent chat --workdir . --access full
 ```
 
-## Local Workspace
+## Local Workdir
 
-The CLI uses the SDK local layer for workspace operations:
+The CLI uses the SDK local layer for workdir operations:
 
 ```bash
-agent-api workspace status --path .
-agent-api workspace summary --path .
-agent-api workspace context --path . --query auth --max-files 40
+agent-api workdir status --path .
+agent-api workdir summary --path .
+agent-api workdir context --path . --query auth --max-files 40
 ```
 
 Inside the interactive workbench:
@@ -160,9 +160,9 @@ Inside the interactive workbench:
 /switch-profile  switch/sign in with a different profile
 /delete-profile  delete current saved profile and return to auth
 /config          show current run configuration
-/workspace       show local workspace summary
-/summary         show local workspace previews
-/search <query>  search text in the local workspace
+/workdir       show local workdir summary
+/summary         show local workdir previews
+/search <query>  search text in the local workdir
 /preset <name>   set or clear preset
 /model <name>    set or clear explicit model
 /access <mode>   approval or full
@@ -173,7 +173,7 @@ Inside the interactive workbench:
 
 ## Local Edit Approval
 
-The workbench can preview and apply local line edits through the SDK local workspace layer:
+The workbench can preview and apply local line edits through the SDK local workdir layer:
 
 ```text
 /edit {"description":"Rename heading","edits":[{"path":"README.md","startLine":1,"endLine":1,"replacement":"# New Heading"}]}
@@ -185,7 +185,7 @@ The workbench can preview and apply local line edits through the SDK local works
 Edits are previewed before they are applied. Apply uses the SDK edit path with rollback on failure.
 In `--access full`, valid proposals are applied immediately after preview generation.
 
-When a workspace is attached, the CLI also tells the remote agent to return local changes as a fenced JSON block:
+When a workdir is attached, the CLI also tells the remote agent to return local changes as a fenced JSON block:
 
 ````text
 ```agent_api_local_edits

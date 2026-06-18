@@ -1,6 +1,5 @@
 import React, { useEffect, useReducer, useRef, useState } from "react";
 import { Box, Text, useApp, useInput } from "ink";
-import { createLocalWorkspaceToolRegistry } from "@agent-api/sdk/local";
 import {
   defaultBaseURL,
   loadWorkbenchPreferences,
@@ -20,9 +19,10 @@ import {
   type AgentTurnEvent,
 } from "../agent.js";
 import {
-  openWorkspace,
-  type WorkspaceService,
-} from "../workspace/index.js";
+  openWorkdir,
+  type WorkdirService,
+} from "../workdir/index.js";
+import { createLocalWorkdirToolRegistry } from "@agent-api/sdk/local";
 import {
   activityColor,
   createInitialWorkbenchState,
@@ -31,7 +31,7 @@ import {
   parsePendingApprovalCommand,
   parseWorkbenchCommand,
   workbenchReducer,
-  workspaceText,
+  workdirText,
   type WorkbenchMessage,
 } from "./workbench.js";
 import {
@@ -321,7 +321,7 @@ function WorkbenchApp({
   profileName: string;
 }) {
   const app = useApp();
-  const workspaceRef = useRef<WorkspaceService | null>(null);
+  const workdirRef = useRef<WorkdirService | null>(null);
   const initialPromptSubmittedRef = useRef(false);
   const pendingApprovalInvalidInputsRef = useRef(0);
   const authRefreshWarningShownRef = useRef(false);
@@ -335,7 +335,7 @@ function WorkbenchApp({
     {
       accessMode: options.accessMode,
       conversation: options.conversation,
-      contextEnabled: Boolean(options.includeLocalContext || options.workspace),
+      contextEnabled: Boolean(options.includeLocalContext || options.workdir),
     },
     createInitialWorkbenchState,
   );
@@ -361,17 +361,17 @@ function WorkbenchApp({
 
   useEffect(() => {
     let mounted = true;
-    dispatch({ type: "activity.add", text: "Loading workspace" });
-    openWorkspace({ path: options.workspace || process.cwd() })
-      .then(async (workspace) => {
-        const summary = await workspace.summarize();
+    dispatch({ type: "activity.add", text: "Loading workdir" });
+    openWorkdir({ path: options.workdir || process.cwd() })
+      .then(async (workdir) => {
+        const summary = await workdir.summarize();
         if (!mounted) return;
-        workspaceRef.current = workspace;
+        workdirRef.current = workdir;
         dispatch({
-          type: "workspace.set",
-          workspace: {
-            root: workspace.root,
-            name: workspace.name,
+          type: "workdir.set",
+          workdir: {
+            root: workdir.root,
+            name: workdir.name,
             fileCount: summary.file_count,
             totalBytes: summary.total_bytes,
             scanTruncated: summary.scan_truncated,
@@ -383,13 +383,13 @@ function WorkbenchApp({
         dispatch({
           type: "activity.add",
           level: "error",
-          text: `Workspace unavailable: ${error instanceof Error ? error.message : String(error)}`,
+          text: `Workdir unavailable: ${error instanceof Error ? error.message : String(error)}`,
         });
       });
     return () => {
       mounted = false;
     };
-  }, [options.workspace]);
+  }, [options.workdir]);
 
   useEffect(() => {
     let mounted = true;
@@ -451,10 +451,10 @@ function WorkbenchApp({
     if (initialPromptSubmittedRef.current || state.busy) return;
     const initialPrompt = options.promptParts.join(" ").trim();
     if (!initialPrompt) return;
-    if (!workspaceRef.current) return;
+    if (!workdirRef.current) return;
     initialPromptSubmittedRef.current = true;
     void send(initialPrompt);
-  }, [options.promptParts, state.busy, state.workspace]);
+  }, [options.promptParts, state.busy, state.workdir]);
 
   useEffect(() => {
     pendingApprovalInvalidInputsRef.current = 0;
@@ -549,11 +549,11 @@ function WorkbenchApp({
         await runConfigCommand(command);
         return;
       case "context":
-        dispatch({ type: "context.toggle" });
+        dispatch({ type: "context.set", enabled: command.enabled ?? !state.contextEnabled });
         return;
       case "access":
         if (!command.mode) {
-          dispatch({ type: "message.add", role: "system", text: `Workspace access: ${state.accessMode}. Use /access approval or /access full.` });
+          dispatch({ type: "message.add", role: "system", text: `Workdir access: ${state.accessMode}. Use /access approval or /access full.` });
           return;
         }
         dispatch({ type: "access.set", mode: command.mode });
@@ -569,14 +569,39 @@ function WorkbenchApp({
         setRunModel(normalizeOptionalSetting(command.value, ["auto", "none", "off", "clear"]));
         dispatch({ type: "activity.add", text: `Model: ${normalizeOptionalSetting(command.value, ["auto", "none", "off", "clear"]) || "auto"}` });
         return;
-      case "workspace":
-        dispatch({ type: "message.add", role: "system", text: workspaceText(state.workspace) });
+      case "workdir":
+        if (command.enabled === undefined) {
+          dispatch({
+            type: "message.add",
+            role: "system",
+            text: [
+              workdirText(state.workdir),
+              "",
+              `local_workdir tool: ${state.contextEnabled ? "on" : "off"}`,
+              "Use /workdir on to expose it to the model, or /workdir off to hide it.",
+            ].join("\n"),
+          });
+          return;
+        }
+        dispatch({ type: "context.set", enabled: command.enabled });
+        dispatch({
+          type: "activity.add",
+          level: command.enabled ? "success" : "warning",
+          text: `local_workdir ${command.enabled ? "enabled" : "disabled"}`,
+        });
+        dispatch({
+          type: "message.add",
+          role: "system",
+          text: command.enabled
+            ? "local_workdir is now available to the model for future turns. Write access is still controlled by /access."
+            : "local_workdir is now hidden from the model for future turns.",
+        });
         return;
       case "summary":
         await showSummary();
         return;
       case "search":
-        await searchWorkspace(command.query);
+        await searchWorkdir(command.query);
         return;
       case "new_conversation":
         await startNewConversation(command.name);
@@ -716,14 +741,14 @@ function WorkbenchApp({
   }
 
   async function showSummary() {
-    const workspace = workspaceRef.current;
-    if (!workspace) {
-      dispatch({ type: "message.add", role: "system", text: "Workspace is still loading." });
+    const workdir = workdirRef.current;
+    if (!workdir) {
+      dispatch({ type: "message.add", role: "system", text: "Workdir is still loading." });
       return;
     }
-    dispatch({ type: "activity.add", text: "Summarizing workspace" });
+    dispatch({ type: "activity.add", text: "Summarizing workdir" });
     try {
-      const summary = await workspace.summarize();
+      const summary = await workdir.summarize();
       const previews = summary.text_previews
         .slice(0, 5)
         .map((preview) => `- ${preview.path} (${formatBytes(preview.size)})`)
@@ -732,13 +757,13 @@ function WorkbenchApp({
         type: "message.add",
         role: "system",
         text: [
-          `Workspace summary for ${workspace.name}`,
+          `Workdir summary for ${workdir.name}`,
           `Files: ${summary.file_count}`,
           `Size: ${formatBytes(summary.total_bytes)}`,
           previews ? `Previews:\n${previews}` : "No text previews available.",
         ].join("\n"),
       });
-      dispatch({ type: "activity.add", level: "success", text: "Workspace summary ready" });
+      dispatch({ type: "activity.add", level: "success", text: "Workdir summary ready" });
     } catch (error) {
       dispatch({
         type: "activity.add",
@@ -785,21 +810,21 @@ function WorkbenchApp({
     }
   }
 
-  async function searchWorkspace(query: string) {
-    const workspace = workspaceRef.current;
+  async function searchWorkdir(query: string) {
+    const workdir = workdirRef.current;
     if (!query) {
       dispatch({ type: "message.add", role: "system", text: "Usage: /search <query>" });
       return;
     }
-    if (!workspace) {
-      dispatch({ type: "message.add", role: "system", text: "Workspace is still loading." });
+    if (!workdir) {
+      dispatch({ type: "message.add", role: "system", text: "Workdir is still loading." });
       return;
     }
-    dispatch({ type: "activity.add", text: `Searching workspace: ${query}` });
+    dispatch({ type: "activity.add", text: `Searching workdir: ${query}` });
     try {
-      const results = await workspace.workspace.grep({ pattern: query, limit: 12 });
+      const results = await workdir.workdir.grep({ pattern: query, limit: 12 });
       const matches = results.matches
-        .map((match) => `${match.path}:${match.line_number}: ${match.line.trim()}`)
+        .map((match: { path: string; line_number: number; line: string }) => `${match.path}:${match.line_number}: ${match.line.trim()}`)
         .join("\n");
       dispatch({
         type: "message.add",
@@ -829,9 +854,9 @@ function WorkbenchApp({
   }
 
   async function applyPendingEdit(allowFutureLocalActions: boolean) {
-    const workspace = workspaceRef.current;
-    if (!workspace) {
-      dispatch({ type: "message.add", role: "system", text: "Workspace is still loading." });
+    const workdir = workdirRef.current;
+    if (!workdir) {
+      dispatch({ type: "message.add", role: "system", text: "Workdir is still loading." });
       return;
     }
     if (state.pendingLocalTool) {
@@ -841,7 +866,7 @@ function WorkbenchApp({
         text: `Applying local action: ${state.pendingLocalTool.name}${state.pendingLocalTool.action ? `.${state.pendingLocalTool.action}` : ""}`,
       });
       try {
-        const result = await applyLocalToolApproval(workspace, state.pendingLocalTool);
+        const result = await applyLocalToolApproval(workdir, state.pendingLocalTool);
         const nextAccessMode = allowFutureLocalActions ? "full" : state.accessMode;
         if (allowFutureLocalActions) {
           dispatch({ type: "access.set", mode: "full" });
@@ -851,8 +876,8 @@ function WorkbenchApp({
           role: "system",
           text: [
             allowFutureLocalActions
-              ? "Applied local action. Future local workspace actions in this workbench conversation are now allowed."
-              : "Applied local action once. Future local workspace actions still require approval.",
+              ? "Applied local action. Future local workdir actions in this workbench conversation are now allowed."
+              : "Applied local action once. Future local workdir actions still require approval.",
             "Continuing agent turn with the local result.",
             "Result:",
             JSON.stringify(result, null, 2),
@@ -1052,7 +1077,7 @@ function WorkbenchApp({
         pendingLocalLabel={pendingLocalLabel(state)}
         preset={runPreset || "none"}
         profile={profileName}
-        workspace={state.workspace?.root || options.workspace || process.cwd()}
+        workdir={state.workdir?.root || options.workdir || process.cwd()}
       />
       <Box marginTop={1}>
         <Box flexDirection="column" width="72%" paddingRight={1}>
@@ -1076,6 +1101,12 @@ function WorkbenchApp({
         </Box>
       </Box>
       <Box borderStyle="single" borderColor={state.busy ? "yellow" : "green"} paddingX={1}>
+        {state.accessMode === "full" && (
+          <Text color="red" bold inverse>
+            FULL ACCESS
+          </Text>
+        )}
+        {state.accessMode === "full" && <Text> </Text>}
         <Text color={state.busy ? "yellow" : "green"}>{state.busy ? "working" : "you"} </Text>
         {state.busy ? (
           <Text>
@@ -1149,7 +1180,7 @@ function Header({
   pendingLocalLabel,
   preset,
   profile,
-  workspace,
+  workdir,
 }: {
   contextEnabled: boolean;
   conversation: string;
@@ -1158,7 +1189,7 @@ function Header({
   pendingLocalLabel: string;
   preset: string;
   profile: string;
-  workspace: string;
+  workdir: string;
 }) {
   return (
     <Box borderStyle="round" borderColor="cyan" paddingX={1} flexDirection="column">
@@ -1167,7 +1198,7 @@ function Header({
         profile={profile} conversation={conversation} preset={preset} model={model}
       </Text>
       <Text color="gray">
-        workspace={workspace} access={accessMode} context={contextEnabled ? "on" : "off"} pending={pendingLocalLabel}
+        workdir={workdir} access={accessMode} local_workdir={contextEnabled ? "on" : "off"} pending={pendingLocalLabel}
       </Text>
     </Box>
   );
@@ -1264,8 +1295,8 @@ function runConfigText({
     `Preset: ${runPreset || "none"}`,
     `Default preset: ${formatDefaultPreset(defaultPreset)}`,
     `Model: ${runModel || "auto"}`,
-    `Local workspace context/tools: ${contextEnabled ? "on" : "off"}`,
-    `Local workspace access: ${accessMode}`,
+    `local_workdir tool: ${contextEnabled ? "on" : "off"}`,
+    `Local workdir access: ${accessMode}`,
   ].join("\n");
 }
 
@@ -1328,10 +1359,10 @@ function nestedString(value: unknown, key: string) {
 }
 
 async function applyLocalToolApproval(
-  workspace: WorkspaceService,
+  workdir: WorkdirService,
   approval: NonNullable<ReturnType<typeof createInitialWorkbenchState>["pendingLocalTool"]>,
 ) {
-  const registry = createLocalWorkspaceToolRegistry(workspace.workspace, { accessMode: "full" });
+  const registry = createLocalWorkdirToolRegistry(workdir.workdir, { accessMode: "full" });
   return await registry.execute(approval.name, approval.arguments);
 }
 

@@ -2,39 +2,39 @@ import {
   createLocalContextPackage,
   type LocalContextManifest,
   type LocalSummary,
-  type LocalWorkspace,
-  type LocalWorkspaceSnapshot,
+  type LocalWorkdir,
+  type LocalWorkdirSnapshot,
 } from "@agent-api/sdk/local";
 import { resolve } from "node:path";
 import { runtime } from "../runtime/index.js";
 
-export interface WorkspaceOptions {
+export interface WorkdirOptions {
   path?: string;
   name?: string;
 }
 
-export interface WorkspaceContextOptions extends WorkspaceOptions {
+export interface WorkdirContextOptions extends WorkdirOptions {
   query?: string;
   maxFiles?: number;
   maxBytes?: number;
   includeContent?: boolean;
 }
 
-export interface WorkspaceService {
+export interface WorkdirService {
   root: string;
   name: string;
-  workspace: LocalWorkspace;
+  workdir: LocalWorkdir;
   summarize(): Promise<LocalSummary>;
-  snapshot(): Promise<LocalWorkspaceSnapshot>;
-  packageContext(options?: Omit<WorkspaceContextOptions, "path" | "name">): Promise<LocalContextManifest>;
-  contextBlock(options?: Omit<WorkspaceContextOptions, "path" | "name">): Promise<string>;
+  snapshot(): Promise<LocalWorkdirSnapshot>;
+  packageContext(options?: Omit<WorkdirContextOptions, "path" | "name">): Promise<LocalContextManifest>;
+  contextBlock(options?: Omit<WorkdirContextOptions, "path" | "name">): Promise<string>;
 }
 
-export async function openWorkspace(options: WorkspaceOptions = {}): Promise<WorkspaceService> {
+export async function openWorkdir(options: WorkdirOptions = {}): Promise<WorkdirService> {
   await runtime.ensure();
   const root = resolve(options.path || process.cwd());
-  const name = options.name || root.split(/[\\/]/).filter(Boolean).at(-1) || "workspace";
-  const workspace = runtime.workspace(root, {
+  const name = options.name || root.split(/[\\/]/).filter(Boolean).at(-1) || "workdir";
+  const workdir = runtime.workdir(root, {
     name,
     trusted: true,
     gitignore: true,
@@ -43,11 +43,11 @@ export async function openWorkspace(options: WorkspaceOptions = {}): Promise<Wor
   return {
     root,
     name,
-    workspace,
-    summarize: () => workspace.summarize(),
-    snapshot: () => workspace.snapshot({ hash: true }),
+    workdir,
+    summarize: () => workdir.summarize(),
+    snapshot: () => workdir.snapshot({ hash: true }),
     packageContext: (contextOptions = {}) =>
-      createLocalContextPackage(workspace, {
+      createLocalContextPackage(workdir, {
         query: contextOptions.query,
         includeSearch: Boolean(contextOptions.query),
         maxFiles: contextOptions.maxFiles,
@@ -55,7 +55,7 @@ export async function openWorkspace(options: WorkspaceOptions = {}): Promise<Wor
         includeContent: contextOptions.includeContent,
       }),
     contextBlock: async (contextOptions = {}) => {
-      const context = await createLocalContextPackage(workspace, {
+      const context = await createLocalContextPackage(workdir, {
         query: contextOptions.query,
         includeSearch: Boolean(contextOptions.query),
         maxFiles: contextOptions.maxFiles,
@@ -63,7 +63,7 @@ export async function openWorkspace(options: WorkspaceOptions = {}): Promise<Wor
         includeContent: contextOptions.includeContent,
       });
       return [
-        "Local workspace context follows. Use it as user-provided project context; do not assume files outside this manifest exist.",
+        "Local workdir context follows. Use it as user-provided project context; do not assume files outside this manifest exist.",
         "```json",
         JSON.stringify(context, null, 2),
         "```",
@@ -72,7 +72,7 @@ export async function openWorkspace(options: WorkspaceOptions = {}): Promise<Wor
   };
 }
 
-export async function buildWorkspaceContextBlock(options: WorkspaceContextOptions) {
-  const service = await openWorkspace(options);
+export async function buildWorkdirContextBlock(options: WorkdirContextOptions) {
+  const service = await openWorkdir(options);
   return service.contextBlock(options);
 }

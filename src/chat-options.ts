@@ -1,4 +1,4 @@
-import type { WorkspaceAccessMode } from "./agent.js";
+import type { WorkdirAccessMode } from "./agent.js";
 
 export type ChatOptions = {
   profile?: string;
@@ -7,7 +7,7 @@ export type ChatOptions = {
   model?: string;
   file?: string;
   stdin?: boolean;
-  workspace?: string;
+  workdir?: string;
   localContext?: boolean;
   contextQuery?: string;
   maxContextFiles?: string;
@@ -34,7 +34,7 @@ export function normalizeChatOptions(promptParts: string[], options: ChatOptions
     conversation: options.conversation || "default",
     continueConversation: true,
     restartConversation: options.restart,
-    workspace: options.workspace,
+    workdir: options.workdir,
     includeLocalContext: options.localContext,
     contextQuery: options.contextQuery,
     maxContextFiles: optionalNumber(options.maxContextFiles, "--max-context-files"),
@@ -50,7 +50,7 @@ function optionalNumber(value: string | undefined, label: string) {
   return parsed;
 }
 
-function parseAccessMode(value: string | undefined): WorkspaceAccessMode {
+function parseAccessMode(value: string | undefined): WorkdirAccessMode {
   const mode = value || "approval";
   if (mode === "approval" || mode === "full") return mode;
   throw new Error("--access must be either approval or full");

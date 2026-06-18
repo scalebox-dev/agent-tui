@@ -12,13 +12,13 @@ import {
   type Tool,
 } from "@agent-api/sdk";
 import {
-  createLocalWorkspaceToolRegistry,
-  localWorkspaceToolInstructions,
-  type LocalWorkspaceToolRegistry,
+  createLocalWorkdirToolRegistry,
+  localWorkdirToolInstructions,
+  type LocalWorkdirToolRegistry,
 } from "@agent-api/sdk/local";
 import { resolvePreviousResponseID, updateConversation } from "../conversation/index.js";
 import { resolveRuntimeProfile } from "../profile.js";
-import { buildWorkspaceContextBlock, openWorkspace } from "../workspace/index.js";
+import { buildWorkdirContextBlock, openWorkdir } from "../workdir/index.js";
 
 export interface AgentRunOptions {
   profile?: string;
@@ -34,15 +34,15 @@ export interface AgentRunOptions {
   continueConversation?: boolean;
   restartConversation?: boolean;
   previousResponseId?: string;
-  workspace?: string;
+  workdir?: string;
   includeLocalContext?: boolean;
   contextQuery?: string;
   maxContextFiles?: number;
   maxContextBytes?: number;
-  accessMode?: WorkspaceAccessMode;
+  accessMode?: WorkdirAccessMode;
 }
 
-export type WorkspaceAccessMode = "approval" | "full";
+export type WorkdirAccessMode = "approval" | "full";
 
 export interface AgentTurnResult {
   text: string;
@@ -114,18 +114,18 @@ export async function runAgent(options: AgentRunOptions) {
 
 export async function runAgentTurn(options: AgentRunOptions, onEvent?: (event: AgentTurnEvent) => void): Promise<AgentTurnResult> {
   const runtimeProfile = await resolveRuntimeProfile(options.profile);
-  const localWorkspace = await prepareLocalWorkspaceTools(options);
+  const localWorkdir = await prepareLocalWorkdirTools(options);
   const input = await buildInput(options);
   const previousResponseId = await resolvePreviousResponseID(options);
   const tools = await resolveAgentRequestTools(
     runtimeProfile.client,
     options.preset,
-    localWorkspace?.registry.definitions(),
+    localWorkdir?.registry.definitions(),
     { baseURL: runtimeProfile.profile.baseURL },
   );
   const params = {
     input,
-    instructions: localWorkspace?.instructions,
+    instructions: localWorkdir?.instructions,
     tools,
     preset: options.preset,
     model: options.model,
@@ -133,13 +133,13 @@ export async function runAgentTurn(options: AgentRunOptions, onEvent?: (event: A
     stream: options.stream ?? true,
   };
 
-  if (localWorkspace) {
+  if (localWorkdir) {
     return await runAgentTurnWithLocalTools(
       runtimeProfile.client.agent,
       runtimeProfile.client.responses,
       params,
       options,
-      localWorkspace.registry,
+      localWorkdir.registry,
       onEvent,
     );
   }
@@ -179,14 +179,14 @@ export async function resumeAgentAfterLocalApproval(
   onEvent?: (event: AgentTurnEvent) => void,
 ): Promise<AgentTurnResult> {
   const runtimeProfile = await resolveRuntimeProfile(options.profile);
-  const localWorkspace = await prepareLocalWorkspaceTools(options);
-  if (!localWorkspace) {
-    throw new Error("local workspace tools are not available for approval continuation");
+  const localWorkdir = await prepareLocalWorkdirTools(options);
+  if (!localWorkdir) {
+    throw new Error("local workdir tools are not available for approval continuation");
   }
   const tools = await resolveAgentRequestTools(
     runtimeProfile.client,
     options.preset,
-    localWorkspace.registry.definitions(),
+    localWorkdir.registry.definitions(),
     { baseURL: runtimeProfile.profile.baseURL },
   );
   return await runAgentTurnWithLocalTools(
@@ -194,7 +194,7 @@ export async function resumeAgentAfterLocalApproval(
     runtimeProfile.client.responses,
     {
       input: [functionCallOutputInput(approval.callID, output)],
-      instructions: localWorkspace.instructions,
+      instructions: localWorkdir.instructions,
       tools,
       preset: options.preset,
       model: options.model,
@@ -202,7 +202,7 @@ export async function resumeAgentAfterLocalApproval(
       stream: options.stream ?? true,
     },
     options,
-    localWorkspace.registry,
+    localWorkdir.registry,
     onEvent,
   );
 }
@@ -249,7 +249,7 @@ async function runAgentTurnWithLocalTools(
     stream: boolean;
   },
   options: AgentRunOptions,
-  registry: LocalWorkspaceToolRegistry,
+  registry: LocalWorkdirToolRegistry,
   onEvent?: (event: AgentTurnEvent) => void,
 ): Promise<AgentTurnResult> {
   let input = initialParams.input;
@@ -544,10 +544,10 @@ async function buildInput(options: AgentRunOptions) {
   if (chunks.length === 0) {
     throw new Error("Prompt is required. Pass text, --file, or pipe stdin.");
   }
-  if (options.includeLocalContext || options.workspace) {
-    chunks.push("Local workspace operations are available through the `local_workspace` function tool. Use tool calls for local file inspection and edits; do not encode local edits in the final answer.");
-    chunks.push(await buildWorkspaceContextBlock({
-      path: options.workspace || process.cwd(),
+  if (options.includeLocalContext || options.workdir) {
+    chunks.push("Local workdir operations are available through the `local_workdir` function tool. Use tool calls for local file inspection and edits; do not encode local edits in the final answer.");
+    chunks.push(await buildWorkdirContextBlock({
+      path: options.workdir || process.cwd(),
       query: options.contextQuery,
       maxFiles: options.maxContextFiles,
       maxBytes: options.maxContextBytes,
@@ -556,29 +556,29 @@ async function buildInput(options: AgentRunOptions) {
   return chunks.join("\n\n");
 }
 
-async function prepareLocalWorkspaceTools(options: AgentRunOptions): Promise<{
-  registry: LocalWorkspaceToolRegistry;
+async function prepareLocalWorkdirTools(options: AgentRunOptions): Promise<{
+  registry: LocalWorkdirToolRegistry;
   instructions: string;
 } | null> {
-  if (!options.includeLocalContext && !options.workspace) {
+  if (!options.includeLocalContext && !options.workdir) {
     return null;
   }
-  const service = await openWorkspace({ path: options.workspace || process.cwd() });
-  const registry = createLocalWorkspaceToolRegistry(service.workspace, {
+  const service = await openWorkdir({ path: options.workdir || process.cwd() });
+  const registry = createLocalWorkdirToolRegistry(service.workdir, {
     accessMode: options.accessMode ?? "approval",
   });
   return {
     registry,
     instructions: [
-      localWorkspaceToolInstructions(),
-      "Use local_workspace for selected local workdir operations. Prefer summarize/list/search/grep before read/read_lines. Prefer preview_edits/apply_edits for source edits. In approval mode, mutating actions return requires_approval and must be explained to the user instead of retried blindly.",
+      localWorkdirToolInstructions(),
+      "Use local_workdir for selected local workdir operations. Prefer summarize/list/search/grep before read/read_lines. Prefer preview_edits/apply_edits for source edits. In approval mode, mutating actions return requires_approval and must be explained to the user instead of retried blindly.",
     ].join("\n\n"),
   };
 }
 
 async function executeLocalFunctionCalls(
   response: AgentResponse,
-  registry: LocalWorkspaceToolRegistry,
+  registry: LocalWorkdirToolRegistry,
   onEvent?: (event: AgentTurnEvent) => void,
 ): Promise<{
   outputs: FunctionCallOutputInput[];
@@ -624,7 +624,7 @@ async function executeLocalFunctionCalls(
 
 function localApprovalMessage(approval: { name: string; action?: string }) {
   return [
-    `Local workspace action requires approval: ${approval.name}${approval.action ? `.${approval.action}` : ""}.`,
+    `Local workdir action requires approval: ${approval.name}${approval.action ? `.${approval.action}` : ""}.`,
     "Review it in the workbench, then use /apply to execute it or /reject to discard it.",
   ].join("\n");
 }

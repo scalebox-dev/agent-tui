@@ -1,4 +1,4 @@
-import type { LocalToolApprovalRequest, WorkspaceAccessMode } from "../agent.js";
+import type { LocalToolApprovalRequest, WorkdirAccessMode } from "../agent.js";
 
 export type WorkbenchRole = "user" | "assistant" | "system";
 
@@ -17,7 +17,7 @@ export interface WorkbenchActivity {
   timestamp: number;
 }
 
-export interface WorkbenchWorkspaceStatus {
+export interface WorkbenchWorkdirStatus {
   root: string;
   name: string;
   fileCount: number;
@@ -35,10 +35,10 @@ export interface WorkbenchState {
   activities: WorkbenchActivity[];
   busy: boolean;
   contextEnabled: boolean;
-  workspace: WorkbenchWorkspaceStatus | null;
+  workdir: WorkbenchWorkdirStatus | null;
   activeAssistantMessageId: string | null;
   pendingLocalTool: LocalToolApproval | null;
-  accessMode: WorkspaceAccessMode;
+  accessMode: WorkdirAccessMode;
   currentConversation: string;
 }
 
@@ -50,11 +50,11 @@ export type WorkbenchAction =
   | { type: "busy.set"; busy: boolean }
   | { type: "context.toggle" }
   | { type: "context.set"; enabled: boolean }
-  | { type: "workspace.set"; workspace: WorkbenchWorkspaceStatus }
+  | { type: "workdir.set"; workdir: WorkbenchWorkdirStatus }
   | { type: "assistant.active"; id: string | null }
   | { type: "local_tool.pending.set"; approval: LocalToolApprovalRequest }
   | { type: "local_tool.pending.clear" }
-  | { type: "access.set"; mode: WorkspaceAccessMode }
+  | { type: "access.set"; mode: WorkdirAccessMode }
   | { type: "conversation.set"; name: string };
 
 export type WorkbenchCommand =
@@ -68,9 +68,9 @@ export type WorkbenchCommand =
   | { kind: "switch_profile"; name?: string }
   | { kind: "auth_status" }
   | { kind: "config"; field?: "preset"; value?: string }
-  | { kind: "context" }
-  | { kind: "workspace" }
-  | { kind: "access"; mode?: WorkspaceAccessMode }
+  | { kind: "context"; enabled?: boolean }
+  | { kind: "workdir"; enabled?: boolean }
+  | { kind: "access"; mode?: WorkdirAccessMode }
   | { kind: "preset"; value?: string }
   | { kind: "model"; value?: string }
   | { kind: "summary" }
@@ -84,7 +84,7 @@ export type WorkbenchCommand =
   | { kind: "apply_all" }
   | { kind: "reject" };
 
-export function createInitialWorkbenchState(options: { contextEnabled: boolean; accessMode?: WorkspaceAccessMode; conversation?: string }): WorkbenchState {
+export function createInitialWorkbenchState(options: { contextEnabled: boolean; accessMode?: WorkdirAccessMode; conversation?: string }): WorkbenchState {
   return {
     messages: [
       newMessage("system", "Agent API Workbench is ready. Type /help for commands."),
@@ -94,7 +94,7 @@ export function createInitialWorkbenchState(options: { contextEnabled: boolean; 
     ],
     busy: false,
     contextEnabled: options.contextEnabled,
-    workspace: null,
+    workdir: null,
     activeAssistantMessageId: null,
     pendingLocalTool: null,
     accessMode: options.accessMode ?? "approval",
@@ -139,11 +139,11 @@ export function workbenchReducer(state: WorkbenchState, action: WorkbenchAction)
       };
     case "context.set":
       return { ...state, contextEnabled: action.enabled };
-    case "workspace.set":
+    case "workdir.set":
       return {
         ...state,
-        workspace: action.workspace,
-        activities: [...state.activities, newActivity("success", `Workspace loaded: ${action.workspace.name}`)].slice(-20),
+        workdir: action.workdir,
+        activities: [...state.activities, newActivity("success", `Workdir loaded: ${action.workdir.name}`)].slice(-20),
       };
     case "assistant.active":
       return { ...state, activeAssistantMessageId: action.id };
@@ -171,7 +171,7 @@ export function workbenchReducer(state: WorkbenchState, action: WorkbenchAction)
       return {
         ...state,
         accessMode: action.mode,
-        activities: [...state.activities, newActivity("warning", `Workspace access: ${action.mode}`)].slice(-20),
+        activities: [...state.activities, newActivity("warning", `Workdir access: ${action.mode}`)].slice(-20),
       };
     case "conversation.set":
       return {
@@ -221,7 +221,7 @@ export function parseWorkbenchCommand(input: string): WorkbenchCommand | null {
       return { kind: "invalid", command: `${name} ${field}` };
     }
     case "context":
-      return { kind: "context" };
+      return { kind: "context", enabled: parseOnOff(rest[0]) };
     case "access": {
       const mode = rest[0];
       if (mode === "approval" || mode === "full") return { kind: "access", mode };
@@ -235,8 +235,9 @@ export function parseWorkbenchCommand(input: string): WorkbenchCommand | null {
       const value = rest.join(" ").trim();
       return { kind: "model", value: value || undefined };
     }
-    case "workspace":
-      return { kind: "workspace" };
+    case "workdir":
+    case "local":
+      return { kind: "workdir", enabled: parseOnOff(rest[0]) };
     case "summary":
       return { kind: "summary" };
     case "new":
@@ -302,13 +303,14 @@ export function helpText() {
     "/config preset   save default preset; use none/off for no preset, reset for built-in",
     "/preset [name]   show or set preset; use none/off to clear",
     "/model [name]    show or set explicit model; use auto/none/off to clear",
-    "/access [mode]   show or set local access: approval or full",
-    "/workspace       show current local workspace status",
+    "/access [mode]   show or set local write access: approval or full",
+    "/workdir       show local workdir status",
+    "/workdir on    expose local_workdir to the model; off hides it",
     "/new [name]      start a fresh conversation in this workbench",
     "/switch <name>   switch to an existing/new conversation handle",
     "/conversations   list saved local conversation handles",
-    "/summary         show local workspace summary previews",
-    "/search <query>  search text in the local workspace",
+    "/summary         show local workdir summary previews",
+    "/search <query>  search text in the local workdir",
     "/preview         show pending local action preview",
     "/apply           apply pending local action",
     "/apply-all       apply pending action and allow future local actions",
@@ -319,10 +321,18 @@ export function helpText() {
   ].join("\n");
 }
 
-export function workspaceText(status: WorkbenchWorkspaceStatus | null) {
-  if (!status) return "Workspace summary is still loading.";
+function parseOnOff(value?: string) {
+  if (!value) return undefined;
+  const normalized = value.toLowerCase();
+  if (["on", "enable", "enabled", "yes", "true"].includes(normalized)) return true;
+  if (["off", "disable", "disabled", "no", "false"].includes(normalized)) return false;
+  return undefined;
+}
+
+export function workdirText(status: WorkbenchWorkdirStatus | null) {
+  if (!status) return "Workdir summary is still loading.";
   return [
-    `Workspace: ${status.root}`,
+    `Workdir: ${status.root}`,
     `Files: ${status.fileCount}`,
     `Size: ${formatBytes(status.totalBytes)}`,
     `Scan truncated: ${status.scanTruncated ? "yes" : "no"}`,
