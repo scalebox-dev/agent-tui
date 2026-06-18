@@ -1,0 +1,339 @@
+#!/usr/bin/env node
+
+import { Command, Option } from "commander";
+import { render } from "ink";
+import React from "react";
+import { conversationSummary, deleteConversation, getConversation, listConversations, runAgent } from "./agent.js";
+import { normalizeChatOptions, type ChatOptions } from "./chat-options.js";
+import { ChatApp } from "./tui/chat.js";
+import { activeProfile, loadConfig, redactSecret } from "./config.js";
+import { cliVersion, runtime } from "./runtime/index.js";
+import { openWorkspace } from "./workspace/index.js";
+import {
+  deleteProfile,
+  listProfiles,
+  loginWithAPIKey,
+  loginWithBrowser,
+  profileSummary,
+  resolveRuntimeProfile,
+  useProfile,
+} from "./profile.js";
+
+type GlobalOptions = {
+  profile?: string;
+};
+
+const program = new Command();
+
+program
+  .name("agent-api")
+  .alias("agentsway")
+  .description("First-class command line interface for Agent API")
+  .version(cliVersion)
+  .showHelpAfterError()
+  .showSuggestionAfterError();
+
+program
+  .command("auth")
+  .description("Manage authentication")
+  .addCommand(authLoginCommand())
+  .addCommand(authWhoamiCommand())
+  .addCommand(authLogoutCommand());
+
+program
+  .command("profiles")
+  .alias("profile")
+  .description("Manage local auth profiles")
+  .addCommand(profilesListCommand())
+  .addCommand(profilesUseCommand())
+  .addCommand(profilesShowCommand())
+  .addCommand(profilesDeleteCommand());
+
+program
+  .command("agent")
+  .description("Chat with and manage remote agent conversations")
+  .addCommand(agentChatCommand())
+  .addCommand(agentListCommand())
+  .addCommand(agentShowCommand())
+  .addCommand(agentDeleteCommand());
+
+program
+  .command("workspace")
+  .alias("ws")
+  .description("Inspect and package local workspace context")
+  .addCommand(workspaceStatusCommand())
+  .addCommand(workspaceSummaryCommand())
+  .addCommand(workspaceContextCommand());
+
+program
+  .command("doctor")
+  .description("Print local CLI diagnostics")
+  .action(async () => {
+    const config = await loadConfig();
+    const { profiles } = await listProfiles();
+    console.log(JSON.stringify({
+      version: cliVersion,
+      activeProfile: config.activeProfile,
+      profileCount: profiles.length,
+      conversationCount: Object.keys(config.conversations).length,
+      configDir: runtime.dirs.config,
+      dataDir: runtime.dirs.data,
+      node: process.version,
+      platform: process.platform,
+    }, null, 2));
+  });
+
+program.exitOverride();
+
+program.parseAsync(process.argv).catch((error) => {
+  if (error?.code === "commander.helpDisplayed" || error?.code === "commander.version") return;
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exitCode = 1;
+});
+
+function authLoginCommand() {
+  return new Command("login")
+    .description("Sign in with browser auth or save an API key profile")
+    .option("-p, --profile <name>", "profile name", "default")
+    .option("--base-url <url>", "Agent API base URL")
+    .option("--api-key <key>", "API key; defaults to AGENT_API_KEY")
+    .option("--no-browser", "print browser URL without opening it")
+    .option("--client-name <name>", "device auth client name", "Agent API CLI")
+    .action(async (options) => {
+      const apiKey = options.apiKey || process.env.AGENT_API_KEY;
+      if (apiKey) {
+        const saved = await loginWithAPIKey({ profile: options.profile, baseURL: options.baseUrl, apiKey });
+        console.log(`Saved API key profile "${saved.name}" (${saved.baseURL}).`);
+        return;
+      }
+      await loginWithBrowser({
+        profile: options.profile,
+        baseURL: options.baseUrl,
+        openBrowser: options.browser,
+        clientName: options.clientName,
+      });
+    });
+}
+
+function authWhoamiCommand() {
+  return new Command("whoami")
+    .alias("status")
+    .description("Show the authenticated account for a profile")
+    .option("-p, --profile <name>", "profile name")
+    .action(async (options: GlobalOptions) => {
+      const runtime = await resolveRuntimeProfile(options.profile);
+      const response = await fetch(`${runtime.profile.baseURL}/v1/me`, {
+        headers: { Authorization: `Bearer ${runtime.token}` },
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload?.error?.message || `whoami failed with ${response.status}`);
+      console.log(JSON.stringify({ profile: runtime.profile.name, ...payload }, null, 2));
+    });
+}
+
+function authLogoutCommand() {
+  return new Command("logout")
+    .description("Delete a local auth profile")
+    .option("-p, --profile <name>", "profile name")
+    .action(async (options: GlobalOptions) => {
+      const profile = options.profile || (await loadConfig()).activeProfile;
+      await deleteProfile(profile);
+      console.log(`Deleted profile "${profile}".`);
+    });
+}
+
+function profilesListCommand() {
+  return new Command("list")
+    .description("List local auth profiles")
+    .action(async () => {
+      const { active, profiles } = await listProfiles();
+      if (profiles.length === 0) {
+        console.log("No profiles configured. Run agent-api auth login.");
+        return;
+      }
+      for (const profile of profiles) {
+        console.log(profileSummary(profile, profile.name === active));
+      }
+    });
+}
+
+function profilesUseCommand() {
+  return new Command("use")
+    .description("Set the active profile")
+    .argument("<name>", "profile name")
+    .action(async (name: string) => {
+      await useProfile(name);
+      console.log(`Active profile: ${name}`);
+    });
+}
+
+function profilesShowCommand() {
+  return new Command("show")
+    .description("Show a profile without secrets")
+    .argument("[name]", "profile name")
+    .action(async (name?: string) => {
+      const profile = await activeProfile(name);
+      console.log(JSON.stringify({
+        name: profile.name,
+        baseURL: profile.baseURL,
+        auth: profile.auth.type === "api_key"
+          ? { type: "api_key", apiKey: redactSecret(profile.auth.apiKey) }
+          : {
+              type: "browser",
+              accessToken: redactSecret(profile.auth.accessToken),
+              accessTokenExpiresAt: profile.auth.accessTokenExpiresAt,
+              refreshTokenExpiresAt: profile.auth.refreshTokenExpiresAt,
+            },
+        createdAt: profile.createdAt,
+        updatedAt: profile.updatedAt,
+      }, null, 2));
+    });
+}
+
+function profilesDeleteCommand() {
+  return new Command("delete")
+    .alias("rm")
+    .description("Delete a local auth profile")
+    .argument("<name>", "profile name")
+    .action(async (name: string) => {
+      await deleteProfile(name);
+      console.log(`Deleted profile "${name}".`);
+    });
+}
+
+function agentChatCommand() {
+  return new Command("chat")
+    .description("Start an interactive chat, or send one message when prompt text is provided")
+    .argument("[prompt...]", "prompt text")
+    .option("-p, --profile <name>", "profile name")
+    .option("-c, --conversation <name>", "conversation name", "default")
+    .option("--preset <name>", "agent preset")
+    .option("--model <name>", "explicit model")
+    .option("--file <path>", "read prompt text from file")
+    .option("--stdin", "read prompt text from stdin")
+    .option("--workspace <path>", "attach local workspace context")
+    .option("--local-context", "attach current directory context")
+    .option("--context-query <text>", "include local search matches in context")
+    .option("--max-context-files <n>", "local context file limit")
+    .option("--max-context-bytes <n>", "local context byte limit")
+    .option("--access <mode>", "local workspace access mode: approval or full", "approval")
+    .option("--restart", "start the conversation from a fresh response")
+    .addOption(new Option("--no-stream", "wait for final response instead of streaming"))
+    .action(async (prompt: string[], options: ChatOptions) => {
+      const promptParts = prompt ?? [];
+      const hasOneShotInput = promptParts.length > 0 || options.file || options.stdin;
+      const normalized = normalizeChatOptions(promptParts, options);
+      const shouldUseWorkbench = process.stdin.isTTY && (
+        !hasOneShotInput ||
+        Boolean(normalized.workspace && normalized.accessMode === "approval" && promptParts.length > 0 && !options.file && !options.stdin)
+      );
+      if (shouldUseWorkbench) {
+        await resolveRuntimeProfile(normalized.profile);
+        const app = render(React.createElement(ChatApp, { options: normalized }));
+        await app.waitUntilExit();
+        return;
+      }
+      await runAgent(normalized);
+    });
+}
+
+function agentListCommand() {
+  return new Command("list")
+    .alias("conversations")
+    .description("List local conversation handles")
+    .option("-p, --profile <name>", "profile name")
+    .action(async (options: GlobalOptions) => {
+      const conversations = await listConversations(options.profile);
+      if (conversations.length === 0) {
+        console.log("No agent conversations yet.");
+        return;
+      }
+      for (const conversation of conversations) console.log(conversationSummary(conversation));
+    });
+}
+
+function agentShowCommand() {
+  return new Command("show")
+    .description("Show a local conversation handle")
+    .argument("[name]", "conversation name", "default")
+    .option("-p, --profile <name>", "profile name")
+    .action(async (name: string, options: GlobalOptions) => {
+      console.log(JSON.stringify(await getConversation(name, options.profile), null, 2));
+    });
+}
+
+function agentDeleteCommand() {
+  return new Command("delete")
+    .alias("rm")
+    .description("Delete a local conversation handle")
+    .argument("<name>", "conversation name")
+    .option("-p, --profile <name>", "profile name")
+    .action(async (name: string, options: GlobalOptions) => {
+      await deleteConversation(name, options.profile);
+      console.log(`Deleted conversation "${name}".`);
+    });
+}
+
+function workspaceStatusCommand() {
+  return new Command("status")
+    .description("Show local workspace status")
+    .option("--path <path>", "workspace path", process.cwd())
+    .action(async (options: { path: string }) => {
+      const workspace = await openWorkspace({ path: options.path });
+      const [summary, snapshot] = await Promise.all([
+        workspace.summarize(),
+        workspace.snapshot(),
+      ]);
+      console.log(JSON.stringify({
+        root: workspace.root,
+        name: workspace.name,
+        fileCount: summary.file_count,
+        totalBytes: summary.total_bytes,
+        snapshotFiles: snapshot.files.length,
+        scanTruncated: summary.scan_truncated,
+      }, null, 2));
+    });
+}
+
+function workspaceSummaryCommand() {
+  return new Command("summary")
+    .description("Summarize local workspace files")
+    .option("--path <path>", "workspace path", process.cwd())
+    .action(async (options: { path: string }) => {
+      const workspace = await openWorkspace({ path: options.path });
+      console.log(JSON.stringify(await workspace.summarize(), null, 2));
+    });
+}
+
+function workspaceContextCommand() {
+  return new Command("context")
+    .description("Build the local context package that can be sent to the agent")
+    .option("--path <path>", "workspace path", process.cwd())
+    .option("--query <text>", "include local search matches")
+    .option("--max-files <n>", "maximum files to include")
+    .option("--max-bytes <n>", "maximum bytes to include")
+    .option("--no-content", "omit file contents")
+    .action(async (options: {
+      path: string;
+      query?: string;
+      maxFiles?: string;
+      maxBytes?: string;
+      content?: boolean;
+    }) => {
+      const workspace = await openWorkspace({ path: options.path });
+      const context = await workspace.packageContext({
+        query: options.query,
+        maxFiles: optionalNumber(options.maxFiles, "--max-files"),
+        maxBytes: optionalNumber(options.maxBytes, "--max-bytes"),
+        includeContent: options.content !== false,
+      });
+      console.log(JSON.stringify(context, null, 2));
+    });
+}
+
+function optionalNumber(value: string | undefined, label: string) {
+  if (value == null || value === "") return undefined;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) throw new Error(`${label} must be a number`);
+  return parsed;
+}

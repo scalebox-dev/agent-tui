@@ -1,0 +1,37 @@
+{
+  "name": "@agent-api/cli",
+  "version": "0.1.0",
+  "description": "First-class command line interface for Agent API",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "agent-api": "dist/index.js",
+    "agentsway": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "npm run build && node dist/index.js",
+    "prepack": "npm run build",
+    "test": "npm run build && node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@agent-api/sdk": "^1.1.5",
+    "commander": "^14.0.3",
+    "ink": "^6.8.0",
+    "react": "^19.2.7",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.2.17",
+    "typescript": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "package.json"
+  ]
+}
