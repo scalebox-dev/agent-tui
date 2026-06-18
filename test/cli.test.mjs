@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import test from "node:test";
@@ -17,16 +17,21 @@ import {
 const execFileAsync = promisify(execFile);
 const bin = new URL("../dist/index.js", import.meta.url).pathname;
 
-test("api-key login creates and selects profiles in isolated config", async () => {
-  const root = await mkdtemp(join(tmpdir(), "agent-api-cli-test-"));
-  const apiKey = "sk-test-abcdefghijklmnopqrstuvwxyz";
-  const env = {
+function isolatedEnv(root) {
+  return {
     ...process.env,
     HOME: root,
+    USERPROFILE: root,
     XDG_CONFIG_HOME: join(root, ".config"),
     XDG_DATA_HOME: join(root, ".local", "share"),
     XDG_CACHE_HOME: join(root, ".cache"),
   };
+}
+
+test("api-key login creates and selects profiles in isolated config", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-api-cli-test-"));
+  const apiKey = "sk-test-abcdefghijklmnopqrstuvwxyz";
+  const env = isolatedEnv(root);
 
   await execFileAsync("node", [bin, "auth", "login", "--profile", "test", "--api-key", apiKey, "--base-url", "https://api.test"], { env });
   const { stdout: listOut } = await execFileAsync("node", [bin, "profiles", "list"], { env });
@@ -41,13 +46,7 @@ test("api-key login creates and selects profiles in isolated config", async () =
 
 test("agent conversation manager lists, shows, and deletes local conversation state", async () => {
   const root = await mkdtemp(join(tmpdir(), "agent-api-cli-test-"));
-  const env = {
-    ...process.env,
-    HOME: root,
-    XDG_CONFIG_HOME: join(root, ".config"),
-    XDG_DATA_HOME: join(root, ".local", "share"),
-    XDG_CACHE_HOME: join(root, ".cache"),
-  };
+  const env = isolatedEnv(root);
 
   await execFileAsync("node", [bin, "auth", "login", "--profile", "test", "--api-key", "sk-test-abcdefghijklmnopqrstuvwxyz", "--base-url", "https://api.test"], { env });
 
@@ -80,7 +79,7 @@ test("workspace status inspects a local directory", async () => {
   const status = JSON.parse(stdout);
 
   assert.equal(status.root, root);
-  assert.equal(status.name, root.split("/").at(-1));
+  assert.equal(status.name, basename(root));
   assert.equal(status.fileCount, 1);
   assert.equal(status.snapshotFiles, 1);
   assert.equal(status.scanTruncated, false);
@@ -99,6 +98,15 @@ test("workbench command parser and reducer handle local workflow state", () => {
   assert.deepEqual(parseWorkbenchCommand("/conversation"), { kind: "list_conversations" });
   assert.deepEqual(parseWorkbenchCommand("/conversations"), { kind: "list_conversations" });
   assert.deepEqual(parseWorkbenchCommand("/refresh"), { kind: "refresh_catalog" });
+  assert.deepEqual(parseWorkbenchCommand("/auth"), { kind: "auth_status" });
+  assert.deepEqual(parseWorkbenchCommand("/login"), { kind: "login" });
+  assert.deepEqual(parseWorkbenchCommand("/logout"), { kind: "logout" });
+  assert.deepEqual(parseWorkbenchCommand("/config"), { kind: "config" });
+  assert.deepEqual(parseWorkbenchCommand("/access"), { kind: "access" });
+  assert.deepEqual(parseWorkbenchCommand("/access full"), { kind: "access", mode: "full" });
+  assert.deepEqual(parseWorkbenchCommand("/access approval"), { kind: "access", mode: "approval" });
+  assert.deepEqual(parseWorkbenchCommand("/preset pro-search"), { kind: "preset", value: "pro-search" });
+  assert.deepEqual(parseWorkbenchCommand("/model auto"), { kind: "model", value: "auto" });
   assert.equal(parseWorkbenchCommand("plain prompt"), null);
   assert.deepEqual(parsePendingApprovalCommand("/apply"), { kind: "apply" });
   assert.deepEqual(parsePendingApprovalCommand("/yes"), { kind: "apply" });

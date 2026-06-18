@@ -47,20 +47,18 @@ export async function loginWithAPIKey(options: { profile: string; baseURL?: stri
 
 export async function loginWithBrowser(options: { profile: string; baseURL?: string; clientName?: string; openBrowser?: boolean }) {
   const baseURL = normalizeBaseURL(options.baseURL);
-  const client = new AgentAPI({ baseURL });
-  const challenge = await client.auth.startDeviceAuth({ client_name: options.clientName || "Agent API CLI" });
+  const challenge = await startBrowserAuthChallenge({ baseURL, clientName: options.clientName });
   console.log(`Open this URL to authorize the CLI:\n${challenge.verification_uri_complete}\n`);
-  console.log(`Code: ${formatUserCode(challenge.user_code)}\n`);
+  console.log(`Code: ${formatDeviceUserCode(challenge.user_code)}\n`);
   if (options.openBrowser !== false) {
-    await openURL(challenge.verification_uri_complete).catch((error) => {
+    await openBrowserURL(challenge.verification_uri_complete).catch((error) => {
       console.warn(`Could not open browser automatically: ${error instanceof Error ? error.message : String(error)}`);
     });
   }
   console.log("Waiting for browser approval...");
-  const session = await client.auth.waitForDeviceAuth({
-    device_code: challenge.device_code,
-    interval_seconds: challenge.interval_seconds,
-    timeout_ms: Math.max(0, challenge.expires_at * 1000 - Date.now()),
+  const session = await waitForBrowserAuthChallenge({
+    baseURL,
+    challenge,
     on_poll(result) {
       if (result.status && result.status !== "pending") {
         console.log(`Status: ${result.status}`);
@@ -70,6 +68,27 @@ export async function loginWithBrowser(options: { profile: string; baseURL?: str
   const profile = await saveBrowserProfile(options.profile, baseURL, session);
   console.log(`Signed in as profile "${profile.name}".`);
   return profile;
+}
+
+export async function startBrowserAuthChallenge(options: { baseURL?: string; clientName?: string }) {
+  const baseURL = normalizeBaseURL(options.baseURL);
+  const client = new AgentAPI({ baseURL });
+  return await client.auth.startDeviceAuth({ client_name: options.clientName || "Agent API CLI" });
+}
+
+export async function waitForBrowserAuthChallenge(options: {
+  baseURL?: string;
+  challenge: Awaited<ReturnType<typeof startBrowserAuthChallenge>>;
+  on_poll?: Parameters<AgentAPI["auth"]["waitForDeviceAuth"]>[0]["on_poll"];
+}) {
+  const baseURL = normalizeBaseURL(options.baseURL);
+  const client = new AgentAPI({ baseURL });
+  return await client.auth.waitForDeviceAuth({
+    device_code: options.challenge.device_code,
+    interval_seconds: options.challenge.interval_seconds,
+    timeout_ms: Math.max(0, options.challenge.expires_at * 1000 - Date.now()),
+    on_poll: options.on_poll,
+  });
 }
 
 export async function saveBrowserProfile(name: string, baseURL: string, session: ApprovedDeviceAuth) {
@@ -177,13 +196,13 @@ function normalizeBaseURL(baseURL?: string) {
   return (baseURL || process.env.AGENT_API_BASE_URL || defaultBaseURL).replace(/\/+$/, "");
 }
 
-function formatUserCode(code: string) {
+export function formatDeviceUserCode(code: string) {
   const normalized = code.replace(/[-\s]/g, "").toUpperCase();
   if (normalized.length <= 4) return normalized;
   return `${normalized.slice(0, 4)}-${normalized.slice(4)}`;
 }
 
-async function openURL(url: string) {
+export async function openBrowserURL(url: string) {
   const current = platform();
   if (current === "darwin") {
     await execFileAsync("open", [url]);

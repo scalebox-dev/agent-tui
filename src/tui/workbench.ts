@@ -61,8 +61,15 @@ export type WorkbenchCommand =
   | { kind: "exit" }
   | { kind: "help" }
   | { kind: "clear" }
+  | { kind: "login" }
+  | { kind: "logout" }
+  | { kind: "auth_status" }
+  | { kind: "config" }
   | { kind: "context" }
   | { kind: "workspace" }
+  | { kind: "access"; mode?: WorkspaceAccessMode }
+  | { kind: "preset"; value?: string }
+  | { kind: "model"; value?: string }
   | { kind: "summary" }
   | { kind: "search"; query: string }
   | { kind: "new_conversation"; name?: string }
@@ -186,8 +193,32 @@ export function parseWorkbenchCommand(input: string): WorkbenchCommand | null {
       return { kind: "help" };
     case "clear":
       return { kind: "clear" };
+    case "login":
+    case "signin":
+      return { kind: "login" };
+    case "logout":
+    case "signout":
+      return { kind: "logout" };
+    case "auth":
+      return { kind: "auth_status" };
+    case "config":
+    case "settings":
+      return { kind: "config" };
     case "context":
       return { kind: "context" };
+    case "access": {
+      const mode = rest[0];
+      if (mode === "approval" || mode === "full") return { kind: "access", mode };
+      return { kind: "access" };
+    }
+    case "preset": {
+      const value = rest.join(" ").trim();
+      return { kind: "preset", value: value || undefined };
+    }
+    case "model": {
+      const value = rest.join(" ").trim();
+      return { kind: "model", value: value || undefined };
+    }
     case "workspace":
       return { kind: "workspace" };
     case "summary":
@@ -246,6 +277,13 @@ export function parsePendingApprovalCommand(input: string): WorkbenchCommand | n
 export function helpText() {
   return [
     "Commands:",
+    "/auth            show current auth profile",
+    "/login           sign in or switch auth method",
+    "/logout          delete current local auth profile and return to auth",
+    "/config          show current run configuration",
+    "/preset [name]   show or set preset; use none/off to clear",
+    "/model [name]    show or set explicit model; use auto/none/off to clear",
+    "/access [mode]   show or set local access: approval or full",
     "/workspace       show current local workspace status",
     "/new [name]      start a fresh conversation in this workbench",
     "/switch <name>   switch to an existing/new conversation handle",

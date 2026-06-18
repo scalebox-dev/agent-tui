@@ -1,6 +1,7 @@
 import React, { useEffect, useReducer, useRef, useState } from "react";
 import { Box, Text, useApp, useInput } from "ink";
 import { createLocalWorkspaceToolRegistry } from "@agent-api/sdk/local";
+import { defaultBaseURL } from "../config.js";
 import {
   conversationSummary,
   clearPresetToolCatalogCache,
@@ -15,7 +16,6 @@ import {
   openWorkspace,
   type WorkspaceService,
 } from "../workspace/index.js";
-import { refreshActiveProfileIfNeeded } from "../profile.js";
 import {
   activityColor,
   createInitialWorkbenchState,
@@ -27,14 +27,276 @@ import {
   workspaceText,
   type WorkbenchMessage,
 } from "./workbench.js";
+import {
+  deleteProfile,
+  formatDeviceUserCode,
+  loginWithAPIKey,
+  openBrowserURL,
+  refreshActiveProfileIfNeeded,
+  saveBrowserProfile,
+  startBrowserAuthChallenge,
+  waitForBrowserAuthChallenge,
+} from "../profile.js";
 
 export function ChatApp({ options }: { options: AgentRunOptions }) {
+  return <AuthenticatedChatApp options={options} />;
+}
+
+type AuthMethod = "browser" | "api_key" | "exit";
+
+type AuthGateState = {
+  status: "checking" | "select" | "api_profile" | "api_base_url" | "api_key" | "browser_profile" | "browser_base_url" | "browser_waiting" | "ready";
+  selectedMethod: number;
+  profile: string;
+  baseURL: string;
+  apiKey: string;
+  message: string;
+  error: string;
+  browserURL: string;
+  browserCode: string;
+};
+
+const authMethods: Array<{ method: AuthMethod; label: string; description: string }> = [
+  { method: "browser", label: "Browser session", description: "Interactive login with refreshable local session." },
+  { method: "api_key", label: "API key", description: "Paste a static API key for shell-only environments." },
+  { method: "exit", label: "Exit", description: "Leave without signing in." },
+];
+
+function AuthenticatedChatApp({ options }: { options: AgentRunOptions }) {
+  const app = useApp();
+  const busyRef = useRef(false);
+  const [currentProfile, setCurrentProfile] = useState(options.profile || "default");
+  const [auth, setAuth] = useState<AuthGateState>({
+    status: "checking",
+    selectedMethod: 0,
+    profile: options.profile || "default",
+    baseURL: process.env.AGENT_API_BASE_URL || defaultBaseURL,
+    apiKey: process.env.AGENT_API_KEY || "",
+    message: "Checking local auth profile...",
+    error: "",
+    browserURL: "",
+    browserCode: "",
+  });
+
+  useEffect(() => {
+    let mounted = true;
+    refreshActiveProfileIfNeeded(options.profile, 5 * 60_000)
+      .then((result) => {
+        if (!mounted) return;
+        setCurrentProfile(result.profile.name);
+        setAuth((current) => ({ ...current, status: "ready", message: "Authenticated.", error: "" }));
+      })
+      .catch((error) => {
+        if (!mounted) return;
+        setAuth((current) => ({
+          ...current,
+          status: "select",
+          message: "Choose an auth method to continue into the workbench.",
+          error: userFacingError(error),
+        }));
+      });
+    return () => {
+      mounted = false;
+    };
+  }, [options.profile]);
+
+  useInput((input, key) => {
+    if (key.ctrl && input === "c") {
+      app.exit();
+      return;
+    }
+    if (auth.status === "ready" || auth.status === "checking" || auth.status === "browser_waiting") return;
+    if (auth.status === "select") {
+      if (key.upArrow) {
+        setAuth((current) => ({ ...current, selectedMethod: Math.max(0, current.selectedMethod - 1) }));
+        return;
+      }
+      if (key.downArrow) {
+        setAuth((current) => ({ ...current, selectedMethod: Math.min(authMethods.length - 1, current.selectedMethod + 1) }));
+        return;
+      }
+      if (key.return) {
+        const method = authMethods[auth.selectedMethod]?.method;
+        if (method === "exit") {
+          app.exit();
+          return;
+        }
+        setAuth((current) => ({
+          ...current,
+          status: method === "api_key" ? "api_profile" : "browser_profile",
+          message: method === "api_key" ? "Save an API key profile." : "Create a browser session profile.",
+          error: "",
+        }));
+        return;
+      }
+      return;
+    }
+
+    if (key.return) {
+      void submitAuthField();
+      return;
+    }
+    if (key.backspace || key.delete) {
+      editAuthField((value) => value.slice(0, -1));
+      return;
+    }
+    if (input && !key.ctrl && !key.meta) {
+      editAuthField((value) => value + input);
+    }
+  });
+
+  function editAuthField(update: (value: string) => string) {
+    setAuth((current) => {
+      switch (current.status) {
+        case "api_profile":
+        case "browser_profile":
+          return { ...current, profile: update(current.profile), error: "" };
+        case "api_base_url":
+        case "browser_base_url":
+          return { ...current, baseURL: update(current.baseURL), error: "" };
+        case "api_key":
+          return { ...current, apiKey: update(current.apiKey), error: "" };
+        default:
+          return current;
+      }
+    });
+  }
+
+  async function submitAuthField() {
+    if (busyRef.current) return;
+    const profile = auth.profile.trim() || "default";
+    const baseURL = auth.baseURL.trim() || defaultBaseURL;
+    switch (auth.status) {
+      case "api_profile":
+        setAuth((current) => ({ ...current, profile, status: "api_base_url", error: "" }));
+        return;
+      case "api_base_url":
+        setAuth((current) => ({ ...current, baseURL, status: "api_key", error: "" }));
+        return;
+      case "api_key": {
+        const apiKey = auth.apiKey.trim();
+        if (!apiKey) {
+          setAuth((current) => ({ ...current, error: "API key is required." }));
+          return;
+        }
+        busyRef.current = true;
+        setAuth((current) => ({ ...current, message: "Saving API key profile...", error: "" }));
+        try {
+          const saved = await loginWithAPIKey({ profile, baseURL, apiKey });
+          setCurrentProfile(saved.name);
+          setAuth((current) => ({ ...current, status: "ready", message: `Signed in as profile "${profile}".`, error: "" }));
+        } catch (error) {
+          setAuth((current) => ({ ...current, error: userFacingError(error) }));
+        } finally {
+          busyRef.current = false;
+        }
+        return;
+      }
+      case "browser_profile":
+        setAuth((current) => ({ ...current, profile, status: "browser_base_url", error: "" }));
+        return;
+      case "browser_base_url":
+        await runBrowserLogin(profile, baseURL);
+        return;
+      default:
+        return;
+    }
+  }
+
+  async function runBrowserLogin(profile: string, baseURL: string) {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    setAuth((current) => ({
+      ...current,
+      profile,
+      baseURL,
+      status: "browser_waiting",
+      message: "Starting browser auth challenge...",
+      error: "",
+      browserURL: "",
+      browserCode: "",
+    }));
+    try {
+      const challenge = await startBrowserAuthChallenge({ baseURL, clientName: "Agent API TUI" });
+      setAuth((current) => ({
+        ...current,
+        message: "Open the URL to approve this terminal session.",
+        browserURL: challenge.verification_uri_complete,
+        browserCode: formatDeviceUserCode(challenge.user_code),
+      }));
+      await openBrowserURL(challenge.verification_uri_complete).catch(() => undefined);
+      const session = await waitForBrowserAuthChallenge({
+        baseURL,
+        challenge,
+        on_poll(result) {
+          if (result.status && result.status !== "pending") {
+            setAuth((current) => ({ ...current, message: `Browser auth status: ${result.status}` }));
+          }
+        },
+      });
+      const saved = await saveBrowserProfile(profile, baseURL, session);
+      setCurrentProfile(saved.name);
+      setAuth((current) => ({ ...current, status: "ready", message: `Signed in as profile "${profile}".`, error: "" }));
+    } catch (error) {
+      setAuth((current) => ({
+        ...current,
+        status: "select",
+        message: "Browser auth did not complete. Choose an auth method to continue.",
+        error: userFacingError(error),
+      }));
+    } finally {
+      busyRef.current = false;
+    }
+  }
+
+  if (auth.status === "ready") {
+    return (
+      <WorkbenchApp
+        onLogin={() => {
+          setAuth((current) => ({
+            ...current,
+            status: "select",
+            message: "Choose an auth method to continue into the workbench.",
+            error: "",
+          }));
+        }}
+        onLogout={async () => {
+          await deleteProfile(currentProfile);
+          setAuth((current) => ({
+            ...current,
+            status: "select",
+            message: `Signed out profile "${currentProfile}". Choose an auth method to continue.`,
+            error: "",
+          }));
+        }}
+        options={{ ...options, profile: currentProfile }}
+        profileName={currentProfile}
+      />
+    );
+  }
+
+  return <AuthGate state={auth} />;
+}
+
+function WorkbenchApp({
+  onLogin,
+  onLogout,
+  options,
+  profileName,
+}: {
+  onLogin: () => void;
+  onLogout: () => Promise<void>;
+  options: AgentRunOptions;
+  profileName: string;
+}) {
   const app = useApp();
   const workspaceRef = useRef<WorkspaceService | null>(null);
   const initialPromptSubmittedRef = useRef(false);
   const pendingApprovalInvalidInputsRef = useRef(0);
   const authRefreshWarningShownRef = useRef(false);
   const [draft, setDraft] = useState("");
+  const [runPreset, setRunPreset] = useState(options.preset);
+  const [runModel, setRunModel] = useState(options.model);
   const [state, dispatch] = useReducer(
     workbenchReducer,
     {
@@ -199,8 +461,44 @@ export function ChatApp({ options }: { options: AgentRunOptions }) {
       case "clear":
         dispatch({ type: "messages.clear" });
         return;
+      case "login":
+        onLogin();
+        return;
+      case "logout":
+        dispatch({ type: "activity.add", text: `Signing out profile: ${profileName}` });
+        await onLogout();
+        return;
+      case "auth_status":
+        dispatch({ type: "message.add", role: "system", text: `Authenticated profile: ${profileName}` });
+        return;
+      case "config":
+        dispatch({ type: "message.add", role: "system", text: runConfigText({ profileName, runPreset, runModel, accessMode: state.accessMode, contextEnabled: state.contextEnabled }) });
+        return;
       case "context":
         dispatch({ type: "context.toggle" });
+        return;
+      case "access":
+        if (!command.mode) {
+          dispatch({ type: "message.add", role: "system", text: `Workspace access: ${state.accessMode}. Use /access approval or /access full.` });
+          return;
+        }
+        dispatch({ type: "access.set", mode: command.mode });
+        return;
+      case "preset":
+        if (!command.value) {
+          dispatch({ type: "message.add", role: "system", text: `Preset: ${runPreset || "none"}. Use /preset <name> or /preset none.` });
+          return;
+        }
+        setRunPreset(normalizeOptionalSetting(command.value, ["none", "off", "clear"]));
+        dispatch({ type: "activity.add", text: `Preset: ${normalizeOptionalSetting(command.value, ["none", "off", "clear"]) || "none"}` });
+        return;
+      case "model":
+        if (!command.value) {
+          dispatch({ type: "message.add", role: "system", text: `Model: ${runModel || "auto"}. Use /model <name> or /model auto.` });
+          return;
+        }
+        setRunModel(normalizeOptionalSetting(command.value, ["auto", "none", "off", "clear"]));
+        dispatch({ type: "activity.add", text: `Model: ${normalizeOptionalSetting(command.value, ["auto", "none", "off", "clear"]) || "auto"}` });
         return;
       case "workspace":
         dispatch({ type: "message.add", role: "system", text: workspaceText(state.workspace) });
@@ -394,6 +692,8 @@ export function ChatApp({ options }: { options: AgentRunOptions }) {
         const continuation = await resumeAgentAfterLocalApproval(
           {
             ...options,
+            preset: runPreset,
+            model: runModel,
             stream: true,
             file: undefined,
             stdin: false,
@@ -454,6 +754,8 @@ export function ChatApp({ options }: { options: AgentRunOptions }) {
       const result = await runAgentTurn(
         {
           ...options,
+          preset: runPreset,
+          model: runModel,
           promptParts: [prompt],
           stream: true,
           file: undefined,
@@ -568,11 +870,11 @@ export function ChatApp({ options }: { options: AgentRunOptions }) {
       <Header
         contextEnabled={state.contextEnabled}
         conversation={state.currentConversation}
-        model={options.model || "auto"}
+        model={runModel || "auto"}
         accessMode={state.accessMode}
         pendingLocalLabel={pendingLocalLabel(state)}
-        preset={options.preset || "default"}
-        profile={options.profile || "active"}
+        preset={runPreset || "none"}
+        profile={profileName}
         workspace={state.workspace?.root || options.workspace || process.cwd()}
       />
       <Box marginTop={1}>
@@ -595,8 +897,54 @@ export function ChatApp({ options }: { options: AgentRunOptions }) {
         <Text>{state.busy ? "waiting for agent..." : draft}</Text>
       </Box>
       <Box paddingX={1}>
-        <Text color="gray">/help /new /switch /conversations /workspace /summary /search &lt;query&gt; /refresh /preview /apply /apply-all /reject /exit</Text>
+        <Text color="gray">/help /auth /login /logout /config /preset /model /access /context /new /switch /workspace /apply /reject /exit</Text>
       </Box>
+    </Box>
+  );
+}
+
+function AuthGate({ state }: { state: AuthGateState }) {
+  return (
+    <Box flexDirection="column">
+      <Box borderStyle="round" borderColor="cyan" paddingX={1} flexDirection="column">
+        <Text bold>Agent API Workbench</Text>
+        <Text color="gray">Authentication required before starting the conversation UI.</Text>
+      </Box>
+      <Box marginTop={1} flexDirection="column">
+        <Text color={state.error ? "red" : "gray"}>{state.error || state.message}</Text>
+        {state.status === "checking" && <Text color="yellow">Checking...</Text>}
+        {state.status === "select" && (
+          <Box flexDirection="column" marginTop={1}>
+            {authMethods.map((method, index) => (
+              <Text color={index === state.selectedMethod ? "green" : "gray"} key={method.method}>
+                {index === state.selectedMethod ? "›" : " "} {method.label} - {method.description}
+              </Text>
+            ))}
+            <Text color="gray">Use ↑/↓ and Enter.</Text>
+          </Box>
+        )}
+        {state.status === "api_profile" && <AuthPrompt label="Profile" value={state.profile} />}
+        {state.status === "api_base_url" && <AuthPrompt label="Base URL" value={state.baseURL} />}
+        {state.status === "api_key" && <AuthPrompt label="API key" value={state.apiKey ? "•".repeat(Math.min(state.apiKey.length, 32)) : ""} />}
+        {state.status === "browser_profile" && <AuthPrompt label="Profile" value={state.profile} />}
+        {state.status === "browser_base_url" && <AuthPrompt label="Base URL" value={state.baseURL} />}
+        {state.status === "browser_waiting" && (
+          <Box flexDirection="column" marginTop={1}>
+            {state.browserURL && <Text>URL: {state.browserURL}</Text>}
+            {state.browserCode && <Text>Code: {state.browserCode}</Text>}
+            <Text color="yellow">Waiting for browser approval...</Text>
+          </Box>
+        )}
+      </Box>
+    </Box>
+  );
+}
+
+function AuthPrompt({ label, value }: { label: string; value: string }) {
+  return (
+    <Box borderStyle="single" borderColor="green" paddingX={1} marginTop={1}>
+      <Text color="green">{label}: </Text>
+      <Text>{value}</Text>
     </Box>
   );
 }
@@ -667,6 +1015,34 @@ function createConversationName() {
 function userFacingError(error: unknown) {
   if (error instanceof Error) return error.message;
   return String(error);
+}
+
+function normalizeOptionalSetting(value: string, clearValues: string[]) {
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  return clearValues.includes(trimmed.toLowerCase()) ? undefined : trimmed;
+}
+
+function runConfigText({
+  accessMode,
+  contextEnabled,
+  profileName,
+  runModel,
+  runPreset,
+}: {
+  accessMode: string;
+  contextEnabled: boolean;
+  profileName: string;
+  runModel?: string;
+  runPreset?: string;
+}) {
+  return [
+    `Profile: ${profileName}`,
+    `Preset: ${runPreset || "none"}`,
+    `Model: ${runModel || "auto"}`,
+    `Local workspace context/tools: ${contextEnabled ? "on" : "off"}`,
+    `Local workspace access: ${accessMode}`,
+  ].join("\n");
 }
 
 async function applyLocalToolApproval(

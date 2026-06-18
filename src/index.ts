@@ -28,10 +28,21 @@ const program = new Command();
 program
   .name("agent-api")
   .alias("agentsway")
+  .alias("agent-tui")
   .description("First-class command line interface for Agent API")
   .version(cliVersion)
   .showHelpAfterError()
   .showSuggestionAfterError();
+
+program.action(async () => {
+  if (!process.stdin.isTTY) {
+    program.help();
+    return;
+  }
+  const options = normalizeChatOptions([], {});
+  const app = render(React.createElement(ChatApp, { options }));
+  await app.waitUntilExit();
+});
 
 program
   .command("auth")
@@ -228,7 +239,6 @@ function agentChatCommand() {
         Boolean(normalized.workspace && normalized.accessMode === "approval" && promptParts.length > 0 && !options.file && !options.stdin)
       );
       if (shouldUseWorkbench) {
-        await resolveRuntimeProfile(normalized.profile);
         const app = render(React.createElement(ChatApp, { options: normalized }));
         await app.waitUntilExit();
         return;
