@@ -101,6 +101,11 @@ test("workbench command parser and reducer handle local workflow state", () => {
   assert.deepEqual(parseWorkbenchCommand("/auth"), { kind: "auth_status" });
   assert.deepEqual(parseWorkbenchCommand("/login"), { kind: "login" });
   assert.deepEqual(parseWorkbenchCommand("/logout"), { kind: "logout" });
+  assert.deepEqual(parseWorkbenchCommand("/quit"), { kind: "quit" });
+  assert.deepEqual(parseWorkbenchCommand("/exit"), { kind: "quit" });
+  assert.deepEqual(parseWorkbenchCommand("/delete-profile"), { kind: "delete_profile" });
+  assert.deepEqual(parseWorkbenchCommand("/switch-profile work"), { kind: "switch_profile", name: "work" });
+  assert.deepEqual(parseWorkbenchCommand("/switch-profile"), { kind: "switch_profile", name: undefined });
   assert.deepEqual(parseWorkbenchCommand("/config"), { kind: "config" });
   assert.deepEqual(parseWorkbenchCommand("/access"), { kind: "access" });
   assert.deepEqual(parseWorkbenchCommand("/access full"), { kind: "access", mode: "full" });

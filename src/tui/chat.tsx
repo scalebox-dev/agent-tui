@@ -255,17 +255,36 @@ function AuthenticatedChatApp({ options }: { options: AgentRunOptions }) {
         onLogin={() => {
           setAuth((current) => ({
             ...current,
+            profile: currentProfile,
             status: "select",
             message: "Choose an auth method to continue into the workbench.",
             error: "",
           }));
         }}
-        onLogout={async () => {
+        onLogout={() => {
+          setAuth((current) => ({
+            ...current,
+            profile: currentProfile,
+            status: "select",
+            message: `Logged out of profile "${currentProfile}" for this app session. Choose an auth method to continue.`,
+            error: "",
+          }));
+        }}
+        onDeleteProfile={async () => {
           await deleteProfile(currentProfile);
           setAuth((current) => ({
             ...current,
             status: "select",
-            message: `Signed out profile "${currentProfile}". Choose an auth method to continue.`,
+            message: `Deleted profile "${currentProfile}". Choose an auth method to continue.`,
+            error: "",
+          }));
+        }}
+        onSwitchProfile={(name) => {
+          setAuth((current) => ({
+            ...current,
+            profile: name || currentProfile,
+            status: "select",
+            message: name ? `Choose an auth method for profile "${name}".` : "Choose an auth method for another profile.",
             error: "",
           }));
         }}
@@ -281,11 +300,15 @@ function AuthenticatedChatApp({ options }: { options: AgentRunOptions }) {
 function WorkbenchApp({
   onLogin,
   onLogout,
+  onDeleteProfile,
+  onSwitchProfile,
   options,
   profileName,
 }: {
   onLogin: () => void;
-  onLogout: () => Promise<void>;
+  onLogout: () => void;
+  onDeleteProfile: () => Promise<void>;
+  onSwitchProfile: (name?: string) => void;
   options: AgentRunOptions;
   profileName: string;
 }) {
@@ -452,7 +475,7 @@ function WorkbenchApp({
 
   async function runCommand(command: NonNullable<ReturnType<typeof parseWorkbenchCommand>>) {
     switch (command.kind) {
-      case "exit":
+      case "quit":
         app.exit();
         return;
       case "help":
@@ -465,8 +488,15 @@ function WorkbenchApp({
         onLogin();
         return;
       case "logout":
-        dispatch({ type: "activity.add", text: `Signing out profile: ${profileName}` });
-        await onLogout();
+        dispatch({ type: "activity.add", text: `Logged out: ${profileName}` });
+        onLogout();
+        return;
+      case "delete_profile":
+        dispatch({ type: "activity.add", level: "warning", text: `Deleting profile: ${profileName}` });
+        await onDeleteProfile();
+        return;
+      case "switch_profile":
+        onSwitchProfile(command.name);
         return;
       case "auth_status":
         dispatch({ type: "message.add", role: "system", text: `Authenticated profile: ${profileName}` });
@@ -897,7 +927,7 @@ function WorkbenchApp({
         <Text>{state.busy ? "waiting for agent..." : draft}</Text>
       </Box>
       <Box paddingX={1}>
-        <Text color="gray">/help /auth /login /logout /config /preset /model /access /context /new /switch /workspace /apply /reject /exit</Text>
+        <Text color="gray">/help /auth /login /logout /switch-profile /delete-profile /config /preset /model /access /context /quit</Text>
       </Box>
     </Box>
   );

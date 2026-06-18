@@ -11,6 +11,13 @@ npm run build
 node dist/index.js --help
 ```
 
+Create local development commands:
+
+```bash
+npm run dev:link
+agent-tui
+```
+
 ## Command Shape
 
 ```bash
@@ -39,8 +46,10 @@ Inside the workbench, configure the agent run dynamically:
 
 ```text
 /auth            show current auth profile
-/login           sign in or switch auth method
-/logout          delete current local auth profile and return to auth
+/login           return to auth gate without deleting profiles
+/logout          leave current session and return to auth gate
+/switch-profile  switch/sign in with a different profile
+/delete-profile  delete current saved profile and return to auth
 /config          show current run configuration
 /preset <name>   set preset; /preset none clears it
 /model <name>    set explicit model; /model auto clears it
@@ -146,8 +155,10 @@ Inside the interactive workbench:
 
 ```text
 /auth            show current auth profile
-/login           sign in or switch auth method
-/logout          delete current local auth profile and return to auth
+/login           return to auth gate without deleting profiles
+/logout          leave current session and return to auth gate
+/switch-profile  switch/sign in with a different profile
+/delete-profile  delete current saved profile and return to auth
 /config          show current run configuration
 /workspace       show local workspace summary
 /summary         show local workspace previews
@@ -157,7 +168,7 @@ Inside the interactive workbench:
 /access <mode>   approval or full
 /context         toggle local context packaging for each turn
 /clear           clear visible transcript
-/exit            quit
+/quit            quit
 ```
 
 ## Local Edit Approval

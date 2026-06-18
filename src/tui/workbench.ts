@@ -58,11 +58,13 @@ export type WorkbenchAction =
   | { type: "conversation.set"; name: string };
 
 export type WorkbenchCommand =
-  | { kind: "exit" }
+  | { kind: "quit" }
   | { kind: "help" }
   | { kind: "clear" }
   | { kind: "login" }
   | { kind: "logout" }
+  | { kind: "delete_profile" }
+  | { kind: "switch_profile"; name?: string }
   | { kind: "auth_status" }
   | { kind: "config" }
   | { kind: "context" }
@@ -186,9 +188,10 @@ export function parseWorkbenchCommand(input: string): WorkbenchCommand | null {
   if (!trimmed.startsWith("/")) return null;
   const [name = "", ...rest] = trimmed.slice(1).split(/\s+/);
   switch (name) {
-    case "exit":
     case "quit":
-      return { kind: "exit" };
+      return { kind: "quit" };
+    case "exit":
+      return { kind: "quit" };
     case "help":
       return { kind: "help" };
     case "clear":
@@ -199,6 +202,12 @@ export function parseWorkbenchCommand(input: string): WorkbenchCommand | null {
     case "logout":
     case "signout":
       return { kind: "logout" };
+    case "delete-profile":
+    case "delete_profile":
+      return { kind: "delete_profile" };
+    case "switch-profile":
+    case "switch_profile":
+      return { kind: "switch_profile", name: rest.join(" ").trim() || undefined };
     case "auth":
       return { kind: "auth_status" };
     case "config":
@@ -278,8 +287,10 @@ export function helpText() {
   return [
     "Commands:",
     "/auth            show current auth profile",
-    "/login           sign in or switch auth method",
-    "/logout          delete current local auth profile and return to auth",
+    "/login           return to auth gate without deleting profiles",
+    "/logout          leave current session and return to auth gate",
+    "/switch-profile  switch/sign in with a different profile",
+    "/delete-profile  delete current saved profile and return to auth",
     "/config          show current run configuration",
     "/preset [name]   show or set preset; use none/off to clear",
     "/model [name]    show or set explicit model; use auto/none/off to clear",
@@ -296,7 +307,7 @@ export function helpText() {
     "/reject          reject pending local action",
     "/context         toggle local context packaging for each agent turn",
     "/clear           clear the visible terminal transcript",
-    "/exit            leave the workbench",
+    "/quit            leave the workbench",
   ].join("\n");
 }
 

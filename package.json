@@ -20,6 +20,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "npm run build && node dist/index.js",
+    "dev:link": "node scripts/dev-link.mjs",
     "start": "node dist/index.js",
     "smoke": "node dist/index.js --version && node dist/index.js --help",
     "pack:local": "npm pack --pack-destination ./artifacts",
