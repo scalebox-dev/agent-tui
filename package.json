@@ -28,7 +28,7 @@
     "test": "npm run build && node --test test/*.test.mjs"
   },
   "dependencies": {
-    "@agent-api/sdk": "^1.1.5",
+    "@agent-api/sdk": "^1.2.0",
     "commander": "^14.0.3",
     "ink": "^6.8.0",
     "react": "^19.2.7",
