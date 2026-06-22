@@ -28,6 +28,7 @@ import {
   createWorkbenchConversationController,
   defaultTranscriptExportPath,
 } from "../dist/workbench/conversation-controller.js";
+import { createWorkbenchInputController } from "../dist/workbench/input-controller.js";
 import { createWorkbenchTurnController } from "../dist/workbench/turn-controller.js";
 import {
   buildTranscriptLines,
@@ -686,6 +687,59 @@ test("input history navigates submitted prompts like a shell", () => {
 
   history.record("fourth");
   assert.deepEqual(history.values(), ["third", "fourth"]);
+});
+
+test("workbench input controller edits, submits, and recalls drafts", () => {
+  const controller = createWorkbenchInputController();
+  let draft = "";
+  const context = (overrides = {}) => ({ busy: false, draft, viewportHeight: 10, ...overrides });
+
+  let result = controller.handle("h", {}, context());
+  draft = result.draft;
+  assert.equal(draft, "h");
+  result = controller.handle("i", {}, context());
+  draft = result.draft;
+  assert.equal(draft, "hi");
+  result = controller.handle("", { return: true }, context());
+  draft = result.draft;
+  assert.deepEqual(result.effects, [{ type: "submit", input: "hi" }]);
+  assert.equal(draft, "");
+
+  result = controller.handle("", { upArrow: true }, context());
+  draft = result.draft;
+  assert.equal(draft, "hi");
+  result = controller.handle("", { downArrow: true }, context());
+  draft = result.draft;
+  assert.equal(draft, "");
+});
+
+test("workbench input controller maps navigation and busy abort policy", () => {
+  const controller = createWorkbenchInputController();
+
+  assert.deepEqual(controller.handle("", { pageUp: true }, { busy: false, draft: "", viewportHeight: 11 }), {
+    draft: "",
+    effects: [{ type: "scroll", delta: 5 }],
+  });
+  assert.deepEqual(controller.handle("", { pageDown: true }, { busy: false, draft: "", viewportHeight: 11 }), {
+    draft: "",
+    effects: [{ type: "scroll", delta: -5 }],
+  });
+  assert.deepEqual(controller.handle("", { home: true }, { busy: false, draft: "", viewportHeight: 11 }).effects, [{ type: "scroll_top" }]);
+  assert.deepEqual(controller.handle("", { end: true }, { busy: false, draft: "", viewportHeight: 11 }).effects, [{ type: "scroll_bottom" }]);
+  assert.deepEqual(controller.handle("c", { ctrl: true }, { busy: false, draft: "", viewportHeight: 11 }).effects, [{ type: "exit" }]);
+
+  assert.deepEqual(controller.handle("", { escape: true }, { busy: true, draft: "ignored", viewportHeight: 11 }), {
+    draft: "ignored",
+    effects: [{ type: "abort" }],
+  });
+  assert.deepEqual(controller.handle("", { return: true }, { busy: true, draft: "/abort", viewportHeight: 11 }), {
+    draft: "",
+    effects: [{ type: "abort" }],
+  });
+  assert.deepEqual(controller.handle("", { return: true }, { busy: true, draft: "hello", viewportHeight: 11 }), {
+    draft: "",
+    effects: [{ type: "ignored_busy" }],
+  });
 });
 
 test("workbench transcript formatter produces readable plain text", () => {

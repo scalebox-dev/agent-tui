@@ -4,7 +4,6 @@ import { defaultBaseURL } from "../config.js";
 import { type AgentRunOptions } from "../agent.js";
 import {
   activityColor,
-  createInputHistory,
   type RenderMode,
   type WorkbenchCommand,
   type WorkbenchState,
@@ -16,6 +15,7 @@ import {
   createWorkbenchConversationController,
   type WorkbenchConversationController,
 } from "../workbench/conversation-controller.js";
+import { createWorkbenchInputController, type WorkbenchInputController } from "../workbench/input-controller.js";
 import { createWorkbenchLocalController, type WorkbenchLocalController } from "../workbench/local-controller.js";
 import {
   createWorkbenchSettingsController,
@@ -315,12 +315,12 @@ function WorkbenchApp({
   const textDeltaBufferRef = useRef<{ id: string; text: string } | null>(null);
   const textDeltaFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const updateNoticeShownRef = useRef(false);
-  const inputHistoryRef = useRef(createInputHistory());
   const [draft, setDraft] = useState("");
   const [spinnerFrame, setSpinnerFrame] = useState(0);
   const [transcriptOffset, setTranscriptOffset] = useState(0);
   const engineRef = useRef<WorkbenchEngine | null>(null);
   const conversationControllerRef = useRef<WorkbenchConversationController | null>(null);
+  const inputControllerRef = useRef<WorkbenchInputController | null>(null);
   const settingsControllerRef = useRef<WorkbenchSettingsController | null>(null);
   if (!engineRef.current) {
     engineRef.current = createWorkbenchEngine({
@@ -338,7 +338,11 @@ function WorkbenchApp({
   if (!conversationControllerRef.current) {
     conversationControllerRef.current = createWorkbenchConversationController();
   }
+  if (!inputControllerRef.current) {
+    inputControllerRef.current = createWorkbenchInputController();
+  }
   const conversationController = conversationControllerRef.current;
+  const inputController = inputControllerRef.current;
   const settingsController = settingsControllerRef.current;
   const state = useSyncExternalStore(engine.subscribe, engine.snapshot, engine.snapshot);
   const dispatch = engine.dispatch;
@@ -484,80 +488,37 @@ function WorkbenchApp({
   }, [app, authController, options.profile]);
 
   useInput((input, key) => {
-    if (key.ctrl && input === "c") {
-      app.exit();
-      return;
-    }
-    if (key.pageUp || (key.ctrl && input === "u")) {
-      scrollTranscript(Math.max(1, Math.floor(viewportHeight / 2)));
-      return;
-    }
-    if (key.pageDown || (key.ctrl && input === "d")) {
-      scrollTranscript(-Math.max(1, Math.floor(viewportHeight / 2)));
-      return;
-    }
-    if (key.home) {
-      scrollTranscriptToTop();
-      return;
-    }
-    if (key.end) {
-      scrollTranscriptToBottom();
-      return;
-    }
-    if (key.upArrow) {
-      setDraft((current) => inputHistoryRef.current.previous(current));
-      return;
-    }
-    if (key.downArrow) {
-      setDraft((current) => inputHistoryRef.current.next(current));
-      return;
-    }
-    if (state.busy) {
-      if (key.escape) {
-        void turnController.abort("Abort requested.");
-        return;
-      }
-      if (key.return) {
-        const command = draft.trim();
-        inputHistoryRef.current.record(command);
-        setDraft("");
-        if (command === "/abort" || command === "/cancel") {
+    const result = inputController.handle(input, key, {
+      busy: state.busy,
+      draft,
+      viewportHeight,
+    });
+    if (result.draft !== draft) setDraft(result.draft);
+    for (const effect of result.effects) {
+      switch (effect.type) {
+        case "exit":
+          app.exit();
+          break;
+        case "scroll":
+          scrollTranscript(effect.delta);
+          break;
+        case "scroll_top":
+          scrollTranscriptToTop();
+          break;
+        case "scroll_bottom":
+          scrollTranscriptToBottom();
+          break;
+        case "abort":
           void turnController.abort("Abort requested.");
-          return;
-        }
-        if (command) {
+          break;
+        case "submit":
+          void submit(effect.input);
+          break;
+        case "ignored_busy":
           dispatch({ type: "message.add", role: "system", text: "Agent turn is running. Use /abort or Esc to cancel it." });
           dispatch({ type: "activity.add", level: "warning", text: "Input ignored while agent is running" });
-        }
-        return;
+          break;
       }
-      if (key.backspace || key.delete) {
-        inputHistoryRef.current.reset();
-        setDraft((current) => current.slice(0, -1));
-        return;
-      }
-      if (input && !key.ctrl && !key.meta) {
-        inputHistoryRef.current.reset();
-        setDraft((current) => current + input);
-      }
-      return;
-    }
-    if (key.return) {
-      const prompt = draft.trim();
-      if (!prompt) return;
-      inputHistoryRef.current.record(prompt);
-      setDraft("");
-      void submit(prompt);
-      return;
-    }
-    if (key.backspace || key.delete) {
-      inputHistoryRef.current.reset();
-      setDraft((current) => current.slice(0, -1));
-      return;
-    }
-    if (input && !key.ctrl && !key.meta) {
-      inputHistoryRef.current.reset();
-      setDraft((current) => current + input);
     }
   });
 
