@@ -5,10 +5,9 @@ import { type AgentRunOptions } from "../agent.js";
 import {
   activityColor,
   type RenderMode,
-  type WorkbenchCommand,
   type WorkbenchState,
 } from "./workbench.js";
-import { type WorkbenchEffect, type WorkbenchRuntimeEffect } from "../workbench/engine.js";
+import { type WorkbenchRuntimeEffect } from "../workbench/engine.js";
 import { createWorkbenchAuthController, type WorkbenchAuthController } from "../workbench/auth-controller.js";
 import {
   authMethods,
@@ -19,9 +18,7 @@ import {
 import {
   type WorkbenchLifecycleEffect,
 } from "../workbench/lifecycle-controller.js";
-import {
-  UnknownPresetError,
-} from "../workbench/settings-controller.js";
+import { createWorkbenchCommandController } from "../workbench/command-controller.js";
 import { createWorkbenchSession, type WorkbenchSession } from "../workbench/session.js";
 import {
   buildTranscriptViewModel,
@@ -164,6 +161,21 @@ function WorkbenchApp({
   const turnController = session.turn;
   const state = useSyncExternalStore(engine.subscribe, engine.snapshot, engine.snapshot);
   const dispatch = engine.dispatch;
+  const commandController = createWorkbenchCommandController({
+    authController,
+    conversationController,
+    engine,
+    localController,
+    options,
+    profileName,
+    settingsController,
+    turnController,
+    onDeleteProfile,
+    onExit: app.exit,
+    onLogin,
+    onLogout,
+    onSwitchProfile,
+  });
   const terminalRows = Math.max(18, stdout.rows || process.stdout.rows || 32);
   const terminalColumns = Math.max(80, stdout.columns || process.stdout.columns || 100);
   const viewportHeight = Math.max(6, terminalRows - 9);
@@ -344,360 +356,12 @@ function WorkbenchApp({
   async function submit(input: string) {
     const submission = engine.submit(input);
     if (submission.kind === "command") {
-      await runCommand(submission.command);
+      await commandController.run(submission.command);
       return;
     }
     if (submission.kind === "prompt") {
       await turnController.startPrompt(submission.prompt);
     }
-  }
-
-  async function runCommand(command: WorkbenchCommand) {
-    const commandResult = engine.handleCommand(command);
-    if (commandResult.handled) {
-      await runEffects(commandResult.effects);
-      return;
-    }
-    switch (command.kind) {
-      case "abort":
-        if (!state.busy) {
-          dispatch({ type: "message.add", role: "system", text: "No agent turn is running." });
-          return;
-        }
-        await turnController.abort("Abort requested.");
-        return;
-      case "config":
-        await runConfigCommand(command);
-        return;
-      case "preset":
-        await runPresetCommand(command.value);
-        return;
-      case "summary":
-        await showSummary();
-        return;
-      case "search":
-        await searchWorkdir(command.query);
-        return;
-      case "new_conversation":
-        await startNewConversation(command.name);
-        return;
-      case "switch_conversation":
-        switchConversation(command.name);
-        return;
-      case "list_conversations":
-        await showConversations();
-        return;
-      case "preview":
-        showEditPreview();
-        return;
-      case "apply":
-        await applyPendingEdit(false);
-        return;
-      case "apply_all":
-        await applyPendingEdit(true);
-        return;
-      case "reject":
-        rejectPendingEdit();
-        return;
-    }
-  }
-
-  async function runEffects(effects: WorkbenchEffect[]) {
-    for (const effect of effects) {
-      switch (effect.type) {
-        case "exit":
-          app.exit();
-          break;
-        case "login":
-          onLogin();
-          break;
-        case "logout":
-          dispatch({ type: "activity.add", text: `Logged out: ${profileName}` });
-          onLogout();
-          break;
-        case "delete_profile":
-          dispatch({ type: "activity.add", level: "warning", text: `Deleting profile: ${profileName}` });
-          await onDeleteProfile();
-          break;
-        case "switch_profile":
-          onSwitchProfile(effect.name);
-          break;
-        case "show_auth_status":
-          await showAuthStatus();
-          break;
-        case "export_transcript":
-          await exportTranscript(effect);
-          break;
-        case "clear_preset_tool_catalog_cache":
-          settingsController.clearPresetToolCatalogCache();
-          break;
-      }
-    }
-  }
-
-  async function runConfigCommand(command: Extract<WorkbenchCommand, { kind: "config" }>) {
-    if (!command.field) {
-      dispatch({
-        type: "message.add",
-        role: "system",
-        text: settingsController.configText({
-          profileName,
-          runPreset: state.runPreset,
-          runModel: state.runModel,
-          accessMode: state.accessMode,
-          contextEnabled: state.contextEnabled,
-          defaultPreset: state.defaultPreset,
-          renderMode: state.renderMode,
-        }),
-      });
-      return;
-    }
-
-    if (command.field === "preset") {
-      if (!command.value) {
-        dispatch({
-          type: "message.add",
-          role: "system",
-          text: settingsController.defaultPresetHelp(state.defaultPreset),
-        });
-        return;
-      }
-      try {
-        const settings = await settingsController.saveDefaultPreset({ value: command.value, profileName, options });
-        dispatch({ type: "settings.set", settings: { defaultPreset: settings.defaultPreset, runPreset: settings.runPreset } });
-        dispatch({
-          type: "message.add",
-          role: "system",
-          text: settings.message,
-        });
-        dispatch({ type: "activity.add", level: "success", text: settings.activity });
-      } catch (error) {
-        if (error instanceof UnknownPresetError) {
-          dispatch({
-            type: "message.add",
-            role: "system",
-            text: await presetListText(`Unknown preset: ${error.preset}`),
-          });
-          dispatch({ type: "activity.add", level: "warning", text: `Unknown preset: ${error.preset}` });
-          return;
-        }
-        dispatch({ type: "message.add", role: "system", text: `Could not save default preset: ${userFacingError(error)}` });
-        dispatch({ type: "activity.add", level: "error", text: "Default preset save failed" });
-      }
-    }
-  }
-
-  async function runPresetCommand(value?: string) {
-    if (!value) {
-      dispatch({
-        type: "message.add",
-        role: "system",
-        text: await presetListText(`Preset: ${state.runPreset || "none"}. Use /preset <name> or /preset none.`),
-      });
-      return;
-    }
-    const normalized = normalizeOptionalSetting(value, ["none", "off", "clear"]);
-    if (normalized && !(await validatePresetName(normalized))) {
-      return;
-    }
-    dispatch({ type: "settings.set", settings: { runPreset: normalized } });
-    dispatch({ type: "activity.add", text: `Preset: ${normalized || "none"}` });
-  }
-
-  async function validatePresetName(preset: string) {
-    try {
-      if (await settingsController.validatePreset(profileName, preset)) return true;
-      dispatch({
-        type: "message.add",
-        role: "system",
-        text: await presetListText(`Unknown preset: ${preset}`),
-      });
-      dispatch({ type: "activity.add", level: "warning", text: `Unknown preset: ${preset}` });
-      return false;
-    } catch (error) {
-      dispatch({ type: "message.add", role: "system", text: `Could not validate preset "${preset}": ${userFacingError(error)}` });
-      dispatch({ type: "activity.add", level: "error", text: "Preset catalog unavailable" });
-      return false;
-    }
-  }
-
-  async function presetListText(prefix: string) {
-    return settingsController.presetListText({ profileName, currentPreset: state.runPreset, prefix });
-  }
-
-  async function showAuthStatus() {
-    dispatch({ type: "activity.add", text: "Checking auth status" });
-    try {
-      dispatch({ type: "message.add", role: "system", text: await authController.statusText(profileName) });
-      dispatch({ type: "activity.add", level: "success", text: "Auth status ready" });
-    } catch (error) {
-      dispatch({ type: "message.add", role: "system", text: userFacingError(error) });
-      dispatch({ type: "activity.add", level: "error", text: "Auth status failed" });
-    }
-  }
-
-  async function exportTranscript(effect: Extract<WorkbenchEffect, { type: "export_transcript" }>) {
-    try {
-      const file = await conversationController.exportTranscript(effect);
-      dispatch({ type: "message.add", role: "system", text: `Transcript exported:\n${file}` });
-      dispatch({ type: "activity.add", level: "success", text: "Transcript exported" });
-    } catch (error) {
-      dispatch({ type: "message.add", role: "system", text: `Transcript export failed: ${userFacingError(error)}` });
-      dispatch({ type: "activity.add", level: "error", text: "Transcript export failed" });
-    }
-  }
-
-  async function showSummary() {
-    if (!localController.isLoaded()) {
-      dispatch({ type: "message.add", role: "system", text: "Workdir is still loading." });
-      return;
-    }
-    dispatch({ type: "activity.add", text: "Summarizing workdir" });
-    try {
-      dispatch({
-        type: "message.add",
-        role: "system",
-        text: await localController.summaryText(),
-      });
-      dispatch({ type: "activity.add", level: "success", text: "Workdir summary ready" });
-    } catch (error) {
-      dispatch({
-        type: "activity.add",
-        level: "error",
-        text: userFacingError(error),
-      });
-    }
-  }
-
-  async function startNewConversation(name?: string) {
-    const conversation = await conversationController.startNewConversation(name, options.profile);
-    dispatch({ type: "messages.clear" });
-    dispatch({ type: "conversation.set", name: conversation.name });
-    dispatch({
-      type: "message.add",
-      role: "system",
-      text: conversation.message,
-    });
-  }
-
-  function switchConversation(name: string) {
-    const conversation = conversationController.switchConversation(name);
-    dispatch({ type: "messages.clear" });
-    dispatch({ type: "conversation.set", name: conversation.name });
-    dispatch({
-      type: "message.add",
-      role: "system",
-      text: conversation.message,
-    });
-  }
-
-  async function showConversations() {
-    try {
-      dispatch({
-        type: "message.add",
-        role: "system",
-        text: await conversationController.listConversations(options.profile),
-      });
-    } catch (error) {
-      dispatch({ type: "message.add", role: "system", text: userFacingError(error) });
-    }
-  }
-
-  async function searchWorkdir(query: string) {
-    if (!query) {
-      dispatch({ type: "message.add", role: "system", text: "Usage: /search <query>" });
-      return;
-    }
-    if (!localController.isLoaded()) {
-      dispatch({ type: "message.add", role: "system", text: "Workdir is still loading." });
-      return;
-    }
-    dispatch({ type: "activity.add", text: `Searching workdir: ${query}` });
-    try {
-      const result = await localController.searchText(query);
-      dispatch({
-        type: "message.add",
-        role: "system",
-        text: result.text,
-      });
-      dispatch({
-        type: "activity.add",
-        level: "success",
-        text: `Search complete: ${result.count} matches`,
-      });
-    } catch (error) {
-      dispatch({
-        type: "activity.add",
-        level: "error",
-        text: userFacingError(error),
-      });
-    }
-  }
-
-  function showEditPreview() {
-    if (state.pendingLocalTool) {
-      dispatch({ type: "message.add", role: "system", text: localController.approvalPreview(state.pendingLocalTool) });
-      return;
-    }
-    dispatch({ type: "message.add", role: "system", text: "No pending local action." });
-  }
-
-  async function applyPendingEdit(allowFutureLocalActions: boolean) {
-    if (!localController.isLoaded()) {
-      dispatch({ type: "message.add", role: "system", text: "Workdir is still loading." });
-      return;
-    }
-    if (state.pendingLocalTool) {
-      dispatch({
-        type: "activity.add",
-        level: "warning",
-        text: `Applying local action: ${state.pendingLocalTool.name}${state.pendingLocalTool.action ? `.${state.pendingLocalTool.action}` : ""}`,
-      });
-      try {
-        const result = await localController.applyApproval(state.pendingLocalTool);
-        const nextAccessMode = allowFutureLocalActions ? "full" : state.accessMode;
-        if (allowFutureLocalActions) {
-          dispatch({ type: "access.set", mode: "full" });
-        }
-        dispatch({
-          type: "message.add",
-          role: "system",
-          text: [
-            allowFutureLocalActions
-              ? "Applied local action. Future local actions in this workbench conversation are now allowed."
-              : "Applied local action once. Future local actions still require approval.",
-            "Continuing agent turn with the local result.",
-            "Result:",
-            JSON.stringify(result, null, 2),
-          ].join("\n"),
-        });
-        dispatch({ type: "activity.add", level: "success", text: "Local action applied" });
-        const approval = state.pendingLocalTool;
-        dispatch({ type: "local_tool.pending.clear" });
-        await turnController.continueAfterLocalApproval({
-          approval,
-          result,
-          accessMode: nextAccessMode,
-        });
-      } catch (error) {
-        dispatch({ type: "message.add", role: "system", text: userFacingError(error) });
-        dispatch({ type: "activity.add", level: "error", text: userFacingError(error) });
-      }
-      return;
-    }
-    dispatch({ type: "message.add", role: "system", text: "No pending local action." });
-  }
-
-  function rejectPendingEdit() {
-    if (state.pendingLocalTool) {
-      dispatch({
-        type: "activity.add",
-        text: `Rejected local action: ${state.pendingLocalTool.name}${state.pendingLocalTool.action ? `.${state.pendingLocalTool.action}` : ""}`,
-      });
-      dispatch({ type: "local_tool.pending.clear" });
-      return;
-    }
-    dispatch({ type: "message.add", role: "system", text: "No pending local action." });
   }
 
   function runRuntimeEffects(effects: WorkbenchRuntimeEffect[], assistantId: string) {
@@ -889,12 +553,6 @@ function Cursor({ visible }: { visible: boolean }) {
 function userFacingError(error: unknown) {
   if (error instanceof Error) return error.message;
   return String(error);
-}
-
-function normalizeOptionalSetting(value: string, clearValues: string[]) {
-  const trimmed = value.trim();
-  if (!trimmed) return undefined;
-  return clearValues.includes(trimmed.toLowerCase()) ? undefined : trimmed;
 }
 
 function pendingLocalLabel(state: WorkbenchState) {

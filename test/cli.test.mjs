@@ -17,6 +17,7 @@ import {
 } from "../dist/tui/workbench.js";
 import { authStatusText, createWorkbenchAuthController } from "../dist/workbench/auth-controller.js";
 import { createWorkbenchAuthGateController } from "../dist/workbench/auth-gate-controller.js";
+import { createWorkbenchCommandController } from "../dist/workbench/command-controller.js";
 import { createWorkbenchEngine } from "../dist/workbench/engine.js";
 import { createWorkbenchLocalController } from "../dist/workbench/local-controller.js";
 import {
@@ -55,6 +56,67 @@ function isolatedEnv(root) {
     XDG_CONFIG_HOME: join(root, ".config"),
     XDG_DATA_HOME: join(root, ".local", "share"),
     XDG_CACHE_HOME: join(root, ".cache"),
+  };
+}
+
+function stubAuthController() {
+  return {
+    async check() { return { profileName: "default", refreshed: false }; },
+    async loginAPIKey() { return { profileName: "default" }; },
+    async loginBrowser() { return { profileName: "default" }; },
+    async deleteProfile() {},
+    async statusText() { return "Profile: default"; },
+    async refresh() { return { refreshed: false }; },
+  };
+}
+
+function stubConversationController() {
+  return {
+    async startNewConversation(name) {
+      return { name: name || "new", message: "Started." };
+    },
+    switchConversation(name) {
+      return { name, message: "Switched." };
+    },
+    async listConversations() {
+      return "No conversations.";
+    },
+    async exportTranscript() {
+      return "/tmp/transcript.txt";
+    },
+  };
+}
+
+function stubLocalController() {
+  return {
+    async load() {
+      return { root: "/tmp/workdir", name: "workdir", fileCount: 0, totalBytes: 0, scanTruncated: false };
+    },
+    isLoaded() { return false; },
+    async summaryText() { return "summary"; },
+    async searchText() { return { text: "matches", count: 1 }; },
+    approvalPreview() { return "preview"; },
+    async applyApproval() { return { ok: true }; },
+  };
+}
+
+function stubSettingsController() {
+  return {
+    async loadInitial() { return {}; },
+    async saveDefaultPreset() { return { defaultPreset: "pro-search", runPreset: "pro-search", message: "saved", activity: "saved" }; },
+    async validatePreset() { return true; },
+    async presetListText(input) { return input.prefix; },
+    configText() { return "config"; },
+    defaultPresetHelp() { return "default preset help"; },
+    clearPresetToolCatalogCache() {},
+  };
+}
+
+function stubTurnController() {
+  return {
+    async startPrompt() {},
+    async continueAfterLocalApproval() {},
+    async abort() {},
   };
 }
 
@@ -743,6 +805,89 @@ test("workbench session constructs shared engine and controllers", () => {
   assert.equal(typeof session.input.handle, "function");
   assert.equal(typeof session.lifecycle.initialPrompt, "function");
   assert.equal(typeof session.turn.startPrompt, "function");
+});
+
+test("workbench command controller applies renderer-neutral preset commands", async () => {
+  const engine = createWorkbenchEngine({ contextEnabled: false });
+  const controller = createWorkbenchCommandController({
+    authController: stubAuthController(),
+    conversationController: stubConversationController(),
+    engine,
+    localController: stubLocalController(),
+    options: { promptParts: [], profile: "default" },
+    profileName: "default",
+    settingsController: {
+      async loadInitial() { return {}; },
+      async saveDefaultPreset() { throw new Error("not used"); },
+      async validatePreset(_profile, preset) { return preset === "analysis"; },
+      async presetListText(input) { return `${input.prefix}\n- analysis`; },
+      configText() { return "config"; },
+      defaultPresetHelp() { return "default preset help"; },
+      clearPresetToolCatalogCache() {},
+    },
+    turnController: stubTurnController(),
+    async onDeleteProfile() {},
+    onExit() {},
+    onLogin() {},
+    onLogout() {},
+    onSwitchProfile() {},
+  });
+
+  await controller.run({ kind: "preset", value: "analysis" });
+  assert.equal(engine.snapshot().runPreset, "analysis");
+
+  await controller.run({ kind: "preset", value: "missing" });
+  assert.equal(engine.snapshot().runPreset, "analysis");
+  assert.match(engine.snapshot().messages.at(-1).text, /Unknown preset: missing/);
+});
+
+test("workbench command controller applies pending local approvals", async () => {
+  const continuations = [];
+  const engine = createWorkbenchEngine({ contextEnabled: true, accessMode: "approval" });
+  engine.dispatch({
+    type: "local_tool.pending.set",
+    approval: {
+      name: "local_shell",
+      action: "run",
+      arguments: { command: "pwd" },
+      callID: "call_1",
+      responseID: "resp_1",
+    },
+  });
+  const controller = createWorkbenchCommandController({
+    authController: stubAuthController(),
+    conversationController: stubConversationController(),
+    engine,
+    localController: {
+      ...stubLocalController(),
+      isLoaded() { return true; },
+      async applyApproval(approval) {
+        return { ok: true, command: approval.arguments.command };
+      },
+    },
+    options: { promptParts: [], profile: "default" },
+    profileName: "default",
+    settingsController: stubSettingsController(),
+    turnController: {
+      ...stubTurnController(),
+      async continueAfterLocalApproval(input) {
+        continuations.push(input);
+      },
+    },
+    async onDeleteProfile() {},
+    onExit() {},
+    onLogin() {},
+    onLogout() {},
+    onSwitchProfile() {},
+  });
+
+  await controller.run({ kind: "apply_all" });
+
+  assert.equal(engine.snapshot().pendingLocalTool, null);
+  assert.equal(engine.snapshot().accessMode, "full");
+  assert.equal(continuations.length, 1);
+  assert.equal(continuations[0].accessMode, "full");
+  assert.deepEqual(continuations[0].result, { ok: true, command: "pwd" });
 });
 
 test("preset list marks the current preset", () => {
