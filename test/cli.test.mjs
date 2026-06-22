@@ -30,6 +30,10 @@ import {
   defaultTranscriptExportPath,
 } from "../dist/workbench/conversation-controller.js";
 import { createWorkbenchInputController } from "../dist/workbench/input-controller.js";
+import {
+  createWorkbenchLifecycleController,
+  updateNoticeEffects,
+} from "../dist/workbench/lifecycle-controller.js";
 import { createWorkbenchTurnController } from "../dist/workbench/turn-controller.js";
 import {
   buildTranscriptLines,
@@ -621,6 +625,90 @@ test("update helper compares semver-ish CLI versions and formats npm notice", ()
     packageName: "@agent-api/cli",
     updateAvailable: true,
   }), "Update available: @agent-api/cli 0.1.0 -> 0.1.1. Run: npm install -g @agent-api/cli@latest");
+});
+
+test("workbench lifecycle controller emits update notice once", async () => {
+  const controller = createWorkbenchLifecycleController({
+    authController: {
+      async check() { return { profileName: "default", refreshed: false }; },
+      async loginAPIKey() { return { profileName: "default" }; },
+      async loginBrowser() { return { profileName: "default" }; },
+      async deleteProfile() {},
+      async statusText() { return ""; },
+      async refresh() { return { refreshed: false }; },
+    },
+    async checkForUpdateImpl() {
+      return {
+        current: "0.1.0",
+        latest: "0.1.1",
+        packageName: "@agent-api/cli",
+        updateAvailable: true,
+      };
+    },
+  });
+
+  const effects = await controller.maybeCheckForUpdate();
+  assert.deepEqual(effects.map((effect) => effect.type), ["dispatch", "dispatch"]);
+  assert.match(effects[0].type === "dispatch" ? effects[0].action.text : "", /Update available: 0.1.1/);
+  assert.deepEqual(await controller.maybeCheckForUpdate(), []);
+});
+
+test("workbench lifecycle controller maps auth refresh and failure", async () => {
+  let mode = "refreshed";
+  const controller = createWorkbenchLifecycleController({
+    authController: {
+      async check() { return { profileName: "default", refreshed: false }; },
+      async loginAPIKey() { return { profileName: "default" }; },
+      async loginBrowser() { return { profileName: "default" }; },
+      async deleteProfile() {},
+      async statusText() { return ""; },
+      async refresh() {
+        if (mode === "fail") throw new Error("invalid refresh token");
+        return { refreshed: mode === "refreshed" };
+      },
+    },
+    refreshWindowMs: 123,
+  });
+
+  assert.deepEqual(await controller.refreshAuth("dev"), [
+    { type: "dispatch", action: { type: "activity.add", level: "success", text: "Auth session refreshed" } },
+  ]);
+  mode = "unchanged";
+  assert.deepEqual(await controller.refreshAuth("dev"), []);
+  mode = "fail";
+  const failed = await controller.refreshAuth("dev");
+  assert.deepEqual(failed.map((effect) => effect.type), ["dispatch", "dispatch", "close"]);
+  assert.match(failed[0].type === "dispatch" ? failed[0].action.text : "", /invalid refresh token/);
+  assert.deepEqual(await controller.refreshAuth("dev"), []);
+});
+
+test("workbench lifecycle controller starts initial prompt once after workdir load", () => {
+  const controller = createWorkbenchLifecycleController({
+    authController: {
+      async check() { return { profileName: "default", refreshed: false }; },
+      async loginAPIKey() { return { profileName: "default" }; },
+      async loginBrowser() { return { profileName: "default" }; },
+      async deleteProfile() {},
+      async statusText() { return ""; },
+      async refresh() { return { refreshed: false }; },
+    },
+  });
+  const workdir = { root: "/tmp/example", name: "example", fileCount: 1, totalBytes: 1, scanTruncated: false };
+
+  assert.equal(controller.initialPrompt({ busy: false, promptParts: ["hello", "agent"], workdir: null }), undefined);
+  assert.equal(controller.initialPrompt({ busy: true, promptParts: ["hello", "agent"], workdir }), undefined);
+  assert.equal(controller.initialPrompt({ busy: false, promptParts: ["hello", "agent"], workdir }), "hello agent");
+  assert.equal(controller.initialPrompt({ busy: false, promptParts: ["again"], workdir }), undefined);
+});
+
+test("workbench lifecycle update notice helper ignores unavailable updates", () => {
+  assert.deepEqual(updateNoticeEffects(null), []);
+  assert.deepEqual(updateNoticeEffects({
+    current: "0.1.0",
+    latest: "0.1.0",
+    packageName: "@agent-api/cli",
+    updateAvailable: false,
+  }), []);
 });
 
 test("preset list marks the current preset", () => {

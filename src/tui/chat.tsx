@@ -9,7 +9,6 @@ import {
   type WorkbenchState,
 } from "./workbench.js";
 import { createWorkbenchEngine, type WorkbenchEffect, type WorkbenchEngine, type WorkbenchRuntimeEffect } from "../workbench/engine.js";
-import { checkForUpdate, formatUpdateNotice } from "../update.js";
 import { createWorkbenchAuthController, type WorkbenchAuthController } from "../workbench/auth-controller.js";
 import {
   authMethods,
@@ -22,6 +21,11 @@ import {
   type WorkbenchConversationController,
 } from "../workbench/conversation-controller.js";
 import { createWorkbenchInputController, type WorkbenchInputController } from "../workbench/input-controller.js";
+import {
+  createWorkbenchLifecycleController,
+  type WorkbenchLifecycleController,
+  type WorkbenchLifecycleEffect,
+} from "../workbench/lifecycle-controller.js";
 import { createWorkbenchLocalController, type WorkbenchLocalController } from "../workbench/local-controller.js";
 import {
   createWorkbenchSettingsController,
@@ -146,17 +150,15 @@ function WorkbenchApp({
 }) {
   const app = useApp();
   const { stdout } = useStdout();
-  const initialPromptSubmittedRef = useRef(false);
-  const authRefreshWarningShownRef = useRef(false);
   const textDeltaBufferRef = useRef<{ id: string; text: string } | null>(null);
   const textDeltaFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const updateNoticeShownRef = useRef(false);
   const [draft, setDraft] = useState("");
   const [spinnerFrame, setSpinnerFrame] = useState(0);
   const [transcriptOffset, setTranscriptOffset] = useState(0);
   const engineRef = useRef<WorkbenchEngine | null>(null);
   const conversationControllerRef = useRef<WorkbenchConversationController | null>(null);
   const inputControllerRef = useRef<WorkbenchInputController | null>(null);
+  const lifecycleControllerRef = useRef<WorkbenchLifecycleController | null>(null);
   const settingsControllerRef = useRef<WorkbenchSettingsController | null>(null);
   if (!engineRef.current) {
     engineRef.current = createWorkbenchEngine({
@@ -177,8 +179,12 @@ function WorkbenchApp({
   if (!inputControllerRef.current) {
     inputControllerRef.current = createWorkbenchInputController();
   }
+  if (!lifecycleControllerRef.current) {
+    lifecycleControllerRef.current = createWorkbenchLifecycleController({ authController });
+  }
   const conversationController = conversationControllerRef.current;
   const inputController = inputControllerRef.current;
+  const lifecycleController = lifecycleControllerRef.current;
   const settingsController = settingsControllerRef.current;
   const state = useSyncExternalStore(engine.subscribe, engine.snapshot, engine.snapshot);
   const dispatch = engine.dispatch;
@@ -236,17 +242,10 @@ function WorkbenchApp({
 
   useEffect(() => {
     let mounted = true;
-    if (!updateNoticeShownRef.current && process.env.AGENT_TUI_UPDATE_CHECK !== "0") {
-      updateNoticeShownRef.current = true;
-      checkForUpdate()
-        .then((result) => {
-          if (!mounted || !result?.updateAvailable) return;
-          const notice = formatUpdateNotice(result);
-          dispatch({ type: "activity.add", level: "warning", text: `Update available: ${result.latest}` });
-          dispatch({ type: "message.add", role: "system", text: notice });
-        })
-        .catch(() => undefined);
-    }
+    lifecycleController.maybeCheckForUpdate()
+      .then((effects) => {
+        if (mounted) runLifecycleEffects(effects, () => mounted);
+      });
     settingsController.loadInitial({
       modelExplicit: options.modelExplicit,
       preset: options.preset,
@@ -263,7 +262,7 @@ function WorkbenchApp({
     return () => {
       mounted = false;
     };
-  }, [dispatch, options.modelExplicit, options.preset, options.presetExplicit, settingsController]);
+  }, [dispatch, lifecycleController, options.modelExplicit, options.preset, options.presetExplicit, settingsController]);
 
   useEffect(() => {
     let mounted = true;
@@ -291,29 +290,10 @@ function WorkbenchApp({
 
   useEffect(() => {
     let mounted = true;
-    const refreshWindowMs = 5 * 60_000;
     const refreshIntervalMs = 60_000;
     const refreshAuth = async () => {
-      try {
-        const result = await authController.refresh(options.profile, refreshWindowMs);
-        if (!mounted) return;
-        if (result.refreshed) {
-          authRefreshWarningShownRef.current = false;
-          dispatch({ type: "activity.add", level: "success", text: "Auth session refreshed" });
-        }
-      } catch (error) {
-        if (!mounted || authRefreshWarningShownRef.current) return;
-        authRefreshWarningShownRef.current = true;
-        dispatch({
-          type: "message.add",
-          role: "system",
-          text: `${userFacingError(error)}\n\nClosing the workbench because authenticated agent conversations are unavailable.`,
-        });
-        dispatch({ type: "activity.add", level: "error", text: "Auth session needs login; closing" });
-        setTimeout(() => {
-          if (mounted) app.exit();
-        }, 1500);
-      }
+      const effects = await lifecycleController.refreshAuth(options.profile);
+      if (mounted) runLifecycleEffects(effects, () => mounted);
     };
     void refreshAuth();
     const interval = setInterval(refreshAuth, refreshIntervalMs);
@@ -321,7 +301,7 @@ function WorkbenchApp({
       mounted = false;
       clearInterval(interval);
     };
-  }, [app, authController, options.profile]);
+  }, [lifecycleController, options.profile]);
 
   useInput((input, key) => {
     const result = inputController.handle(input, key, {
@@ -359,13 +339,13 @@ function WorkbenchApp({
   });
 
   useEffect(() => {
-    if (initialPromptSubmittedRef.current || state.busy) return;
-    const initialPrompt = options.promptParts.join(" ").trim();
-    if (!initialPrompt) return;
-    if (!state.workdir) return;
-    initialPromptSubmittedRef.current = true;
-    void turnController.startPrompt(initialPrompt);
-  }, [options.promptParts, state.busy, state.workdir, turnController]);
+    const initialPrompt = lifecycleController.initialPrompt({
+      busy: state.busy,
+      promptParts: options.promptParts,
+      workdir: state.workdir,
+    });
+    if (initialPrompt) void turnController.startPrompt(initialPrompt);
+  }, [lifecycleController, options.promptParts, state.busy, state.workdir, turnController]);
 
   useEffect(() => {
     if (!state.busy) {
@@ -386,6 +366,21 @@ function WorkbenchApp({
       }
     };
   }, []);
+
+  function runLifecycleEffects(effects: WorkbenchLifecycleEffect[], isMounted: () => boolean) {
+    for (const effect of effects) {
+      switch (effect.type) {
+        case "dispatch":
+          dispatch(effect.action);
+          break;
+        case "close":
+          setTimeout(() => {
+            if (isMounted()) app.exit();
+          }, effect.delayMs);
+          break;
+      }
+    }
+  }
 
   async function submit(input: string) {
     const submission = engine.submit(input);
