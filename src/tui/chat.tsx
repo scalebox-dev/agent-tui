@@ -783,7 +783,7 @@ function WorkbenchApp({
         prefix,
         "",
         "Available presets:",
-        ...formatPresetList(presets),
+        ...formatPresetList(presets, runPreset),
       ].join("\n");
     } catch (error) {
       return [
@@ -1460,11 +1460,12 @@ function effectiveDefaultPreset(preferences: WorkbenchPreferences, builtInPreset
   return builtInPreset;
 }
 
-function formatPresetList(presets: Awaited<ReturnType<typeof listAvailablePresets>>) {
+export function formatPresetList(presets: Awaited<ReturnType<typeof listAvailablePresets>>, currentPreset?: string) {
   if (presets.length === 0) return ["- none returned by this endpoint"];
   return presets.map((preset) => {
     const description = preset.description ? ` - ${preset.description}` : "";
-    return `- ${preset.preset}${description}`;
+    const current = currentPreset && preset.preset === currentPreset;
+    return `${current ? "*" : "-"} ${preset.preset}${current ? " (current)" : ""}${description}`;
   });
 }
 

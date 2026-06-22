@@ -13,6 +13,7 @@ import {
   parseWorkbenchCommand,
   workbenchReducer,
 } from "../dist/tui/workbench.js";
+import { formatPresetList as formatChatPresetList } from "../dist/tui/chat.js";
 import { compareVersions, formatUpdateNotice } from "../dist/update.js";
 
 const execFileAsync = promisify(execFile);
@@ -385,4 +386,14 @@ test("update helper compares semver-ish CLI versions and formats npm notice", ()
     packageName: "@agent-api/cli",
     updateAvailable: true,
   }), "Update available: @agent-api/cli 0.1.0 -> 0.1.1. Run: npm install -g @agent-api/cli@latest");
+});
+
+test("preset list marks the current preset", () => {
+  assert.deepEqual(formatChatPresetList([
+    { preset: "pro-search", description: "Search preset" },
+    { preset: "code-agent", description: "Code preset" },
+  ], "pro-search"), [
+    "* pro-search (current) - Search preset",
+    "- code-agent - Code preset",
+  ]);
 });
