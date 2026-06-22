@@ -80,6 +80,8 @@ export type WorkbenchCommand =
   | { kind: "auth_status" }
   | { kind: "config"; field?: "preset"; value?: string }
   | { kind: "render"; mode?: RenderMode }
+  | { kind: "transcript" }
+  | { kind: "export"; path?: string }
   | { kind: "context"; enabled?: boolean }
   | { kind: "workdir"; enabled?: boolean }
   | { kind: "access"; mode?: WorkdirAccessMode }
@@ -288,6 +290,10 @@ export function parseWorkbenchCommand(input: string): WorkbenchCommand | null {
       if (mode === "raw" || mode === "markdown") return { kind: "render", mode };
       return { kind: "render" };
     }
+    case "transcript":
+      return { kind: "transcript" };
+    case "export":
+      return { kind: "export", path: rest.join(" ").trim() || undefined };
     case "context":
       return { kind: "context", enabled: parseOnOff(rest[0]) };
     case "access": {
@@ -369,6 +375,8 @@ export function helpText() {
     "/delete-profile  delete current saved profile and return to auth",
     "/config          show current run configuration and saved defaults",
     "/render [mode]   show or set output rendering: markdown or raw",
+    "/transcript      show a plain-text transcript preview",
+    "/export [file]   save the plain-text transcript to a file",
     "/config preset   save default preset; use none/off for no preset, reset for built-in",
     "/preset [name]   show or set preset; use none/off to clear",
     "/model [name]    show or set explicit model; use auto/none/off to clear",
@@ -389,6 +397,16 @@ export function helpText() {
     "/clear           clear the visible terminal transcript",
     "/quit            leave the workbench",
   ].join("\n");
+}
+
+export function formatTranscript(messages: WorkbenchMessage[]) {
+  return messages
+    .map((message) => {
+      const body = message.text.trimEnd();
+      return body ? `${roleLabel(message.role)}:\n${body}` : `${roleLabel(message.role)}:`;
+    })
+    .join("\n\n")
+    .trimEnd() + "\n";
 }
 
 function parseOnOff(value?: string) {
@@ -424,6 +442,12 @@ export function activityColor(level: ActivityLevel) {
 
 function newMessage(role: WorkbenchRole, text: string, id = randomId()): WorkbenchMessage {
   return { id, role, text };
+}
+
+function roleLabel(role: WorkbenchRole) {
+  if (role === "user") return "You";
+  if (role === "assistant") return "Agent";
+  return "System";
 }
 
 function newActivity(level: ActivityLevel, text: string): WorkbenchActivity {

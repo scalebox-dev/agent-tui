@@ -10,6 +10,7 @@ import { normalizeChatOptions } from "../dist/chat-options.js";
 import {
   createInputHistory,
   createInitialWorkbenchState,
+  formatTranscript,
   parsePendingApprovalCommand,
   parseWorkbenchCommand,
   workbenchReducer,
@@ -133,6 +134,9 @@ test("workbench command parser and reducer handle local workflow state", () => {
   assert.deepEqual(parseWorkbenchCommand("/render"), { kind: "render" });
   assert.deepEqual(parseWorkbenchCommand("/render raw"), { kind: "render", mode: "raw" });
   assert.deepEqual(parseWorkbenchCommand("/render markdown"), { kind: "render", mode: "markdown" });
+  assert.deepEqual(parseWorkbenchCommand("/transcript"), { kind: "transcript" });
+  assert.deepEqual(parseWorkbenchCommand("/export"), { kind: "export", path: undefined });
+  assert.deepEqual(parseWorkbenchCommand("/export ./notes/transcript.txt"), { kind: "export", path: "./notes/transcript.txt" });
   assert.deepEqual(parseWorkbenchCommand("/access"), { kind: "access" });
   assert.deepEqual(parseWorkbenchCommand("/access off"), { kind: "access", mode: "off" });
   assert.deepEqual(parseWorkbenchCommand("/access full"), { kind: "access", mode: "full" });
@@ -419,4 +423,12 @@ test("input history navigates submitted prompts like a shell", () => {
 
   history.record("fourth");
   assert.deepEqual(history.values(), ["third", "fourth"]);
+});
+
+test("workbench transcript formatter produces readable plain text", () => {
+  assert.equal(formatTranscript([
+    { id: "1", role: "system", text: "Ready." },
+    { id: "2", role: "user", text: "Hello" },
+    { id: "3", role: "assistant", text: "Hi there\n" },
+  ]), "System:\nReady.\n\nYou:\nHello\n\nAgent:\nHi there\n");
 });

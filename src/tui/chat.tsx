@@ -1,4 +1,6 @@
 import React, { useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { Box, Text, useApp, useInput, useStdout } from "ink";
 import {
   defaultBaseURL,
@@ -28,6 +30,7 @@ import {
   createInputHistory,
   createInitialWorkbenchState,
   formatBytes,
+  formatTranscript,
   helpText,
   parsePendingApprovalCommand,
   parseWorkbenchCommand,
@@ -49,6 +52,7 @@ import {
   waitForBrowserAuthChallenge,
 } from "../profile.js";
 import { checkForUpdate, formatUpdateNotice } from "../update.js";
+import { runtime } from "../runtime/index.js";
 
 export function ChatApp({ options }: { options: AgentRunOptions }) {
   return <AuthenticatedChatApp options={options} />;
@@ -693,6 +697,13 @@ function WorkbenchApp({
         dispatch({ type: "activity.add", level: "success", text: `Render mode: ${command.mode}` });
         dispatch({ type: "message.add", role: "system", text: `Render mode set to ${command.mode}.` });
         return;
+      case "transcript":
+        dispatch({ type: "message.add", role: "system", text: transcriptPreview(state.messages) });
+        dispatch({ type: "activity.add", level: "success", text: "Transcript preview ready" });
+        return;
+      case "export":
+        await exportTranscript(command.path);
+        return;
       case "context":
         dispatch({ type: "context.set", enabled: command.enabled ?? !state.contextEnabled });
         return;
@@ -884,6 +895,22 @@ function WorkbenchApp({
     } catch (error) {
       dispatch({ type: "message.add", role: "system", text: userFacingError(error) });
       dispatch({ type: "activity.add", level: "error", text: "Auth status failed" });
+    }
+  }
+
+  async function exportTranscript(targetPath?: string) {
+    const transcript = formatTranscript(state.messages);
+    try {
+      const file = targetPath?.trim()
+        ? path.resolve(process.cwd(), targetPath.trim())
+        : defaultTranscriptExportPath(state.currentConversation);
+      await mkdir(path.dirname(file), { recursive: true });
+      await writeFile(file, transcript, "utf8");
+      dispatch({ type: "message.add", role: "system", text: `Transcript exported:\n${file}` });
+      dispatch({ type: "activity.add", level: "success", text: "Transcript exported" });
+    } catch (error) {
+      dispatch({ type: "message.add", role: "system", text: `Transcript export failed: ${userFacingError(error)}` });
+      dispatch({ type: "activity.add", level: "error", text: "Transcript export failed" });
     }
   }
 
@@ -1345,8 +1372,8 @@ function WorkbenchApp({
       </Box>
       <Box paddingX={1}>
         <Text color="gray">
-          /help /auth /login /logout /switch-profile /delete-profile /config /render /preset /model /access /context /quit
-          {clampedTranscriptOffset > 0 ? `  scroll=${clampedTranscriptOffset} rows from latest` : "  live"}
+          PgUp/PgDn scroll · End live · /export save · /transcript preview
+          {clampedTranscriptOffset > 0 ? ` · ${clampedTranscriptOffset} rows from latest` : " · live"}
         </Text>
       </Box>
     </Box>
@@ -1557,6 +1584,25 @@ function spinnerGlyph(frame: number) {
 
 function elapsedDots(frame: number) {
   return ".".repeat((Math.floor(frame / 4) % 3) + 1);
+}
+
+function transcriptPreview(messages: WorkbenchMessage[]) {
+  const lines = formatTranscript(messages).trimEnd().split(/\r?\n/);
+  const maxLines = 80;
+  if (lines.length <= maxLines) {
+    return ["Transcript preview:", "", ...lines].join("\n");
+  }
+  return [
+    `Transcript preview: showing last ${maxLines} lines of ${lines.length}. Use /export [file] for the full transcript.`,
+    "",
+    ...lines.slice(-maxLines),
+  ].join("\n");
+}
+
+function defaultTranscriptExportPath(conversation: string) {
+  const safeConversation = conversation.replace(/[^a-z0-9._-]+/gi, "-").replace(/^-+|-+$/g, "") || "conversation";
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  return path.join(runtime.dirs.data, "transcripts", `${safeConversation}-${stamp}.txt`);
 }
 
 function createConversationName() {
