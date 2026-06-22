@@ -18,14 +18,8 @@ import {
   type AgentRunOptions,
 } from "../agent.js";
 import {
-  openWorkdir,
-  type WorkdirService,
-} from "../workdir/index.js";
-import { createLocalShellToolRegistry, createLocalWorkdirToolRegistry } from "@agent-api/sdk/local";
-import {
   activityColor,
   createInputHistory,
-  formatBytes,
   type RenderMode,
   type WorkbenchCommand,
   type WorkbenchMessage,
@@ -45,6 +39,7 @@ import {
 } from "../profile.js";
 import { checkForUpdate, formatUpdateNotice } from "../update.js";
 import { runtime } from "../runtime/index.js";
+import { createWorkbenchLocalController, type WorkbenchLocalController } from "../workbench/local-controller.js";
 import { createWorkbenchTurnController, type WorkbenchTurnController } from "../workbench/turn-controller.js";
 
 export function ChatApp({ options }: { options: AgentRunOptions }) {
@@ -323,7 +318,6 @@ function WorkbenchApp({
 }) {
   const app = useApp();
   const { stdout } = useStdout();
-  const workdirRef = useRef<WorkdirService | null>(null);
   const initialPromptSubmittedRef = useRef(false);
   const authRefreshWarningShownRef = useRef(false);
   const textDeltaBufferRef = useRef<{ id: string; text: string } | null>(null);
@@ -346,6 +340,11 @@ function WorkbenchApp({
   const engine = engineRef.current;
   const state = useSyncExternalStore(engine.subscribe, engine.snapshot, engine.snapshot);
   const dispatch = engine.dispatch;
+  const localControllerRef = useRef<WorkbenchLocalController | null>(null);
+  if (!localControllerRef.current) {
+    localControllerRef.current = createWorkbenchLocalController();
+  }
+  const localController = localControllerRef.current;
   const turnControllerRef = useRef<WorkbenchTurnController | null>(null);
   if (!turnControllerRef.current) {
     turnControllerRef.current = createWorkbenchTurnController({
@@ -427,20 +426,12 @@ function WorkbenchApp({
   useEffect(() => {
     let mounted = true;
     dispatch({ type: "activity.add", text: "Loading workdir" });
-    openWorkdir({ path: options.workdir || process.cwd() })
-      .then(async (workdir) => {
-        const summary = await workdir.summarize();
+    localController.load(options.workdir || process.cwd())
+      .then((workdir) => {
         if (!mounted) return;
-        workdirRef.current = workdir;
         dispatch({
           type: "workdir.set",
-          workdir: {
-            root: workdir.root,
-            name: workdir.name,
-            fileCount: summary.file_count,
-            totalBytes: summary.total_bytes,
-            scanTruncated: summary.scan_truncated,
-          },
+          workdir,
         });
       })
       .catch((error) => {
@@ -454,7 +445,7 @@ function WorkbenchApp({
     return () => {
       mounted = false;
     };
-  }, [options.workdir]);
+  }, [dispatch, localController, options.workdir]);
 
   useEffect(() => {
     let mounted = true;
@@ -572,7 +563,7 @@ function WorkbenchApp({
     if (initialPromptSubmittedRef.current || state.busy) return;
     const initialPrompt = options.promptParts.join(" ").trim();
     if (!initialPrompt) return;
-    if (!workdirRef.current) return;
+    if (!state.workdir) return;
     initialPromptSubmittedRef.current = true;
     void turnController.startPrompt(initialPrompt);
   }, [options.promptParts, state.busy, state.workdir, turnController]);
@@ -816,27 +807,16 @@ function WorkbenchApp({
   }
 
   async function showSummary() {
-    const workdir = workdirRef.current;
-    if (!workdir) {
+    if (!localController.isLoaded()) {
       dispatch({ type: "message.add", role: "system", text: "Workdir is still loading." });
       return;
     }
     dispatch({ type: "activity.add", text: "Summarizing workdir" });
     try {
-      const summary = await workdir.summarize();
-      const previews = summary.text_previews
-        .slice(0, 5)
-        .map((preview) => `- ${preview.path} (${formatBytes(preview.size)})`)
-        .join("\n");
       dispatch({
         type: "message.add",
         role: "system",
-        text: [
-          `Workdir summary for ${workdir.name}`,
-          `Files: ${summary.file_count}`,
-          `Size: ${formatBytes(summary.total_bytes)}`,
-          previews ? `Previews:\n${previews}` : "No text previews available.",
-        ].join("\n"),
+        text: await localController.summaryText(),
       });
       dispatch({ type: "activity.add", level: "success", text: "Workdir summary ready" });
     } catch (error) {
@@ -886,30 +866,26 @@ function WorkbenchApp({
   }
 
   async function searchWorkdir(query: string) {
-    const workdir = workdirRef.current;
     if (!query) {
       dispatch({ type: "message.add", role: "system", text: "Usage: /search <query>" });
       return;
     }
-    if (!workdir) {
+    if (!localController.isLoaded()) {
       dispatch({ type: "message.add", role: "system", text: "Workdir is still loading." });
       return;
     }
     dispatch({ type: "activity.add", text: `Searching workdir: ${query}` });
     try {
-      const results = await workdir.workdir.grep({ pattern: query, limit: 12 });
-      const matches = results.matches
-        .map((match: { path: string; line_number: number; line: string }) => `${match.path}:${match.line_number}: ${match.line.trim()}`)
-        .join("\n");
+      const result = await localController.searchText(query);
       dispatch({
         type: "message.add",
         role: "system",
-        text: matches || `No matches for "${query}".`,
+        text: result.text,
       });
       dispatch({
         type: "activity.add",
         level: "success",
-        text: `Search complete: ${results.matches.length} matches`,
+        text: `Search complete: ${result.count} matches`,
       });
     } catch (error) {
       dispatch({
@@ -922,15 +898,14 @@ function WorkbenchApp({
 
   function showEditPreview() {
     if (state.pendingLocalTool) {
-      dispatch({ type: "message.add", role: "system", text: formatLocalToolApproval(state.pendingLocalTool) });
+      dispatch({ type: "message.add", role: "system", text: localController.approvalPreview(state.pendingLocalTool) });
       return;
     }
     dispatch({ type: "message.add", role: "system", text: "No pending local action." });
   }
 
   async function applyPendingEdit(allowFutureLocalActions: boolean) {
-    const workdir = workdirRef.current;
-    if (!workdir) {
+    if (!localController.isLoaded()) {
       dispatch({ type: "message.add", role: "system", text: "Workdir is still loading." });
       return;
     }
@@ -941,7 +916,7 @@ function WorkbenchApp({
         text: `Applying local action: ${state.pendingLocalTool.name}${state.pendingLocalTool.action ? `.${state.pendingLocalTool.action}` : ""}`,
       });
       try {
-        const result = await applyLocalToolApproval(workdir, state.pendingLocalTool);
+        const result = await localController.applyApproval(state.pendingLocalTool);
         const nextAccessMode = allowFutureLocalActions ? "full" : state.accessMode;
         if (allowFutureLocalActions) {
           dispatch({ type: "access.set", mode: "full" });
@@ -1398,37 +1373,6 @@ function nestedString(value: unknown, key: string) {
   if (!value || typeof value !== "object") return undefined;
   const nested = (value as Record<string, unknown>)[key];
   return typeof nested === "string" ? nested : undefined;
-}
-
-async function applyLocalToolApproval(
-  workdir: WorkdirService,
-  approval: NonNullable<WorkbenchState["pendingLocalTool"]>,
-): Promise<string | Record<string, unknown>> {
-  const workdirRegistry = createLocalWorkdirToolRegistry(workdir.workdir, { accessMode: "full" });
-  const shellRegistry = createLocalShellToolRegistry({ workdir: workdir.workdir, accessMode: "full" });
-  if (approval.name === workdirRegistry.toolName) {
-    return await workdirRegistry.execute(approval.name, approval.arguments);
-  }
-  if (approval.name === shellRegistry.toolName) {
-    return await shellRegistry.execute(approval.name, approval.arguments);
-  }
-  throw new Error(`no local handler registered for function ${approval.name}`);
-}
-
-function formatLocalToolApproval(approval: {
-  name: string;
-  action?: string;
-  arguments: Record<string, unknown>;
-  preview?: unknown;
-}) {
-  return [
-    `Local approval requested: ${approval.name}${approval.action ? `.${approval.action}` : ""}`,
-    "Arguments:",
-    JSON.stringify(approval.arguments, null, 2),
-    approval.preview ? ["Preview:", JSON.stringify(approval.preview, null, 2)].join("\n") : "",
-    "",
-    "Use /apply to execute this action once, /apply-all to allow future local actions, or /reject to discard it.",
-  ].filter(Boolean).join("\n");
 }
 
 function pendingLocalLabel(state: WorkbenchState) {

@@ -17,6 +17,7 @@ import {
 } from "../dist/tui/workbench.js";
 import { formatPresetList as formatChatPresetList } from "../dist/tui/chat.js";
 import { createWorkbenchEngine } from "../dist/workbench/engine.js";
+import { createWorkbenchLocalController } from "../dist/workbench/local-controller.js";
 import { createWorkbenchTurnController } from "../dist/workbench/turn-controller.js";
 import { compareVersions, formatUpdateNotice } from "../dist/update.js";
 
@@ -549,6 +550,57 @@ test("workbench engine maps agent events into state and runtime effects", () => 
   }).effects, []);
   assert.equal(engine.snapshot().pendingLocalTool?.name, "local_workdir");
   assert.match(engine.snapshot().messages.at(-1).text, /Local action requires approval/);
+});
+
+test("workbench local controller loads, summarizes, and searches a workdir", async () => {
+  const fakeWorkdir = {
+    root: "/tmp/project",
+    name: "project",
+    workdir: {
+      async grep() {
+        return {
+          matches: [
+            { path: "README.md", line_number: 2, line: "  hello agent  " },
+          ],
+        };
+      },
+    },
+    async summarize() {
+      return {
+        file_count: 2,
+        total_bytes: 2048,
+        scan_truncated: false,
+        text_previews: [
+          { path: "README.md", size: 120 },
+        ],
+      };
+    },
+  };
+  const controller = createWorkbenchLocalController({
+    async openWorkdirImpl() {
+      return fakeWorkdir;
+    },
+  });
+
+  assert.equal(controller.isLoaded(), false);
+  assert.deepEqual(await controller.load("/tmp/project"), {
+    root: "/tmp/project",
+    name: "project",
+    fileCount: 2,
+    totalBytes: 2048,
+    scanTruncated: false,
+  });
+  assert.equal(controller.isLoaded(), true);
+  assert.match(await controller.summaryText(), /Workdir summary for project/);
+  assert.deepEqual(await controller.searchText("hello"), {
+    text: "README.md:2: hello agent",
+    count: 1,
+  });
+  assert.match(controller.approvalPreview({
+    name: "local_workdir",
+    action: "write",
+    arguments: { action: "write", path: "NOTES.md" },
+  }), /Local approval requested: local_workdir\.write/);
 });
 
 test("workbench turn controller runs prompt turns through engine state", async () => {
