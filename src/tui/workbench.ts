@@ -431,6 +431,18 @@ export function formatTranscript(messages: WorkbenchMessage[]) {
     .trimEnd() + "\n";
 }
 
+export function formatTranscriptPreview(messages: WorkbenchMessage[], maxLines = 80) {
+  const lines = formatTranscript(messages).trimEnd().split(/\r?\n/);
+  if (lines.length <= maxLines) {
+    return ["Transcript preview:", "", ...lines].join("\n");
+  }
+  return [
+    `Transcript preview: showing last ${maxLines} lines of ${lines.length}. Use /export [file] for the full transcript.`,
+    "",
+    ...lines.slice(-maxLines),
+  ].join("\n");
+}
+
 function parseOnOff(value?: string) {
   if (!value) return undefined;
   const normalized = value.toLowerCase();

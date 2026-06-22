@@ -30,10 +30,8 @@ import {
   createInputHistory,
   formatBytes,
   formatTranscript,
-  helpText,
   type RenderMode,
   type WorkbenchCommand,
-  workdirText,
   type WorkbenchMessage,
   type WorkbenchState,
 } from "./workbench.js";
@@ -606,15 +604,8 @@ function WorkbenchApp({
   }
 
   async function runCommand(command: WorkbenchCommand) {
+    if (engine.handleCommand(command)) return;
     switch (command.kind) {
-      case "invalid":
-        dispatch({
-          type: "message.add",
-          role: "system",
-          text: `Unknown command: /${command.command}\nType /help for supported commands.`,
-        });
-        dispatch({ type: "activity.add", level: "warning", text: `Unknown command: /${command.command}` });
-        return;
       case "abort":
         if (!state.busy) {
           dispatch({ type: "message.add", role: "system", text: "No agent turn is running." });
@@ -624,12 +615,6 @@ function WorkbenchApp({
         return;
       case "quit":
         app.exit();
-        return;
-      case "help":
-        dispatch({ type: "message.add", role: "system", text: helpText() });
-        return;
-      case "clear":
-        dispatch({ type: "messages.clear" });
         return;
       case "login":
         onLogin();
@@ -651,71 +636,11 @@ function WorkbenchApp({
       case "config":
         await runConfigCommand(command);
         return;
-      case "render":
-        if (!command.mode) {
-          dispatch({ type: "message.add", role: "system", text: `Render mode: ${state.renderMode}. Use /render markdown or /render raw.` });
-          return;
-        }
-        dispatch({ type: "settings.set", settings: { renderMode: command.mode } });
-        dispatch({ type: "activity.add", level: "success", text: `Render mode: ${command.mode}` });
-        dispatch({ type: "message.add", role: "system", text: `Render mode set to ${command.mode}.` });
-        return;
-      case "transcript":
-        dispatch({ type: "message.add", role: "system", text: transcriptPreview(state.messages) });
-        dispatch({ type: "activity.add", level: "success", text: "Transcript preview ready" });
-        return;
       case "export":
         await exportTranscript(command.path);
         return;
-      case "context":
-        dispatch({ type: "context.set", enabled: command.enabled ?? !state.contextEnabled });
-        return;
-      case "access":
-        if (!command.mode) {
-          dispatch({ type: "message.add", role: "system", text: `Local access: ${state.accessMode}. Use /access off, /access approval, or /access full.` });
-          return;
-        }
-        dispatch({ type: "access.set", mode: command.mode });
-        return;
       case "preset":
         await runPresetCommand(command.value);
-        return;
-      case "model":
-        if (!command.value) {
-          dispatch({ type: "message.add", role: "system", text: `Model: ${state.runModel || "auto"}. Use /model <name> or /model auto.` });
-          return;
-        }
-        dispatch({ type: "settings.set", settings: { runModel: normalizeOptionalSetting(command.value, ["auto", "none", "off", "clear"]) } });
-        dispatch({ type: "activity.add", text: `Model: ${normalizeOptionalSetting(command.value, ["auto", "none", "off", "clear"]) || "auto"}` });
-        return;
-      case "workdir":
-        if (command.enabled === undefined) {
-          dispatch({
-            type: "message.add",
-            role: "system",
-            text: [
-              workdirText(state.workdir),
-              "",
-              `local_workdir tool: ${state.contextEnabled ? "on" : "off"}`,
-              `local_shell tool: ${state.contextEnabled ? "on" : "off"}`,
-              "Use /access approval or /access full to expose local tools, or /access off to hide them.",
-            ].join("\n"),
-          });
-          return;
-        }
-        dispatch({ type: "context.set", enabled: command.enabled });
-        dispatch({
-          type: "activity.add",
-          level: command.enabled ? "success" : "warning",
-          text: `local tools ${command.enabled ? "enabled" : "disabled"}`,
-        });
-        dispatch({
-          type: "message.add",
-          role: "system",
-          text: command.enabled
-            ? "local_workdir and local_shell are now available to the model in approval mode. Use /access full to allow execution without prompts."
-            : "local tools are now hidden from the model.",
-        });
         return;
       case "summary":
         await showSummary();
@@ -1547,19 +1472,6 @@ function spinnerGlyph(frame: number) {
 
 function elapsedDots(frame: number) {
   return ".".repeat((Math.floor(frame / 4) % 3) + 1);
-}
-
-function transcriptPreview(messages: WorkbenchMessage[]) {
-  const lines = formatTranscript(messages).trimEnd().split(/\r?\n/);
-  const maxLines = 80;
-  if (lines.length <= maxLines) {
-    return ["Transcript preview:", "", ...lines].join("\n");
-  }
-  return [
-    `Transcript preview: showing last ${maxLines} lines of ${lines.length}. Use /export [file] for the full transcript.`,
-    "",
-    ...lines.slice(-maxLines),
-  ].join("\n");
 }
 
 function defaultTranscriptExportPath(conversation: string) {

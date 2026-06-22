@@ -478,6 +478,34 @@ test("workbench engine routes submitted input into prompts and commands", () => 
   assert.deepEqual(engine.submit("hello agent"), { kind: "prompt", prompt: "hello agent" });
 });
 
+test("workbench engine handles renderer-neutral commands", () => {
+  const engine = createWorkbenchEngine({ contextEnabled: false, accessMode: "off" });
+
+  assert.equal(engine.handleCommand({ kind: "render", mode: "raw" }), true);
+  assert.equal(engine.snapshot().renderMode, "raw");
+  assert.match(engine.snapshot().messages.at(-1).text, /Render mode set to raw/);
+
+  assert.equal(engine.handleCommand({ kind: "model", value: "provider/model" }), true);
+  assert.equal(engine.snapshot().runModel, "provider/model");
+  assert.equal(engine.handleCommand({ kind: "model", value: "auto" }), true);
+  assert.equal(engine.snapshot().runModel, undefined);
+
+  assert.equal(engine.handleCommand({ kind: "access", mode: "full" }), true);
+  assert.equal(engine.snapshot().accessMode, "full");
+  assert.equal(engine.snapshot().contextEnabled, true);
+
+  assert.equal(engine.handleCommand({ kind: "workdir" }), true);
+  assert.match(engine.snapshot().messages.at(-1).text, /local_shell tool: on/);
+
+  assert.equal(engine.handleCommand({ kind: "transcript" }), true);
+  assert.match(engine.snapshot().messages.at(-1).text, /Transcript preview/);
+
+  assert.equal(engine.handleCommand({ kind: "invalid", command: "wat" }), true);
+  assert.match(engine.snapshot().messages.at(-1).text, /Unknown command: \/wat/);
+
+  assert.equal(engine.handleCommand({ kind: "export" }), false);
+});
+
 test("workbench engine owns pending local approval input policy", () => {
   const engine = createWorkbenchEngine({ contextEnabled: true, accessMode: "approval" });
   engine.dispatch({
