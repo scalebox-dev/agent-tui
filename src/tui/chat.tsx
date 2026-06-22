@@ -325,6 +325,8 @@ function WorkbenchApp({
   const initialPromptSubmittedRef = useRef(false);
   const pendingApprovalInvalidInputsRef = useRef(0);
   const authRefreshWarningShownRef = useRef(false);
+  const textDeltaBufferRef = useRef<{ id: string; text: string } | null>(null);
+  const textDeltaFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [draft, setDraft] = useState("");
   const [spinnerFrame, setSpinnerFrame] = useState(0);
   const [runPreset, setRunPreset] = useState(options.preset);
@@ -461,11 +463,24 @@ function WorkbenchApp({
   }, [state.pendingLocalTool?.id]);
 
   useEffect(() => {
+    if (!state.busy) {
+      setSpinnerFrame(0);
+      return;
+    }
     const interval = setInterval(() => {
       setSpinnerFrame((frame) => frame + 1);
-    }, state.busy ? 120 : 500);
+    }, 120);
     return () => clearInterval(interval);
   }, [state.busy]);
+
+  useEffect(() => {
+    return () => {
+      if (textDeltaFlushTimerRef.current) {
+        clearTimeout(textDeltaFlushTimerRef.current);
+        textDeltaFlushTimerRef.current = null;
+      }
+    };
+  }, []);
 
   async function submit(input: string) {
     if (state.pendingLocalTool) {
@@ -925,6 +940,7 @@ function WorkbenchApp({
           text: userFacingError(error),
         });
       } finally {
+        flushTextDeltaBuffer();
         dispatch({ type: "busy.set", busy: false });
         dispatch({ type: "assistant.active", id: null });
       }
@@ -986,6 +1002,7 @@ function WorkbenchApp({
         text: userFacingError(error),
       });
     } finally {
+      flushTextDeltaBuffer();
       dispatch({ type: "busy.set", busy: false });
       dispatch({ type: "assistant.active", id: null });
     }
@@ -994,15 +1011,17 @@ function WorkbenchApp({
   function handleAgentEvent(event: AgentTurnEvent, assistantId: string) {
     switch (event.type) {
       case "text.delta":
-        dispatch({ type: "message.append", id: assistantId, delta: event.delta });
+        appendTextDeltaBuffered(assistantId, event.delta);
         return;
       case "response.started":
         dispatch({ type: "activity.add", text: event.responseID ? `Response started: ${event.responseID}` : "Response started" });
         return;
       case "response.completed":
+        flushTextDeltaBuffer();
         dispatch({ type: "activity.add", level: "success", text: event.responseID ? `Response completed: ${event.responseID}` : "Response completed" });
         return;
       case "response.failed":
+        flushTextDeltaBuffer();
         dispatch({ type: "activity.add", level: "error", text: event.message });
         return;
       case "reasoning.started":
@@ -1067,6 +1086,33 @@ function WorkbenchApp({
     }
   }
 
+  function appendTextDeltaBuffered(id: string, delta: string) {
+    if (!delta) return;
+    const current = textDeltaBufferRef.current;
+    if (!current || current.id !== id) {
+      flushTextDeltaBuffer();
+      textDeltaBufferRef.current = { id, text: delta };
+    } else {
+      current.text += delta;
+    }
+    if (textDeltaFlushTimerRef.current) return;
+    textDeltaFlushTimerRef.current = setTimeout(() => {
+      textDeltaFlushTimerRef.current = null;
+      flushTextDeltaBuffer();
+    }, 80);
+  }
+
+  function flushTextDeltaBuffer() {
+    if (textDeltaFlushTimerRef.current) {
+      clearTimeout(textDeltaFlushTimerRef.current);
+      textDeltaFlushTimerRef.current = null;
+    }
+    const buffered = textDeltaBufferRef.current;
+    if (!buffered || !buffered.text) return;
+    textDeltaBufferRef.current = null;
+    dispatch({ type: "message.append", id: buffered.id, delta: buffered.text });
+  }
+
   return (
     <Box flexDirection="column">
       <Header
@@ -1115,7 +1161,7 @@ function WorkbenchApp({
         ) : (
           <Text>
             {draft}
-            <Cursor visible={cursorVisible(spinnerFrame)} />
+            <Cursor visible />
           </Text>
         )}
       </Box>
@@ -1245,10 +1291,6 @@ function modelLabel(model?: string, provider?: string) {
 
 function Cursor({ visible }: { visible: boolean }) {
   return visible ? <Text inverse> </Text> : <Text> </Text>;
-}
-
-function cursorVisible(frame: number) {
-  return frame % 2 === 0;
 }
 
 function spinnerGlyph(frame: number) {
