@@ -481,29 +481,41 @@ test("workbench engine routes submitted input into prompts and commands", () => 
 test("workbench engine handles renderer-neutral commands", () => {
   const engine = createWorkbenchEngine({ contextEnabled: false, accessMode: "off" });
 
-  assert.equal(engine.handleCommand({ kind: "render", mode: "raw" }), true);
+  assert.equal(engine.handleCommand({ kind: "render", mode: "raw" }).handled, true);
   assert.equal(engine.snapshot().renderMode, "raw");
   assert.match(engine.snapshot().messages.at(-1).text, /Render mode set to raw/);
 
-  assert.equal(engine.handleCommand({ kind: "model", value: "provider/model" }), true);
+  assert.equal(engine.handleCommand({ kind: "model", value: "provider/model" }).handled, true);
   assert.equal(engine.snapshot().runModel, "provider/model");
-  assert.equal(engine.handleCommand({ kind: "model", value: "auto" }), true);
+  assert.equal(engine.handleCommand({ kind: "model", value: "auto" }).handled, true);
   assert.equal(engine.snapshot().runModel, undefined);
 
-  assert.equal(engine.handleCommand({ kind: "access", mode: "full" }), true);
+  assert.equal(engine.handleCommand({ kind: "access", mode: "full" }).handled, true);
   assert.equal(engine.snapshot().accessMode, "full");
   assert.equal(engine.snapshot().contextEnabled, true);
 
-  assert.equal(engine.handleCommand({ kind: "workdir" }), true);
+  assert.equal(engine.handleCommand({ kind: "workdir" }).handled, true);
   assert.match(engine.snapshot().messages.at(-1).text, /local_shell tool: on/);
 
-  assert.equal(engine.handleCommand({ kind: "transcript" }), true);
+  assert.equal(engine.handleCommand({ kind: "transcript" }).handled, true);
   assert.match(engine.snapshot().messages.at(-1).text, /Transcript preview/);
 
-  assert.equal(engine.handleCommand({ kind: "invalid", command: "wat" }), true);
+  assert.equal(engine.handleCommand({ kind: "invalid", command: "wat" }).handled, true);
   assert.match(engine.snapshot().messages.at(-1).text, /Unknown command: \/wat/);
 
-  assert.equal(engine.handleCommand({ kind: "export" }), false);
+  const exportResult = engine.handleCommand({ kind: "export" });
+  assert.equal(exportResult.handled, true);
+  assert.deepEqual(exportResult.effects.map((effect) => effect.type), ["export_transcript"]);
+  assert.match(exportResult.effects[0].type === "export_transcript" ? exportResult.effects[0].transcript : "", /System:/);
+
+  const refreshResult = engine.handleCommand({ kind: "refresh_catalog" });
+  assert.equal(refreshResult.handled, true);
+  assert.deepEqual(refreshResult.effects, [{ type: "clear_preset_tool_catalog_cache" }]);
+  assert.match(engine.snapshot().messages.at(-1).text, /Cleared cached preset/);
+
+  const summaryResult = engine.handleCommand({ kind: "summary" });
+  assert.equal(summaryResult.handled, false);
+  assert.deepEqual(summaryResult.effects, []);
 });
 
 test("workbench engine owns pending local approval input policy", () => {

@@ -29,13 +29,12 @@ import {
   activityColor,
   createInputHistory,
   formatBytes,
-  formatTranscript,
   type RenderMode,
   type WorkbenchCommand,
   type WorkbenchMessage,
   type WorkbenchState,
 } from "./workbench.js";
-import { createWorkbenchEngine, type WorkbenchEngine } from "../workbench/engine.js";
+import { createWorkbenchEngine, type WorkbenchEffect, type WorkbenchEngine } from "../workbench/engine.js";
 import {
   deleteProfile,
   formatDeviceUserCode,
@@ -604,7 +603,11 @@ function WorkbenchApp({
   }
 
   async function runCommand(command: WorkbenchCommand) {
-    if (engine.handleCommand(command)) return;
+    const commandResult = engine.handleCommand(command);
+    if (commandResult.handled) {
+      await runEffects(commandResult.effects);
+      return;
+    }
     switch (command.kind) {
       case "abort":
         if (!state.busy) {
@@ -613,31 +616,8 @@ function WorkbenchApp({
         }
         await abortActiveTurn("Abort requested.");
         return;
-      case "quit":
-        app.exit();
-        return;
-      case "login":
-        onLogin();
-        return;
-      case "logout":
-        dispatch({ type: "activity.add", text: `Logged out: ${profileName}` });
-        onLogout();
-        return;
-      case "delete_profile":
-        dispatch({ type: "activity.add", level: "warning", text: `Deleting profile: ${profileName}` });
-        await onDeleteProfile();
-        return;
-      case "switch_profile":
-        onSwitchProfile(command.name);
-        return;
-      case "auth_status":
-        await showAuthStatus();
-        return;
       case "config":
         await runConfigCommand(command);
-        return;
-      case "export":
-        await exportTranscript(command.path);
         return;
       case "preset":
         await runPresetCommand(command.value);
@@ -657,11 +637,6 @@ function WorkbenchApp({
       case "list_conversations":
         await showConversations();
         return;
-      case "refresh_catalog":
-        clearPresetToolCatalogCache();
-        dispatch({ type: "activity.add", level: "success", text: "Preset and tool catalogs refreshed" });
-        dispatch({ type: "message.add", role: "system", text: "Cleared cached preset and server tool catalogs. The next agent turn will fetch fresh platform configuration." });
-        return;
       case "preview":
         showEditPreview();
         return;
@@ -674,6 +649,39 @@ function WorkbenchApp({
       case "reject":
         rejectPendingEdit();
         return;
+    }
+  }
+
+  async function runEffects(effects: WorkbenchEffect[]) {
+    for (const effect of effects) {
+      switch (effect.type) {
+        case "exit":
+          app.exit();
+          break;
+        case "login":
+          onLogin();
+          break;
+        case "logout":
+          dispatch({ type: "activity.add", text: `Logged out: ${profileName}` });
+          onLogout();
+          break;
+        case "delete_profile":
+          dispatch({ type: "activity.add", level: "warning", text: `Deleting profile: ${profileName}` });
+          await onDeleteProfile();
+          break;
+        case "switch_profile":
+          onSwitchProfile(effect.name);
+          break;
+        case "show_auth_status":
+          await showAuthStatus();
+          break;
+        case "export_transcript":
+          await exportTranscript(effect);
+          break;
+        case "clear_preset_tool_catalog_cache":
+          clearPresetToolCatalogCache();
+          break;
+      }
     }
   }
 
@@ -786,14 +794,13 @@ function WorkbenchApp({
     }
   }
 
-  async function exportTranscript(targetPath?: string) {
-    const transcript = formatTranscript(state.messages);
+  async function exportTranscript(effect: Extract<WorkbenchEffect, { type: "export_transcript" }>) {
     try {
-      const file = targetPath?.trim()
-        ? path.resolve(process.cwd(), targetPath.trim())
-        : defaultTranscriptExportPath(state.currentConversation);
+      const file = effect.path?.trim()
+        ? path.resolve(process.cwd(), effect.path.trim())
+        : defaultTranscriptExportPath(effect.conversation);
       await mkdir(path.dirname(file), { recursive: true });
-      await writeFile(file, transcript, "utf8");
+      await writeFile(file, effect.transcript, "utf8");
       dispatch({ type: "message.add", role: "system", text: `Transcript exported:\n${file}` });
       dispatch({ type: "activity.add", level: "success", text: "Transcript exported" });
     } catch (error) {

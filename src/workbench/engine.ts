@@ -1,5 +1,6 @@
 import {
   createInitialWorkbenchState,
+  formatTranscript,
   formatTranscriptPreview,
   helpText,
   parsePendingApprovalCommand,
@@ -28,13 +29,28 @@ export interface WorkbenchEngine {
   subscribe(listener: () => void): () => void;
   dispatch(action: WorkbenchAction): void;
   submit(input: string): WorkbenchSubmission;
-  handleCommand(command: WorkbenchCommand): boolean;
+  handleCommand(command: WorkbenchCommand): WorkbenchCommandResult;
 }
 
 export type WorkbenchSubmission =
   | { kind: "command"; command: WorkbenchCommand }
   | { kind: "prompt"; prompt: string }
   | { kind: "handled" };
+
+export type WorkbenchEffect =
+  | { type: "exit" }
+  | { type: "login" }
+  | { type: "logout" }
+  | { type: "delete_profile" }
+  | { type: "switch_profile"; name?: string }
+  | { type: "show_auth_status" }
+  | { type: "export_transcript"; path?: string; transcript: string; conversation: string }
+  | { type: "clear_preset_tool_catalog_cache" };
+
+export interface WorkbenchCommandResult {
+  handled: boolean;
+  effects: WorkbenchEffect[];
+}
 
 export function createWorkbenchEngine(options: WorkbenchEngineOptions): WorkbenchEngine {
   let state = createInitialWorkbenchState(options);
@@ -66,6 +82,29 @@ export function createWorkbenchEngine(options: WorkbenchEngineOptions): Workbenc
     dispatch,
     handleCommand(command) {
       switch (command.kind) {
+        case "quit":
+          return handled({ type: "exit" });
+        case "login":
+          return handled({ type: "login" });
+        case "logout":
+          return handled({ type: "logout" });
+        case "delete_profile":
+          return handled({ type: "delete_profile" });
+        case "switch_profile":
+          return handled({ type: "switch_profile", name: command.name });
+        case "auth_status":
+          return handled({ type: "show_auth_status" });
+        case "export":
+          return handled({
+            type: "export_transcript",
+            path: command.path,
+            transcript: formatTranscript(state.messages),
+            conversation: state.currentConversation,
+          });
+        case "refresh_catalog":
+          dispatch({ type: "activity.add", level: "success", text: "Preset and tool catalogs refreshed" });
+          dispatch({ type: "message.add", role: "system", text: "Cleared cached preset and server tool catalogs. The next agent turn will fetch fresh platform configuration." });
+          return handled({ type: "clear_preset_tool_catalog_cache" });
         case "invalid":
           dispatch({
             type: "message.add",
@@ -73,44 +112,44 @@ export function createWorkbenchEngine(options: WorkbenchEngineOptions): Workbenc
             text: `Unknown command: /${command.command}\nType /help for supported commands.`,
           });
           dispatch({ type: "activity.add", level: "warning", text: `Unknown command: /${command.command}` });
-          return true;
+          return handled();
         case "help":
           dispatch({ type: "message.add", role: "system", text: helpText() });
-          return true;
+          return handled();
         case "clear":
           dispatch({ type: "messages.clear" });
-          return true;
+          return handled();
         case "render":
           if (!command.mode) {
             dispatch({ type: "message.add", role: "system", text: `Render mode: ${state.renderMode}. Use /render markdown or /render raw.` });
-            return true;
+            return handled();
           }
           dispatch({ type: "settings.set", settings: { renderMode: command.mode } });
           dispatch({ type: "activity.add", level: "success", text: `Render mode: ${command.mode}` });
           dispatch({ type: "message.add", role: "system", text: `Render mode set to ${command.mode}.` });
-          return true;
+          return handled();
         case "transcript":
           dispatch({ type: "message.add", role: "system", text: formatTranscriptPreview(state.messages) });
           dispatch({ type: "activity.add", level: "success", text: "Transcript preview ready" });
-          return true;
+          return handled();
         case "context":
           dispatch({ type: "context.set", enabled: command.enabled ?? !state.contextEnabled });
-          return true;
+          return handled();
         case "access":
           if (!command.mode) {
             dispatch({ type: "message.add", role: "system", text: `Local access: ${state.accessMode}. Use /access off, /access approval, or /access full.` });
-            return true;
+            return handled();
           }
           dispatch({ type: "access.set", mode: command.mode });
-          return true;
+          return handled();
         case "model":
           if (!command.value) {
             dispatch({ type: "message.add", role: "system", text: `Model: ${state.runModel || "auto"}. Use /model <name> or /model auto.` });
-            return true;
+            return handled();
           }
           dispatch({ type: "settings.set", settings: { runModel: normalizeOptionalSetting(command.value, ["auto", "none", "off", "clear"]) } });
           dispatch({ type: "activity.add", text: `Model: ${normalizeOptionalSetting(command.value, ["auto", "none", "off", "clear"]) || "auto"}` });
-          return true;
+          return handled();
         case "workdir":
           if (command.enabled === undefined) {
             dispatch({
@@ -124,7 +163,7 @@ export function createWorkbenchEngine(options: WorkbenchEngineOptions): Workbenc
                 "Use /access approval or /access full to expose local tools, or /access off to hide them.",
               ].join("\n"),
             });
-            return true;
+            return handled();
           }
           dispatch({ type: "context.set", enabled: command.enabled });
           dispatch({
@@ -139,9 +178,9 @@ export function createWorkbenchEngine(options: WorkbenchEngineOptions): Workbenc
               ? "local_workdir and local_shell are now available to the model in approval mode. Use /access full to allow execution without prompts."
               : "local tools are now hidden from the model.",
           });
-          return true;
+          return handled();
         default:
-          return false;
+          return unhandled();
       }
     },
     submit(input) {
@@ -184,6 +223,14 @@ export function createWorkbenchEngine(options: WorkbenchEngineOptions): Workbenc
     });
     dispatch({ type: "activity.add", level: "warning", text: "Waiting for local approval command" });
   }
+}
+
+function handled(...effects: WorkbenchEffect[]): WorkbenchCommandResult {
+  return { handled: true, effects };
+}
+
+function unhandled(): WorkbenchCommandResult {
+  return { handled: false, effects: [] };
 }
 
 function normalizeOptionalSetting(value: string, clearValues: string[]) {
