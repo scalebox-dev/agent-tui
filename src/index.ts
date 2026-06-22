@@ -25,8 +25,6 @@ type GlobalOptions = {
   profile?: string;
 };
 
-type RendererName = "ink" | "opentui";
-
 const program = new Command();
 
 program
@@ -35,22 +33,17 @@ program
   .alias("agent-tui")
   .description("First-class command line interface for Agent API")
   .argument("[workdir]", "local workdir to open and expose to the agent")
-  .addOption(rendererOption())
   .version(cliVersion)
   .showHelpAfterError()
   .showSuggestionAfterError();
 
-program.action(async (workdir?: string, command?: { renderer?: string }) => {
+program.action(async (workdir?: string) => {
   const launchWorkdir = workdir ? await validateLaunchWorkdir(workdir) : undefined;
   if (!process.stdin.isTTY) {
     program.help();
     return;
   }
   const options = normalizeChatOptions([], launchWorkdir ? { workdir: launchWorkdir } : {});
-  if (normalizeRenderer(command?.renderer) === "opentui") {
-    await renderOpenTuiStaticShell(options);
-    return;
-  }
   const app = render(React.createElement(ChatApp, { options }));
   await app.waitUntilExit();
 });
@@ -239,7 +232,6 @@ function agentChatCommand() {
     .option("--max-context-files <n>", "local context file limit")
     .option("--max-context-bytes <n>", "local context byte limit")
     .option("--access <mode>", "local tool access mode: off, approval, or full")
-    .addOption(rendererOption())
     .option("--restart", "start the conversation from a fresh response")
     .addOption(new Option("--no-stream", "wait for final response instead of streaming"))
     .action(async (prompt: string[], options: ChatOptions) => {
@@ -251,10 +243,6 @@ function agentChatCommand() {
         Boolean(normalized.workdir && normalized.accessMode === "approval" && promptParts.length > 0 && !options.file && !options.stdin)
       );
       if (shouldUseWorkbench) {
-        if (normalizeRenderer(options.renderer) === "opentui") {
-          await renderOpenTuiStaticShell(normalized);
-          return;
-        }
         const app = render(React.createElement(ChatApp, { options: normalized }));
         await app.waitUntilExit();
         return;
@@ -362,23 +350,6 @@ function optionalNumber(value: string | undefined, label: string) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) throw new Error(`${label} must be a number`);
   return parsed;
-}
-
-function rendererOption() {
-  return new Option("--renderer <renderer>", "interactive renderer: ink or opentui")
-    .choices(["ink", "opentui"])
-    .default("ink");
-}
-
-function normalizeRenderer(value: string | undefined): RendererName {
-  const renderer = value || "ink";
-  if (renderer === "ink" || renderer === "opentui") return renderer;
-  throw new Error("--renderer must be ink or opentui");
-}
-
-async function renderOpenTuiStaticShell(options: ReturnType<typeof normalizeChatOptions>) {
-  const module = await import("./tui/opentui/static-shell.js");
-  await module.renderOpenTuiStaticShell(options);
 }
 
 async function validateLaunchWorkdir(path: string) {

@@ -14,7 +14,6 @@ export type ChatOptions = {
   maxContextBytes?: string;
   access?: string;
   restart?: boolean;
-  renderer?: "ink" | "opentui";
   stream?: boolean;
 };
 
