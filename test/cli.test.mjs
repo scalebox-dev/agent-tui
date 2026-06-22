@@ -17,6 +17,7 @@ import {
 } from "../dist/tui/workbench.js";
 import { formatPresetList as formatChatPresetList } from "../dist/tui/chat.js";
 import { createWorkbenchEngine } from "../dist/workbench/engine.js";
+import { createWorkbenchTurnController } from "../dist/workbench/turn-controller.js";
 import { compareVersions, formatUpdateNotice } from "../dist/update.js";
 
 const execFileAsync = promisify(execFile);
@@ -548,6 +549,93 @@ test("workbench engine maps agent events into state and runtime effects", () => 
   }).effects, []);
   assert.equal(engine.snapshot().pendingLocalTool?.name, "local_workdir");
   assert.match(engine.snapshot().messages.at(-1).text, /Local action requires approval/);
+});
+
+test("workbench turn controller runs prompt turns through engine state", async () => {
+  const engine = createWorkbenchEngine({
+    accessMode: "approval",
+    contextEnabled: true,
+    conversation: "demo",
+    model: "provider/model",
+    preset: "pro-search",
+  });
+  const runtimeEffects = [];
+  const seenOptions = [];
+  const controller = createWorkbenchTurnController({
+    baseOptions: { promptParts: [], profile: "default" },
+    dispatch: engine.dispatch,
+    engine,
+    flushTextDeltaBuffer() {
+      runtimeEffects.push({ type: "flush" });
+    },
+    getState: engine.snapshot,
+    runRuntimeEffects(effects, assistantId) {
+      runtimeEffects.push({ assistantId, effects });
+    },
+    async runAgentTurnImpl(options, onEvent) {
+      seenOptions.push(options);
+      onEvent?.({ type: "response.started", responseID: "resp_turn" });
+      onEvent?.({ type: "text.delta", delta: "hello" });
+      onEvent?.({ type: "response.completed", responseID: "resp_turn" });
+      return { text: "hello", responseID: "resp_turn" };
+    },
+  });
+
+  await controller.startPrompt("hello agent");
+
+  assert.equal(seenOptions[0].preset, "pro-search");
+  assert.equal(seenOptions[0].model, "provider/model");
+  assert.equal(seenOptions[0].conversation, "demo");
+  assert.equal(seenOptions[0].includeLocalContext, true);
+  assert.equal(seenOptions[0].accessMode, "approval");
+  assert.equal(engine.snapshot().busy, false);
+  assert.equal(engine.snapshot().activeAssistantMessageId, null);
+  assert.match(engine.snapshot().activities.at(-1).text, /Agent turn completed: resp_turn/);
+  assert.equal(runtimeEffects.some((entry) => Array.isArray(entry.effects) && entry.effects.some((effect) => effect.type === "append_text_delta")), true);
+  assert.equal(runtimeEffects.some((entry) => entry.type === "flush"), true);
+});
+
+test("workbench turn controller aborts active remote responses", async () => {
+  const engine = createWorkbenchEngine({ accessMode: "approval", contextEnabled: true });
+  let releaseTurn;
+  let cancelledResponseID = "";
+  const controller = createWorkbenchTurnController({
+    baseOptions: { promptParts: [], profile: "default" },
+    dispatch: engine.dispatch,
+    engine,
+    flushTextDeltaBuffer() {},
+    getState: engine.snapshot,
+    runRuntimeEffects() {},
+    async runAgentTurnImpl(_options, onEvent) {
+      onEvent?.({ type: "response.started", responseID: "resp_abort" });
+      await new Promise((resolve) => {
+        releaseTurn = resolve;
+      });
+      return { text: "", responseID: "resp_abort" };
+    },
+    async resolveRuntimeProfileImpl() {
+      return {
+        client: {
+          responses: {
+            async cancel(responseID) {
+              cancelledResponseID = responseID;
+              return { interrupted: true };
+            },
+          },
+        },
+      };
+    },
+  });
+
+  const turn = controller.startPrompt("long task");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await controller.abort("Abort requested.");
+  releaseTurn();
+  await turn;
+
+  assert.equal(cancelledResponseID, "resp_abort");
+  assert.equal(engine.snapshot().busy, false);
+  assert.equal(engine.snapshot().messages.some((message) => /Abort requested for response resp_abort/.test(message.text)), true);
 });
 
 test("workbench engine owns pending local approval input policy", () => {

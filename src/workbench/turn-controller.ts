@@ -1,0 +1,204 @@
+import {
+  resolveRuntimeProfile,
+} from "../profile.js";
+import {
+  resumeAgentAfterLocalApproval,
+  runAgentTurn,
+  type AgentRunOptions,
+  type AgentTurnEvent,
+  type LocalToolApprovalRequest,
+  type WorkdirAccessMode,
+} from "../agent.js";
+import type { WorkbenchEngine, WorkbenchRuntimeEffect } from "./engine.js";
+import type { WorkbenchAction, WorkbenchState } from "../tui/workbench.js";
+
+export interface WorkbenchTurnController {
+  startPrompt(prompt: string): Promise<void>;
+  continueAfterLocalApproval(input: {
+    approval: LocalToolApprovalRequest;
+    result: string | Record<string, unknown>;
+    accessMode: WorkdirAccessMode;
+  }): Promise<void>;
+  abort(reason: string): Promise<void>;
+}
+
+export interface WorkbenchTurnControllerOptions {
+  engine: WorkbenchEngine;
+  baseOptions: AgentRunOptions;
+  dispatch(action: WorkbenchAction): void;
+  getState(): WorkbenchState;
+  runRuntimeEffects(effects: WorkbenchRuntimeEffect[], assistantId: string): void;
+  flushTextDeltaBuffer(): void;
+  runAgentTurnImpl?: typeof runAgentTurn;
+  resumeAgentAfterLocalApprovalImpl?: typeof resumeAgentAfterLocalApproval;
+  resolveRuntimeProfileImpl?: typeof resolveRuntimeProfile;
+}
+
+export function createWorkbenchTurnController(options: WorkbenchTurnControllerOptions): WorkbenchTurnController {
+  const runAgentTurnImpl = options.runAgentTurnImpl ?? runAgentTurn;
+  const resumeAgentAfterLocalApprovalImpl = options.resumeAgentAfterLocalApprovalImpl ?? resumeAgentAfterLocalApproval;
+  const resolveRuntimeProfileImpl = options.resolveRuntimeProfileImpl ?? resolveRuntimeProfile;
+  let activeAbortController: AbortController | null = null;
+  let activeResponseID: string | null = null;
+  const cancelledResponseIDs = new Set<string>();
+
+  return {
+    async startPrompt(prompt) {
+      const state = options.getState();
+      const assistantId = `assistant-${Date.now()}`;
+      const abortController = new AbortController();
+      activeAbortController = abortController;
+      activeResponseID = null;
+      options.dispatch({ type: "busy.set", busy: true });
+      options.dispatch({ type: "message.add", role: "user", text: prompt });
+      options.dispatch({ type: "message.add", role: "assistant", text: "", id: assistantId });
+      options.dispatch({ type: "assistant.active", id: assistantId });
+      options.dispatch({ type: "activity.add", text: "Agent turn started" });
+      try {
+        const result = await runAgentTurnImpl(
+          {
+            ...options.baseOptions,
+            preset: state.runPreset,
+            model: state.runModel,
+            promptParts: [prompt],
+            stream: true,
+            file: undefined,
+            stdin: false,
+            conversation: state.currentConversation,
+            includeLocalContext: state.contextEnabled,
+            accessMode: state.accessMode,
+            restartConversation: false,
+            abortSignal: abortController.signal,
+          },
+          (event) => handleAgentEvent(event, assistantId),
+        );
+        options.dispatch({
+          type: "activity.add",
+          level: "success",
+          text: result.responseID ? `Agent turn completed: ${result.responseID}` : "Agent turn completed",
+        });
+      } catch (error) {
+        handleTurnError(error);
+      } finally {
+        finishTurn(abortController);
+      }
+    },
+
+    async continueAfterLocalApproval(input) {
+      const state = options.getState();
+      const assistantId = `assistant-${Date.now()}`;
+      const abortController = new AbortController();
+      activeAbortController = abortController;
+      activeResponseID = null;
+      options.dispatch({ type: "busy.set", busy: true });
+      options.dispatch({ type: "message.add", role: "assistant", text: "", id: assistantId });
+      options.dispatch({ type: "assistant.active", id: assistantId });
+      options.dispatch({ type: "activity.add", text: "Continuing agent turn" });
+      try {
+        const continuation = await resumeAgentAfterLocalApprovalImpl(
+          {
+            ...options.baseOptions,
+            preset: state.runPreset,
+            model: state.runModel,
+            stream: true,
+            file: undefined,
+            stdin: false,
+            conversation: state.currentConversation,
+            includeLocalContext: state.contextEnabled,
+            accessMode: input.accessMode,
+            restartConversation: false,
+            abortSignal: abortController.signal,
+          },
+          input.approval,
+          input.result,
+          (event) => handleAgentEvent(event, assistantId),
+        );
+        options.dispatch({
+          type: "activity.add",
+          level: "success",
+          text: continuation.responseID ? `Agent turn continued: ${continuation.responseID}` : "Agent turn continued",
+        });
+      } catch (error) {
+        handleTurnError(error);
+      } finally {
+        finishTurn(abortController);
+      }
+    },
+
+    async abort(reason) {
+      const state = options.getState();
+      if (!state.busy && !activeAbortController && !activeResponseID) {
+        options.dispatch({ type: "message.add", role: "system", text: "No agent turn is running." });
+        return;
+      }
+      activeAbortController?.abort();
+      options.dispatch({ type: "activity.add", level: "warning", text: reason });
+      if (!activeResponseID) {
+        options.dispatch({ type: "message.add", role: "system", text: "Abort requested. No remote response ID is available yet." });
+        return;
+      }
+      if (cancelledResponseIDs.has(activeResponseID)) return;
+      const responseID = activeResponseID;
+      cancelledResponseIDs.add(responseID);
+      try {
+        const runtimeProfile = await resolveRuntimeProfileImpl(options.baseOptions.profile);
+        const result = await runtimeProfile.client.responses.cancel(responseID);
+        options.dispatch({
+          type: "message.add",
+          role: "system",
+          text: result.interrupted
+            ? `Abort requested for response ${responseID}.`
+            : `Abort requested locally. Remote response ${responseID} was not actively interrupted.`,
+        });
+        options.dispatch({
+          type: "activity.add",
+          level: result.interrupted ? "success" : "warning",
+          text: result.interrupted ? `Response cancel requested: ${responseID}` : `Response was not active: ${responseID}`,
+        });
+      } catch (error) {
+        options.dispatch({ type: "message.add", role: "system", text: `Abort requested locally, but remote cancel failed: ${userFacingError(error)}` });
+        options.dispatch({ type: "activity.add", level: "error", text: "Remote response cancel failed" });
+      }
+    },
+  };
+
+  function handleAgentEvent(event: AgentTurnEvent, assistantId: string) {
+    const result = options.engine.handleAgentEvent(event);
+    for (const effect of result.effects) {
+      if (effect.type === "set_active_response_id") {
+        activeResponseID = effect.responseID;
+      }
+    }
+    options.runRuntimeEffects(result.effects, assistantId);
+  }
+
+  function finishTurn(abortController: AbortController) {
+    options.flushTextDeltaBuffer();
+    if (activeAbortController === abortController) {
+      activeAbortController = null;
+    }
+    activeResponseID = null;
+    options.dispatch({ type: "busy.set", busy: false });
+    options.dispatch({ type: "assistant.active", id: null });
+  }
+
+  function handleTurnError(error: unknown) {
+    const message = userFacingError(error);
+    const aborted = /aborted/i.test(message);
+    options.dispatch({
+      type: "message.add",
+      role: "system",
+      text: aborted ? "Agent turn aborted." : message,
+    });
+    options.dispatch({
+      type: "activity.add",
+      level: aborted ? "warning" : "error",
+      text: aborted ? "Agent turn aborted" : message,
+    });
+  }
+}
+
+function userFacingError(error: unknown) {
+  if (error instanceof Error) return error.message;
+  return String(error);
+}

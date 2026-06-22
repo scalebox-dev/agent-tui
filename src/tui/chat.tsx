@@ -15,10 +15,7 @@ import {
   isAvailablePreset,
   listAvailablePresets,
   listConversations,
-  resumeAgentAfterLocalApproval,
-  runAgentTurn,
   type AgentRunOptions,
-  type AgentTurnEvent,
 } from "../agent.js";
 import {
   openWorkdir,
@@ -42,13 +39,13 @@ import {
   loginWithAPIKey,
   openBrowserURL,
   refreshActiveProfileIfNeeded,
-  resolveRuntimeProfile,
   saveBrowserProfile,
   startBrowserAuthChallenge,
   waitForBrowserAuthChallenge,
 } from "../profile.js";
 import { checkForUpdate, formatUpdateNotice } from "../update.js";
 import { runtime } from "../runtime/index.js";
+import { createWorkbenchTurnController, type WorkbenchTurnController } from "../workbench/turn-controller.js";
 
 export function ChatApp({ options }: { options: AgentRunOptions }) {
   return <AuthenticatedChatApp options={options} />;
@@ -331,9 +328,6 @@ function WorkbenchApp({
   const authRefreshWarningShownRef = useRef(false);
   const textDeltaBufferRef = useRef<{ id: string; text: string } | null>(null);
   const textDeltaFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const activeAbortControllerRef = useRef<AbortController | null>(null);
-  const activeResponseIDRef = useRef<string | null>(null);
-  const cancelledResponseIDsRef = useRef(new Set<string>());
   const updateNoticeShownRef = useRef(false);
   const inputHistoryRef = useRef(createInputHistory());
   const [draft, setDraft] = useState("");
@@ -352,6 +346,18 @@ function WorkbenchApp({
   const engine = engineRef.current;
   const state = useSyncExternalStore(engine.subscribe, engine.snapshot, engine.snapshot);
   const dispatch = engine.dispatch;
+  const turnControllerRef = useRef<WorkbenchTurnController | null>(null);
+  if (!turnControllerRef.current) {
+    turnControllerRef.current = createWorkbenchTurnController({
+      baseOptions: options,
+      dispatch,
+      engine,
+      flushTextDeltaBuffer,
+      getState: engine.snapshot,
+      runRuntimeEffects,
+    });
+  }
+  const turnController = turnControllerRef.current;
   const terminalRows = Math.max(18, stdout.rows || process.stdout.rows || 32);
   const terminalColumns = Math.max(80, stdout.columns || process.stdout.columns || 100);
   const viewportHeight = Math.max(6, terminalRows - 9);
@@ -515,7 +521,7 @@ function WorkbenchApp({
     }
     if (state.busy) {
       if (key.escape) {
-        void abortActiveTurn("Abort requested.");
+        void turnController.abort("Abort requested.");
         return;
       }
       if (key.return) {
@@ -523,7 +529,7 @@ function WorkbenchApp({
         inputHistoryRef.current.record(command);
         setDraft("");
         if (command === "/abort" || command === "/cancel") {
-          void abortActiveTurn("Abort requested.");
+          void turnController.abort("Abort requested.");
           return;
         }
         if (command) {
@@ -568,8 +574,8 @@ function WorkbenchApp({
     if (!initialPrompt) return;
     if (!workdirRef.current) return;
     initialPromptSubmittedRef.current = true;
-    void send(initialPrompt);
-  }, [options.promptParts, state.busy, state.workdir]);
+    void turnController.startPrompt(initialPrompt);
+  }, [options.promptParts, state.busy, state.workdir, turnController]);
 
   useEffect(() => {
     if (!state.busy) {
@@ -598,7 +604,7 @@ function WorkbenchApp({
       return;
     }
     if (submission.kind === "prompt") {
-      await send(submission.prompt);
+      await turnController.startPrompt(submission.prompt);
     }
   }
 
@@ -614,7 +620,7 @@ function WorkbenchApp({
           dispatch({ type: "message.add", role: "system", text: "No agent turn is running." });
           return;
         }
-        await abortActiveTurn("Abort requested.");
+        await turnController.abort("Abort requested.");
         return;
       case "config":
         await runConfigCommand(command);
@@ -955,45 +961,14 @@ function WorkbenchApp({
         dispatch({ type: "activity.add", level: "success", text: "Local action applied" });
         const approval = state.pendingLocalTool;
         dispatch({ type: "local_tool.pending.clear" });
-        const assistantId = `assistant-${Date.now()}`;
-        dispatch({ type: "busy.set", busy: true });
-        dispatch({ type: "message.add", role: "assistant", text: "", id: assistantId });
-        dispatch({ type: "assistant.active", id: assistantId });
-        dispatch({ type: "activity.add", text: "Continuing agent turn" });
-        const abortController = new AbortController();
-        activeAbortControllerRef.current = abortController;
-        activeResponseIDRef.current = null;
-        const continuation = await resumeAgentAfterLocalApproval(
-          {
-            ...options,
-            preset: state.runPreset,
-            model: state.runModel,
-            stream: true,
-            file: undefined,
-            stdin: false,
-            conversation: state.currentConversation,
-            includeLocalContext: state.contextEnabled,
-            accessMode: nextAccessMode,
-            restartConversation: false,
-            abortSignal: abortController.signal,
-          },
+        await turnController.continueAfterLocalApproval({
           approval,
           result,
-          (event) => handleAgentEvent(event, assistantId),
-        );
-        dispatch({
-          type: "activity.add",
-          level: "success",
-          text: continuation.responseID ? `Agent turn continued: ${continuation.responseID}` : "Agent turn continued",
+          accessMode: nextAccessMode,
         });
       } catch (error) {
-        handleTurnError(error);
-      } finally {
-        flushTextDeltaBuffer();
-        activeAbortControllerRef.current = null;
-        activeResponseIDRef.current = null;
-        dispatch({ type: "busy.set", busy: false });
-        dispatch({ type: "assistant.active", id: null });
+        dispatch({ type: "message.add", role: "system", text: userFacingError(error) });
+        dispatch({ type: "activity.add", level: "error", text: userFacingError(error) });
       }
       return;
     }
@@ -1012,56 +987,6 @@ function WorkbenchApp({
     dispatch({ type: "message.add", role: "system", text: "No pending local action." });
   }
 
-  async function send(prompt: string) {
-    const assistantId = `assistant-${Date.now()}`;
-    const abortController = new AbortController();
-    activeAbortControllerRef.current = abortController;
-    activeResponseIDRef.current = null;
-    dispatch({ type: "busy.set", busy: true });
-    dispatch({ type: "message.add", role: "user", text: prompt });
-    dispatch({ type: "message.add", role: "assistant", text: "", id: assistantId });
-    dispatch({ type: "assistant.active", id: assistantId });
-    dispatch({ type: "activity.add", text: "Agent turn started" });
-    try {
-      const result = await runAgentTurn(
-        {
-          ...options,
-          preset: state.runPreset,
-          model: state.runModel,
-          promptParts: [prompt],
-          stream: true,
-          file: undefined,
-          stdin: false,
-          conversation: state.currentConversation,
-          includeLocalContext: state.contextEnabled,
-          accessMode: state.accessMode,
-          restartConversation: false,
-          abortSignal: abortController.signal,
-        },
-        (event) => handleAgentEvent(event, assistantId),
-      );
-      dispatch({
-        type: "activity.add",
-        level: "success",
-        text: result.responseID ? `Agent turn completed: ${result.responseID}` : "Agent turn completed",
-      });
-    } catch (error) {
-      handleTurnError(error);
-    } finally {
-      flushTextDeltaBuffer();
-      if (activeAbortControllerRef.current === abortController) {
-        activeAbortControllerRef.current = null;
-      }
-      activeResponseIDRef.current = null;
-      dispatch({ type: "busy.set", busy: false });
-      dispatch({ type: "assistant.active", id: null });
-    }
-  }
-
-  function handleAgentEvent(event: AgentTurnEvent, assistantId: string) {
-    runRuntimeEffects(engine.handleAgentEvent(event).effects, assistantId);
-  }
-
   function runRuntimeEffects(effects: WorkbenchRuntimeEffect[], assistantId: string) {
     for (const effect of effects) {
       switch (effect.type) {
@@ -1069,64 +994,12 @@ function WorkbenchApp({
           appendTextDeltaBuffered(assistantId, effect.delta);
           break;
         case "set_active_response_id":
-          activeResponseIDRef.current = effect.responseID;
           break;
         case "flush_text_delta_buffer":
           flushTextDeltaBuffer();
           break;
       }
     }
-  }
-
-  async function abortActiveTurn(reason: string) {
-    const controller = activeAbortControllerRef.current;
-    const responseID = activeResponseIDRef.current;
-    if (!state.busy && !controller && !responseID) {
-      dispatch({ type: "message.add", role: "system", text: "No agent turn is running." });
-      return;
-    }
-    controller?.abort();
-    dispatch({ type: "activity.add", level: "warning", text: reason });
-    if (!responseID) {
-      dispatch({ type: "message.add", role: "system", text: "Abort requested. No remote response ID is available yet." });
-      return;
-    }
-    if (cancelledResponseIDsRef.current.has(responseID)) return;
-    cancelledResponseIDsRef.current.add(responseID);
-    try {
-      const runtimeProfile = await resolveRuntimeProfile(options.profile);
-      const result = await runtimeProfile.client.responses.cancel(responseID);
-      dispatch({
-        type: "message.add",
-        role: "system",
-        text: result.interrupted
-          ? `Abort requested for response ${responseID}.`
-          : `Abort requested locally. Remote response ${responseID} was not actively interrupted.`,
-      });
-      dispatch({
-        type: "activity.add",
-        level: result.interrupted ? "success" : "warning",
-        text: result.interrupted ? `Response cancel requested: ${responseID}` : `Response was not active: ${responseID}`,
-      });
-    } catch (error) {
-      dispatch({ type: "message.add", role: "system", text: `Abort requested locally, but remote cancel failed: ${userFacingError(error)}` });
-      dispatch({ type: "activity.add", level: "error", text: "Remote response cancel failed" });
-    }
-  }
-
-  function handleTurnError(error: unknown) {
-    const message = userFacingError(error);
-    const aborted = /aborted/i.test(message);
-    dispatch({
-      type: "message.add",
-      role: "system",
-      text: aborted ? "Agent turn aborted." : message,
-    });
-    dispatch({
-      type: "activity.add",
-      level: aborted ? "warning" : "error",
-      text: aborted ? "Agent turn aborted" : message,
-    });
   }
 
   function appendTextDeltaBuffered(id: string, delta: string) {
@@ -1530,7 +1403,7 @@ function nestedString(value: unknown, key: string) {
 async function applyLocalToolApproval(
   workdir: WorkdirService,
   approval: NonNullable<WorkbenchState["pendingLocalTool"]>,
-) {
+): Promise<string | Record<string, unknown>> {
   const workdirRegistry = createLocalWorkdirToolRegistry(workdir.workdir, { accessMode: "full" });
   const shellRegistry = createLocalShellToolRegistry({ workdir: workdir.workdir, accessMode: "full" });
   if (approval.name === workdirRegistry.toolName) {
