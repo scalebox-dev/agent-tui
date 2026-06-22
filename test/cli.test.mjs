@@ -518,6 +518,38 @@ test("workbench engine handles renderer-neutral commands", () => {
   assert.deepEqual(summaryResult.effects, []);
 });
 
+test("workbench engine maps agent events into state and runtime effects", () => {
+  const engine = createWorkbenchEngine({ contextEnabled: true, accessMode: "approval" });
+
+  assert.deepEqual(engine.handleAgentEvent({ type: "text.delta", delta: "hello" }).effects, [
+    { type: "append_text_delta", delta: "hello" },
+  ]);
+
+  assert.deepEqual(engine.handleAgentEvent({ type: "response.started", responseID: "resp_123" }).effects, [
+    { type: "set_active_response_id", responseID: "resp_123" },
+  ]);
+  assert.match(engine.snapshot().activities.at(-1).text, /Response started: resp_123/);
+
+  assert.deepEqual(engine.handleAgentEvent({ type: "response.completed", responseID: "resp_123" }).effects, [
+    { type: "flush_text_delta_buffer" },
+  ]);
+  assert.match(engine.snapshot().activities.at(-1).text, /Response completed: resp_123/);
+
+  assert.deepEqual(engine.handleAgentEvent({ type: "model.requested", model: "model", provider: "provider" }).effects, []);
+  assert.match(engine.snapshot().activities.at(-1).text, /provider\/model/);
+
+  assert.deepEqual(engine.handleAgentEvent({
+    type: "local_tool.approval_requested",
+    name: "local_workdir",
+    action: "write",
+    arguments: { action: "write", path: "notes.txt", content: "hello\n" },
+    callID: "call_local",
+    responseID: "resp_local",
+  }).effects, []);
+  assert.equal(engine.snapshot().pendingLocalTool?.name, "local_workdir");
+  assert.match(engine.snapshot().messages.at(-1).text, /Local action requires approval/);
+});
+
 test("workbench engine owns pending local approval input policy", () => {
   const engine = createWorkbenchEngine({ contextEnabled: true, accessMode: "approval" });
   engine.dispatch({

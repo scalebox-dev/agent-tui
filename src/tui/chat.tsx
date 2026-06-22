@@ -34,7 +34,7 @@ import {
   type WorkbenchMessage,
   type WorkbenchState,
 } from "./workbench.js";
-import { createWorkbenchEngine, type WorkbenchEffect, type WorkbenchEngine } from "../workbench/engine.js";
+import { createWorkbenchEngine, type WorkbenchEffect, type WorkbenchEngine, type WorkbenchRuntimeEffect } from "../workbench/engine.js";
 import {
   deleteProfile,
   formatDeviceUserCode,
@@ -1059,81 +1059,22 @@ function WorkbenchApp({
   }
 
   function handleAgentEvent(event: AgentTurnEvent, assistantId: string) {
-    switch (event.type) {
-      case "text.delta":
-        appendTextDeltaBuffered(assistantId, event.delta);
-        return;
-      case "response.started":
-        if (event.responseID) activeResponseIDRef.current = event.responseID;
-        dispatch({ type: "activity.add", text: event.responseID ? `Response started: ${event.responseID}` : "Response started" });
-        return;
-      case "response.completed":
-        flushTextDeltaBuffer();
-        dispatch({ type: "activity.add", level: "success", text: event.responseID ? `Response completed: ${event.responseID}` : "Response completed" });
-        return;
-      case "response.failed":
-        flushTextDeltaBuffer();
-        dispatch({ type: "activity.add", level: "error", text: event.message });
-        return;
-      case "reasoning.started":
-        dispatch({ type: "activity.add", text: "Reasoning started" });
-        return;
-      case "reasoning.stopped":
-        dispatch({ type: "activity.add", text: event.thought ? `Reasoning stopped: ${event.thought}` : "Reasoning stopped" });
-        return;
-      case "reasoning.search_queries":
-        dispatch({ type: "activity.add", text: `Search queries: ${event.queries.join(", ") || "none"}` });
-        return;
-      case "reasoning.search_results":
-        dispatch({ type: "activity.add", text: `Search results: ${event.count}` });
-        return;
-      case "reasoning.fetch_url_queries":
-        dispatch({ type: "activity.add", text: `Fetch URLs: ${event.urls.join(", ") || "none"}` });
-        return;
-      case "reasoning.fetch_url_results":
-        dispatch({ type: "activity.add", text: `Fetched URL results: ${event.count}` });
-        return;
-      case "tool.completed":
-        dispatch({ type: "activity.add", level: event.status === "failed" ? "error" : "success", text: `Tool completed: ${event.name}${event.status ? ` (${event.status})` : ""}` });
-        return;
-      case "local_tool.completed":
-        dispatch({
-          type: "activity.add",
-          level: event.requiresApproval ? "warning" : "success",
-          text: `Local tool: ${event.name}${event.action ? `.${event.action}` : ""}${event.requiresApproval ? " (approval required)" : ""}`,
-        });
-        return;
-      case "local_tool.approval_requested":
-        dispatch({
-          type: "local_tool.pending.set",
-          approval: {
-            name: event.name,
-            action: event.action,
-            arguments: event.arguments,
-            preview: event.preview,
-            callID: event.callID,
-            responseID: event.responseID,
-          },
-        });
-        dispatch({ type: "message.add", role: "system", text: formatLocalToolApproval(event) });
-        return;
-      case "model.requested":
-        dispatch({ type: "activity.add", text: `Model requested: ${modelLabel(event.model, event.provider)}` });
-        return;
-      case "model.completed":
-        dispatch({ type: "activity.add", level: "success", text: `Model completed: ${modelLabel(event.model, event.provider)}` });
-        return;
-      case "model.failed":
-        dispatch({ type: "activity.add", level: "error", text: `Model failed: ${modelLabel(event.model, event.provider)}` });
-        return;
-      case "step.completed":
-        dispatch({ type: "activity.add", level: "success", text: `Step completed: ${event.stepType || "step"}` });
-        return;
-      case "step.failed":
-        dispatch({ type: "activity.add", level: "error", text: `Step failed: ${event.stepType || "step"}` });
-        return;
-      case "raw":
-        return;
+    runRuntimeEffects(engine.handleAgentEvent(event).effects, assistantId);
+  }
+
+  function runRuntimeEffects(effects: WorkbenchRuntimeEffect[], assistantId: string) {
+    for (const effect of effects) {
+      switch (effect.type) {
+        case "append_text_delta":
+          appendTextDeltaBuffered(assistantId, effect.delta);
+          break;
+        case "set_active_response_id":
+          activeResponseIDRef.current = effect.responseID;
+          break;
+        case "flush_text_delta_buffer":
+          flushTextDeltaBuffer();
+          break;
+      }
     }
   }
 
@@ -1462,11 +1403,6 @@ function roleColor(role: WorkbenchMessage["role"]) {
   if (role === "user") return "green";
   if (role === "assistant") return "cyan";
   return "gray";
-}
-
-function modelLabel(model?: string, provider?: string) {
-  if (model && provider) return `${provider}/${model}`;
-  return model || provider || "unknown";
 }
 
 function Cursor({ visible }: { visible: boolean }) {

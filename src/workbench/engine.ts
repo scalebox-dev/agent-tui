@@ -12,7 +12,7 @@ import {
   type WorkbenchCommand,
   type WorkbenchState,
 } from "../tui/workbench.js";
-import type { WorkdirAccessMode } from "../agent.js";
+import type { AgentTurnEvent, WorkdirAccessMode } from "../agent.js";
 
 export interface WorkbenchEngineOptions {
   contextEnabled: boolean;
@@ -30,6 +30,7 @@ export interface WorkbenchEngine {
   dispatch(action: WorkbenchAction): void;
   submit(input: string): WorkbenchSubmission;
   handleCommand(command: WorkbenchCommand): WorkbenchCommandResult;
+  handleAgentEvent(event: AgentTurnEvent): WorkbenchEventResult;
 }
 
 export type WorkbenchSubmission =
@@ -47,9 +48,18 @@ export type WorkbenchEffect =
   | { type: "export_transcript"; path?: string; transcript: string; conversation: string }
   | { type: "clear_preset_tool_catalog_cache" };
 
+export type WorkbenchRuntimeEffect =
+  | { type: "append_text_delta"; delta: string }
+  | { type: "set_active_response_id"; responseID: string }
+  | { type: "flush_text_delta_buffer" };
+
 export interface WorkbenchCommandResult {
   handled: boolean;
   effects: WorkbenchEffect[];
+}
+
+export interface WorkbenchEventResult {
+  effects: WorkbenchRuntimeEffect[];
 }
 
 export function createWorkbenchEngine(options: WorkbenchEngineOptions): WorkbenchEngine {
@@ -183,6 +193,84 @@ export function createWorkbenchEngine(options: WorkbenchEngineOptions): Workbenc
           return unhandled();
       }
     },
+    handleAgentEvent(event) {
+      switch (event.type) {
+        case "text.delta":
+          return event.delta ? eventResult({ type: "append_text_delta", delta: event.delta }) : eventResult();
+        case "response.started":
+          if (event.responseID) {
+            dispatch({ type: "activity.add", text: `Response started: ${event.responseID}` });
+            return eventResult({ type: "set_active_response_id", responseID: event.responseID });
+          }
+          dispatch({ type: "activity.add", text: "Response started" });
+          return eventResult();
+        case "response.completed":
+          dispatch({ type: "activity.add", level: "success", text: event.responseID ? `Response completed: ${event.responseID}` : "Response completed" });
+          return eventResult({ type: "flush_text_delta_buffer" });
+        case "response.failed":
+          dispatch({ type: "activity.add", level: "error", text: event.message });
+          return eventResult({ type: "flush_text_delta_buffer" });
+        case "reasoning.started":
+          dispatch({ type: "activity.add", text: "Reasoning started" });
+          return eventResult();
+        case "reasoning.stopped":
+          dispatch({ type: "activity.add", text: event.thought ? `Reasoning stopped: ${event.thought}` : "Reasoning stopped" });
+          return eventResult();
+        case "reasoning.search_queries":
+          dispatch({ type: "activity.add", text: `Search queries: ${event.queries.join(", ") || "none"}` });
+          return eventResult();
+        case "reasoning.search_results":
+          dispatch({ type: "activity.add", text: `Search results: ${event.count}` });
+          return eventResult();
+        case "reasoning.fetch_url_queries":
+          dispatch({ type: "activity.add", text: `Fetch URLs: ${event.urls.join(", ") || "none"}` });
+          return eventResult();
+        case "reasoning.fetch_url_results":
+          dispatch({ type: "activity.add", text: `Fetched URL results: ${event.count}` });
+          return eventResult();
+        case "tool.completed":
+          dispatch({ type: "activity.add", level: event.status === "failed" ? "error" : "success", text: `Tool completed: ${event.name}${event.status ? ` (${event.status})` : ""}` });
+          return eventResult();
+        case "local_tool.completed":
+          dispatch({
+            type: "activity.add",
+            level: event.requiresApproval ? "warning" : "success",
+            text: `Local tool: ${event.name}${event.action ? `.${event.action}` : ""}${event.requiresApproval ? " (approval required)" : ""}`,
+          });
+          return eventResult();
+        case "local_tool.approval_requested":
+          dispatch({
+            type: "local_tool.pending.set",
+            approval: {
+              name: event.name,
+              action: event.action,
+              arguments: event.arguments,
+              preview: event.preview,
+              callID: event.callID,
+              responseID: event.responseID,
+            },
+          });
+          dispatch({ type: "message.add", role: "system", text: formatLocalToolApproval(event) });
+          return eventResult();
+        case "model.requested":
+          dispatch({ type: "activity.add", text: `Model requested: ${modelLabel(event.model, event.provider)}` });
+          return eventResult();
+        case "model.completed":
+          dispatch({ type: "activity.add", level: "success", text: `Model completed: ${modelLabel(event.model, event.provider)}` });
+          return eventResult();
+        case "model.failed":
+          dispatch({ type: "activity.add", level: "error", text: `Model failed: ${modelLabel(event.model, event.provider)}` });
+          return eventResult();
+        case "step.completed":
+          dispatch({ type: "activity.add", level: "success", text: `Step completed: ${event.stepType || "step"}` });
+          return eventResult();
+        case "step.failed":
+          dispatch({ type: "activity.add", level: "error", text: `Step failed: ${event.stepType || "step"}` });
+          return eventResult();
+        case "raw":
+          return eventResult();
+      }
+    },
     submit(input) {
       const trimmed = input.trim();
       if (!trimmed) return { kind: "handled" };
@@ -231,6 +319,33 @@ function handled(...effects: WorkbenchEffect[]): WorkbenchCommandResult {
 
 function unhandled(): WorkbenchCommandResult {
   return { handled: false, effects: [] };
+}
+
+function eventResult(...effects: WorkbenchRuntimeEffect[]): WorkbenchEventResult {
+  return { effects };
+}
+
+function modelLabel(model?: string, provider?: string) {
+  if (model && provider) return `${provider}/${model}`;
+  return model || provider || "unknown";
+}
+
+function formatLocalToolApproval(event: Extract<AgentTurnEvent, { type: "local_tool.approval_requested" }>) {
+  const label = `${event.name}${event.action ? `.${event.action}` : ""}`;
+  return [
+    `Local action requires approval: ${label}.`,
+    event.preview ? `Preview:\n${formatPreview(event.preview)}` : undefined,
+    "Review it in the workbench, then use /apply to execute once, /apply-all to allow future local actions, or /reject to discard it.",
+  ].filter(Boolean).join("\n\n");
+}
+
+function formatPreview(preview: unknown) {
+  if (typeof preview === "string") return preview;
+  try {
+    return JSON.stringify(preview, null, 2);
+  } catch {
+    return String(preview);
+  }
 }
 
 function normalizeOptionalSetting(value: string, clearValues: string[]) {
