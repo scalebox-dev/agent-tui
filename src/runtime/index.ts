@@ -2,7 +2,7 @@ import { createLocalRuntime } from "@agent-api/sdk/local";
 
 export const cliName = "agent-api-cli";
 export const cliAuthor = "AgentsWay";
-export const cliVersion = "0.0.1";
+export const cliVersion = "0.0.2";
 
 export const runtime = createLocalRuntime({
   appName: cliName,

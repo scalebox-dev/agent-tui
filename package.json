@@ -1,6 +1,6 @@
 {
   "name": "@agent-api/cli",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "First-class command line interface for Agent API",
   "license": "MIT",
   "homepage": "https://github.com/scalebox-dev/agent-tui#readme",
@@ -20,7 +20,7 @@
   "scripts": {
     "sync-version": "node scripts/sync-version.mjs",
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
-    "build": "npm run clean && tsc -p tsconfig.json",
+    "build": "npm run clean && tsc -p tsconfig.json && node scripts/prepare-bin.mjs",
     "dev": "npm run build && node dist/index.js",
     "dev:link": "node scripts/dev-link.mjs",
     "start": "node dist/index.js",
