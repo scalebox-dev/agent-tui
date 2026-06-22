@@ -1,6 +1,6 @@
 # Agent API CLI
 
-First-class command line interface for Agent API. The CLI is built on `@agent-api/sdk@^1.1.5` with Commander for command routing and Ink for interactive terminal UI.
+First-class command line interface for Agent API. The CLI is built on `@agent-api/sdk@^1.2.2` with Commander for command routing and Ink for interactive terminal UI.
 
 ## Development
 
@@ -17,6 +17,41 @@ Create local development commands:
 npm run dev:link
 agent-tui
 ```
+
+## Local Release
+
+The TUI is distributed as a normal npm CLI package. The app does not self-update;
+startup may show a lightweight update notice, and users update with npm:
+
+```bash
+npm install -g @agent-api/cli@latest
+```
+
+Prepare, verify, and publish a local release:
+
+```bash
+cd cli
+npm run release:local
+```
+
+If your npm account requires two-factor auth for publish:
+
+```bash
+npm run release:local -- --otp 123456
+```
+
+The local release script runs `npm ci`, builds and tests the package, creates an
+npm tarball in `artifacts/`, installs that tarball into a temporary npm prefix,
+smoke-tests the published bin aliases, and then publishes the verified tarball
+with `npm publish --access public`.
+
+For a no-publish rehearsal:
+
+```bash
+npm run release:local -- --dry-run
+```
+
+Set `AGENT_TUI_UPDATE_CHECK=0` to disable the startup update notice.
 
 ## Command Shape
 

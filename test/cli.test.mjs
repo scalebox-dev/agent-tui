@@ -13,6 +13,7 @@ import {
   parseWorkbenchCommand,
   workbenchReducer,
 } from "../dist/tui/workbench.js";
+import { compareVersions, formatUpdateNotice } from "../dist/update.js";
 
 const execFileAsync = promisify(execFile);
 const bin = new URL("../dist/index.js", import.meta.url).pathname;
@@ -358,4 +359,17 @@ test("agent request tools cache platform preset and tool catalogs by base URL", 
   assert.deepEqual(calls, ["presets", "tools"]);
   assert.deepEqual(tools.map((tool) => tool.name), ["smart_web_search", "local_workdir"]);
   clearPresetToolCatalogCache("https://api.test");
+});
+
+test("update helper compares semver-ish CLI versions and formats npm notice", () => {
+  assert.equal(compareVersions("1.2.3", "1.2.2"), 1);
+  assert.equal(compareVersions("1.2.2", "1.2.2"), 0);
+  assert.equal(compareVersions("1.2.1", "1.2.2"), -1);
+  assert.equal(compareVersions("v1.10.0", "1.9.9"), 1);
+  assert.equal(formatUpdateNotice({
+    current: "0.1.0",
+    latest: "0.1.1",
+    packageName: "@agent-api/cli",
+    updateAvailable: true,
+  }), "Update available: @agent-api/cli 0.1.0 -> 0.1.1. Run: npm install -g @agent-api/cli@latest");
 });

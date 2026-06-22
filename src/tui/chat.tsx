@@ -46,6 +46,7 @@ import {
   startBrowserAuthChallenge,
   waitForBrowserAuthChallenge,
 } from "../profile.js";
+import { checkForUpdate, formatUpdateNotice } from "../update.js";
 
 export function ChatApp({ options }: { options: AgentRunOptions }) {
   return <AuthenticatedChatApp options={options} />;
@@ -331,6 +332,7 @@ function WorkbenchApp({
   const activeAbortControllerRef = useRef<AbortController | null>(null);
   const activeResponseIDRef = useRef<string | null>(null);
   const cancelledResponseIDsRef = useRef(new Set<string>());
+  const updateNoticeShownRef = useRef(false);
   const [draft, setDraft] = useState("");
   const [spinnerFrame, setSpinnerFrame] = useState(0);
   const [runPreset, setRunPreset] = useState(options.preset);
@@ -348,6 +350,17 @@ function WorkbenchApp({
 
   useEffect(() => {
     let mounted = true;
+    if (!updateNoticeShownRef.current && process.env.AGENT_TUI_UPDATE_CHECK !== "0") {
+      updateNoticeShownRef.current = true;
+      checkForUpdate()
+        .then((result) => {
+          if (!mounted || !result?.updateAvailable) return;
+          const notice = formatUpdateNotice(result);
+          dispatch({ type: "activity.add", level: "warning", text: `Update available: ${result.latest}` });
+          dispatch({ type: "message.add", role: "system", text: notice });
+        })
+        .catch(() => undefined);
+    }
     loadWorkbenchPreferences()
       .then((preferences) => {
         if (!mounted) return;
