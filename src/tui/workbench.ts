@@ -59,6 +59,7 @@ export type WorkbenchAction =
 
 export type WorkbenchCommand =
   | { kind: "invalid"; command: string }
+  | { kind: "abort" }
   | { kind: "quit" }
   | { kind: "help" }
   | { kind: "clear" }
@@ -189,6 +190,9 @@ export function parseWorkbenchCommand(input: string): WorkbenchCommand | null {
   if (!trimmed.startsWith("/")) return null;
   const [name = "", ...rest] = trimmed.slice(1).split(/\s+/);
   switch (name) {
+    case "abort":
+    case "cancel":
+      return { kind: "abort" };
     case "quit":
       return { kind: "quit" };
     case "exit":
@@ -315,6 +319,7 @@ export function helpText() {
     "/apply           apply pending local action",
     "/apply-all       apply pending action and allow future local actions",
     "/reject          reject pending local action",
+    "/abort           cancel the in-flight agent turn",
     "/context         toggle local context packaging for each agent turn",
     "/clear           clear the visible terminal transcript",
     "/quit            leave the workbench",

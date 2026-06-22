@@ -8,6 +8,7 @@ import {
   type FunctionCallOutputInput,
   type Input,
   type PresetToolCatalogClient,
+  type RequestOptions,
   type ResponseStreamEvent,
   type Tool,
 } from "@agent-api/sdk";
@@ -43,6 +44,7 @@ export interface AgentRunOptions {
   maxContextFiles?: number;
   maxContextBytes?: number;
   accessMode?: WorkdirAccessMode;
+  abortSignal?: AbortSignal;
 }
 
 export type WorkdirAccessMode = "off" | "approval" | "full";
@@ -148,10 +150,11 @@ export async function runAgentTurn(options: AgentRunOptions, onEvent?: (event: A
   }
 
   if (params.stream) {
-    const stream = await runtimeProfile.client.agent.create({ ...params, stream: true });
+    const stream = await runtimeProfile.client.agent.create({ ...params, stream: true }, requestAbortOptions(options.abortSignal));
     let finalResponseID = "";
     let text = "";
     for await (const event of stream) {
+      throwIfAborted(options.abortSignal);
       emitAgentTurnEvent(event, onEvent);
       if (event.type === "response.output_text.delta" && event.delta) {
         text += event.delta;
@@ -170,7 +173,7 @@ export async function runAgentTurn(options: AgentRunOptions, onEvent?: (event: A
     return { text, responseID: finalResponseID || undefined };
   }
 
-  const response = await runtimeProfile.client.agent.create({ ...params, stream: false });
+  const response = await runtimeProfile.client.agent.create({ ...params, stream: false }, requestAbortOptions(options.abortSignal));
   await updateConversation(options, response.id);
   return { text: response.output_text || "", responseID: response.id };
 }
@@ -261,6 +264,7 @@ async function runAgentTurnWithLocalTools(
   const maxLocalToolRounds = 8;
 
   for (let round = 0; round <= maxLocalToolRounds; round += 1) {
+    throwIfAborted(options.abortSignal);
     const response = await createAgentResponseWithOptionalStream(agent, {
       input,
       instructions: initialParams.instructions,
@@ -269,7 +273,8 @@ async function runAgentTurnWithLocalTools(
       model: initialParams.model,
       previous_response_id: previousResponseID,
       stream: initialParams.stream,
-    }, responses, onEvent);
+    }, responses, options.abortSignal, onEvent);
+    throwIfAborted(options.abortSignal);
     finalResponse = response;
     if (initialParams.stream === false) {
       onEvent?.({ type: "response.started", responseID: response.id });
@@ -290,7 +295,7 @@ async function runAgentTurnWithLocalTools(
       return { text: response.output_text || "", responseID: response.id };
     }
 
-    const localResult = await executeLocalFunctionCalls(response, registry, onEvent);
+    const localResult = await executeLocalFunctionCalls(response, registry, options.abortSignal, onEvent);
     if (localResult.approvalRequested) {
       const message = localApprovalMessage(localResult.approvalRequested);
       if (initialParams.stream !== false) {
@@ -325,17 +330,22 @@ async function createAgentResponseWithOptionalStream(
     stream: boolean;
   },
   responses: Awaited<ReturnType<typeof resolveRuntimeProfile>>["client"]["responses"],
+  abortSignal?: AbortSignal,
   onEvent?: (event: AgentTurnEvent) => void,
 ): Promise<AgentResponse> {
+  throwIfAborted(abortSignal);
   if (!params.stream) {
-    return await agent.create({ ...params, stream: false });
+    const response = await agent.create({ ...params, stream: false }, requestAbortOptions(abortSignal));
+    throwIfAborted(abortSignal);
+    return response;
   }
 
-  const stream = await agent.create({ ...params, stream: true });
+  const stream = await agent.create({ ...params, stream: true }, requestAbortOptions(abortSignal));
   let finalResponse: AgentResponse | undefined;
   let responseID = "";
   let sawTextDelta = false;
   for await (const event of stream) {
+    throwIfAborted(abortSignal);
     emitAgentTurnEvent(event, onEvent);
     if (event.type === "response.output_text.delta") {
       sawTextDelta = true;
@@ -351,8 +361,9 @@ async function createAgentResponseWithOptionalStream(
     }
   }
 
+  throwIfAborted(abortSignal);
   if (!finalResponse && responseID) {
-    finalResponse = await responses.retrieve(responseID);
+    finalResponse = await responses.retrieve(responseID, requestAbortOptions(abortSignal));
   }
   if (!finalResponse) {
     throw new Error("agent stream completed without a final response");
@@ -598,7 +609,7 @@ function localToolAccessMode(options: AgentRunOptions): "approval" | "full" {
 
 interface LocalToolRegistryBundle {
   definitions(): Tool[];
-  execute(name: string, args: Record<string, unknown>): Promise<Record<string, unknown>>;
+  execute(name: string, args: Record<string, unknown>, abortSignal?: AbortSignal): Promise<Record<string, unknown>>;
   has(name: string): boolean;
 }
 
@@ -611,9 +622,9 @@ function combineLocalToolRegistries(
       ...workdir.definitions(),
       ...shell.definitions(),
     ],
-    execute: async (name, args) => {
+    execute: async (name, args, abortSignal) => {
       if (name === workdir.toolName) return await workdir.execute(name, args);
-      if (name === shell.toolName) return await shell.execute(name, args);
+      if (name === shell.toolName) return await shell.execute(name, args, { signal: abortSignal });
       throw new Error(`no local handler registered for function ${name}`);
     },
     has: (name) => name === workdir.toolName || name === shell.toolName,
@@ -623,6 +634,7 @@ function combineLocalToolRegistries(
 async function executeLocalFunctionCalls(
   response: AgentResponse,
   registry: LocalToolRegistryBundle,
+  abortSignal?: AbortSignal,
   onEvent?: (event: AgentTurnEvent) => void,
 ): Promise<{
   outputs: FunctionCallOutputInput[];
@@ -630,11 +642,13 @@ async function executeLocalFunctionCalls(
 }> {
   const outputs: FunctionCallOutputInput[] = [];
   for (const call of pendingFunctionCalls(response)) {
+    throwIfAborted(abortSignal);
     if (!registry.has(call.name)) {
       throw new Error(`no local handler registered for function ${call.name}`);
     }
     const args = call.arguments ? JSON.parse(call.arguments) as Record<string, unknown> : {};
-    const result = await registry.execute(call.name, args);
+    const result = await registry.execute(call.name, args, abortSignal);
+    throwIfAborted(abortSignal);
     const action = typeof result.action === "string"
       ? result.action
       : typeof args.action === "string"
@@ -664,6 +678,15 @@ async function executeLocalFunctionCalls(
     });
   }
   return { outputs };
+}
+
+function throwIfAborted(signal?: AbortSignal) {
+  if (!signal?.aborted) return;
+  throw new Error("Agent turn aborted.");
+}
+
+function requestAbortOptions(signal?: AbortSignal): RequestOptions | undefined {
+  return signal ? { signal } : undefined;
 }
 
 function localApprovalMessage(approval: { name: string; action?: string }) {

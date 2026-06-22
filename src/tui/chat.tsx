@@ -41,6 +41,7 @@ import {
   loginWithAPIKey,
   openBrowserURL,
   refreshActiveProfileIfNeeded,
+  resolveRuntimeProfile,
   saveBrowserProfile,
   startBrowserAuthChallenge,
   waitForBrowserAuthChallenge,
@@ -327,6 +328,9 @@ function WorkbenchApp({
   const authRefreshWarningShownRef = useRef(false);
   const textDeltaBufferRef = useRef<{ id: string; text: string } | null>(null);
   const textDeltaFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const activeAbortControllerRef = useRef<AbortController | null>(null);
+  const activeResponseIDRef = useRef<string | null>(null);
+  const cancelledResponseIDsRef = useRef(new Set<string>());
   const [draft, setDraft] = useState("");
   const [spinnerFrame, setSpinnerFrame] = useState(0);
   const [runPreset, setRunPreset] = useState(options.preset);
@@ -432,7 +436,33 @@ function WorkbenchApp({
       app.exit();
       return;
     }
-    if (state.busy) return;
+    if (state.busy) {
+      if (key.escape) {
+        void abortActiveTurn("Abort requested.");
+        return;
+      }
+      if (key.return) {
+        const command = draft.trim();
+        setDraft("");
+        if (command === "/abort" || command === "/cancel") {
+          void abortActiveTurn("Abort requested.");
+          return;
+        }
+        if (command) {
+          dispatch({ type: "message.add", role: "system", text: "Agent turn is running. Use /abort or Esc to cancel it." });
+          dispatch({ type: "activity.add", level: "warning", text: "Input ignored while agent is running" });
+        }
+        return;
+      }
+      if (key.backspace || key.delete) {
+        setDraft((current) => current.slice(0, -1));
+        return;
+      }
+      if (input && !key.ctrl && !key.meta) {
+        setDraft((current) => current + input);
+      }
+      return;
+    }
     if (key.return) {
       const prompt = draft.trim();
       if (!prompt) return;
@@ -533,6 +563,13 @@ function WorkbenchApp({
           text: `Unknown command: /${command.command}\nType /help for supported commands.`,
         });
         dispatch({ type: "activity.add", level: "warning", text: `Unknown command: /${command.command}` });
+        return;
+      case "abort":
+        if (!state.busy) {
+          dispatch({ type: "message.add", role: "system", text: "No agent turn is running." });
+          return;
+        }
+        await abortActiveTurn("Abort requested.");
         return;
       case "quit":
         app.exit();
@@ -907,6 +944,9 @@ function WorkbenchApp({
         dispatch({ type: "message.add", role: "assistant", text: "", id: assistantId });
         dispatch({ type: "assistant.active", id: assistantId });
         dispatch({ type: "activity.add", text: "Continuing agent turn" });
+        const abortController = new AbortController();
+        activeAbortControllerRef.current = abortController;
+        activeResponseIDRef.current = null;
         const continuation = await resumeAgentAfterLocalApproval(
           {
             ...options,
@@ -919,6 +959,7 @@ function WorkbenchApp({
             includeLocalContext: state.contextEnabled,
             accessMode: nextAccessMode,
             restartConversation: false,
+            abortSignal: abortController.signal,
           },
           approval,
           result,
@@ -930,18 +971,11 @@ function WorkbenchApp({
           text: continuation.responseID ? `Agent turn continued: ${continuation.responseID}` : "Agent turn continued",
         });
       } catch (error) {
-        dispatch({
-          type: "message.add",
-          role: "system",
-          text: userFacingError(error),
-        });
-        dispatch({
-          type: "activity.add",
-          level: "error",
-          text: userFacingError(error),
-        });
+        handleTurnError(error);
       } finally {
         flushTextDeltaBuffer();
+        activeAbortControllerRef.current = null;
+        activeResponseIDRef.current = null;
         dispatch({ type: "busy.set", busy: false });
         dispatch({ type: "assistant.active", id: null });
       }
@@ -964,6 +998,9 @@ function WorkbenchApp({
 
   async function send(prompt: string) {
     const assistantId = `assistant-${Date.now()}`;
+    const abortController = new AbortController();
+    activeAbortControllerRef.current = abortController;
+    activeResponseIDRef.current = null;
     dispatch({ type: "busy.set", busy: true });
     dispatch({ type: "message.add", role: "user", text: prompt });
     dispatch({ type: "message.add", role: "assistant", text: "", id: assistantId });
@@ -983,6 +1020,7 @@ function WorkbenchApp({
           includeLocalContext: state.contextEnabled,
           accessMode: state.accessMode,
           restartConversation: false,
+          abortSignal: abortController.signal,
         },
         (event) => handleAgentEvent(event, assistantId),
       );
@@ -992,18 +1030,13 @@ function WorkbenchApp({
         text: result.responseID ? `Agent turn completed: ${result.responseID}` : "Agent turn completed",
       });
     } catch (error) {
-      dispatch({
-        type: "message.add",
-        role: "system",
-        text: userFacingError(error),
-      });
-      dispatch({
-        type: "activity.add",
-        level: "error",
-        text: userFacingError(error),
-      });
+      handleTurnError(error);
     } finally {
       flushTextDeltaBuffer();
+      if (activeAbortControllerRef.current === abortController) {
+        activeAbortControllerRef.current = null;
+      }
+      activeResponseIDRef.current = null;
       dispatch({ type: "busy.set", busy: false });
       dispatch({ type: "assistant.active", id: null });
     }
@@ -1015,6 +1048,7 @@ function WorkbenchApp({
         appendTextDeltaBuffered(assistantId, event.delta);
         return;
       case "response.started":
+        if (event.responseID) activeResponseIDRef.current = event.responseID;
         dispatch({ type: "activity.add", text: event.responseID ? `Response started: ${event.responseID}` : "Response started" });
         return;
       case "response.completed":
@@ -1085,6 +1119,57 @@ function WorkbenchApp({
       case "raw":
         return;
     }
+  }
+
+  async function abortActiveTurn(reason: string) {
+    const controller = activeAbortControllerRef.current;
+    const responseID = activeResponseIDRef.current;
+    if (!state.busy && !controller && !responseID) {
+      dispatch({ type: "message.add", role: "system", text: "No agent turn is running." });
+      return;
+    }
+    controller?.abort();
+    dispatch({ type: "activity.add", level: "warning", text: reason });
+    if (!responseID) {
+      dispatch({ type: "message.add", role: "system", text: "Abort requested. No remote response ID is available yet." });
+      return;
+    }
+    if (cancelledResponseIDsRef.current.has(responseID)) return;
+    cancelledResponseIDsRef.current.add(responseID);
+    try {
+      const runtimeProfile = await resolveRuntimeProfile(options.profile);
+      const result = await runtimeProfile.client.responses.cancel(responseID);
+      dispatch({
+        type: "message.add",
+        role: "system",
+        text: result.interrupted
+          ? `Abort requested for response ${responseID}.`
+          : `Abort requested locally. Remote response ${responseID} was not actively interrupted.`,
+      });
+      dispatch({
+        type: "activity.add",
+        level: result.interrupted ? "success" : "warning",
+        text: result.interrupted ? `Response cancel requested: ${responseID}` : `Response was not active: ${responseID}`,
+      });
+    } catch (error) {
+      dispatch({ type: "message.add", role: "system", text: `Abort requested locally, but remote cancel failed: ${userFacingError(error)}` });
+      dispatch({ type: "activity.add", level: "error", text: "Remote response cancel failed" });
+    }
+  }
+
+  function handleTurnError(error: unknown) {
+    const message = userFacingError(error);
+    const aborted = /aborted/i.test(message);
+    dispatch({
+      type: "message.add",
+      role: "system",
+      text: aborted ? "Agent turn aborted." : message,
+    });
+    dispatch({
+      type: "activity.add",
+      level: aborted ? "warning" : "error",
+      text: aborted ? "Agent turn aborted" : message,
+    });
   }
 
   function appendTextDeltaBuffered(id: string, delta: string) {
