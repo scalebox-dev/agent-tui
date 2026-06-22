@@ -25,6 +25,7 @@ import {
 import { createLocalShellToolRegistry, createLocalWorkdirToolRegistry } from "@agent-api/sdk/local";
 import {
   activityColor,
+  createInputHistory,
   createInitialWorkbenchState,
   formatBytes,
   helpText,
@@ -333,6 +334,7 @@ function WorkbenchApp({
   const activeResponseIDRef = useRef<string | null>(null);
   const cancelledResponseIDsRef = useRef(new Set<string>());
   const updateNoticeShownRef = useRef(false);
+  const inputHistoryRef = useRef(createInputHistory());
   const [draft, setDraft] = useState("");
   const [spinnerFrame, setSpinnerFrame] = useState(0);
   const [runPreset, setRunPreset] = useState(options.preset);
@@ -449,6 +451,14 @@ function WorkbenchApp({
       app.exit();
       return;
     }
+    if (key.upArrow) {
+      setDraft((current) => inputHistoryRef.current.previous(current));
+      return;
+    }
+    if (key.downArrow) {
+      setDraft((current) => inputHistoryRef.current.next(current));
+      return;
+    }
     if (state.busy) {
       if (key.escape) {
         void abortActiveTurn("Abort requested.");
@@ -456,6 +466,7 @@ function WorkbenchApp({
       }
       if (key.return) {
         const command = draft.trim();
+        inputHistoryRef.current.record(command);
         setDraft("");
         if (command === "/abort" || command === "/cancel") {
           void abortActiveTurn("Abort requested.");
@@ -468,10 +479,12 @@ function WorkbenchApp({
         return;
       }
       if (key.backspace || key.delete) {
+        inputHistoryRef.current.reset();
         setDraft((current) => current.slice(0, -1));
         return;
       }
       if (input && !key.ctrl && !key.meta) {
+        inputHistoryRef.current.reset();
         setDraft((current) => current + input);
       }
       return;
@@ -479,15 +492,18 @@ function WorkbenchApp({
     if (key.return) {
       const prompt = draft.trim();
       if (!prompt) return;
+      inputHistoryRef.current.record(prompt);
       setDraft("");
       void submit(prompt);
       return;
     }
     if (key.backspace || key.delete) {
+      inputHistoryRef.current.reset();
       setDraft((current) => current.slice(0, -1));
       return;
     }
     if (input && !key.ctrl && !key.meta) {
+      inputHistoryRef.current.reset();
       setDraft((current) => current + input);
     }
   });

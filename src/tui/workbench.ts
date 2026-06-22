@@ -42,6 +42,14 @@ export interface WorkbenchState {
   currentConversation: string;
 }
 
+export interface InputHistory {
+  record(value: string): void;
+  previous(currentDraft: string): string;
+  next(currentDraft: string): string;
+  reset(): void;
+  values(): string[];
+}
+
 export type WorkbenchAction =
   | { type: "message.add"; role: WorkbenchRole; text: string; id?: string }
   | { type: "message.append"; id: string; delta: string }
@@ -101,6 +109,52 @@ export function createInitialWorkbenchState(options: { contextEnabled: boolean; 
     pendingLocalTool: null,
     accessMode,
     currentConversation: options.conversation || "default",
+  };
+}
+
+export function createInputHistory(limit = 100): InputHistory {
+  const entries: string[] = [];
+  let cursor: number | null = null;
+  let draftBeforeBrowse = "";
+  return {
+    record(value: string) {
+      const trimmed = value.trim();
+      if (!trimmed) return;
+      if (entries.at(-1) !== trimmed) {
+        entries.push(trimmed);
+        if (entries.length > limit) entries.splice(0, entries.length - limit);
+      }
+      cursor = null;
+      draftBeforeBrowse = "";
+    },
+    previous(currentDraft: string) {
+      if (entries.length === 0) return currentDraft;
+      if (cursor === null) {
+        draftBeforeBrowse = currentDraft;
+        cursor = entries.length - 1;
+      } else {
+        cursor = Math.max(0, cursor - 1);
+      }
+      return entries[cursor] ?? currentDraft;
+    },
+    next(currentDraft: string) {
+      if (entries.length === 0 || cursor === null) return currentDraft;
+      if (cursor < entries.length - 1) {
+        cursor += 1;
+        return entries[cursor] ?? currentDraft;
+      }
+      cursor = null;
+      const restored = draftBeforeBrowse;
+      draftBeforeBrowse = "";
+      return restored;
+    },
+    reset() {
+      cursor = null;
+      draftBeforeBrowse = "";
+    },
+    values() {
+      return [...entries];
+    },
   };
 }
 

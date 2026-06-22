@@ -8,6 +8,7 @@ import test from "node:test";
 import { agentResponseFailureMessage, agentTurnEventFromStreamEvent, clearPresetToolCatalogCache, resolveAgentRequestTools } from "../dist/agent.js";
 import { normalizeChatOptions } from "../dist/chat-options.js";
 import {
+  createInputHistory,
   createInitialWorkbenchState,
   parsePendingApprovalCommand,
   parseWorkbenchCommand,
@@ -396,4 +397,23 @@ test("preset list marks the current preset", () => {
     "* pro-search (current) - Search preset",
     "- code-agent - Code preset",
   ]);
+});
+
+test("input history navigates submitted prompts like a shell", () => {
+  const history = createInputHistory(2);
+  history.record("first");
+  history.record("second");
+  history.record("second");
+  history.record("third");
+
+  assert.deepEqual(history.values(), ["second", "third"]);
+  assert.equal(history.previous("draft"), "third");
+  assert.equal(history.previous("third"), "second");
+  assert.equal(history.previous("second"), "second");
+  assert.equal(history.next("second"), "third");
+  assert.equal(history.next("third"), "draft");
+  assert.equal(history.next("draft"), "draft");
+
+  history.record("fourth");
+  assert.deepEqual(history.values(), ["third", "fourth"]);
 });
