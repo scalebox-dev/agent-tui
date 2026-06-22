@@ -41,6 +41,7 @@ import {
   elapsedDots,
   spinnerGlyph,
 } from "../dist/workbench/view-model.js";
+import { createWorkbenchSession, sessionState } from "../dist/workbench/session.js";
 import { compareVersions, formatUpdateNotice } from "../dist/update.js";
 
 const execFileAsync = promisify(execFile);
@@ -709,6 +710,39 @@ test("workbench lifecycle update notice helper ignores unavailable updates", () 
     packageName: "@agent-api/cli",
     updateAvailable: false,
   }), []);
+});
+
+test("workbench session constructs shared engine and controllers", () => {
+  const runtimeEffects = [];
+  const session = createWorkbenchSession({
+    authController: {
+      async check() { return { profileName: "default", refreshed: false }; },
+      async loginAPIKey() { return { profileName: "default" }; },
+      async loginBrowser() { return { profileName: "default" }; },
+      async deleteProfile() {},
+      async statusText() { return ""; },
+      async refresh() { return { refreshed: false }; },
+    },
+    baseOptions: {
+      accessMode: "approval",
+      conversation: "demo",
+      includeLocalContext: true,
+      promptParts: [],
+    },
+    flushTextDeltaBuffer() {},
+    runRuntimeEffects(effects) {
+      runtimeEffects.push(...effects);
+    },
+  });
+
+  assert.equal(sessionState(session).currentConversation, "demo");
+  assert.equal(sessionState(session).contextEnabled, true);
+  session.engine.dispatch({ type: "message.add", role: "user", text: "hello" });
+  assert.equal(sessionState(session).messages.at(-1).text, "hello");
+  assert.deepEqual(runtimeEffects, []);
+  assert.equal(typeof session.input.handle, "function");
+  assert.equal(typeof session.lifecycle.initialPrompt, "function");
+  assert.equal(typeof session.turn.startPrompt, "function");
 });
 
 test("preset list marks the current preset", () => {

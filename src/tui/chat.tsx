@@ -8,7 +8,7 @@ import {
   type WorkbenchCommand,
   type WorkbenchState,
 } from "./workbench.js";
-import { createWorkbenchEngine, type WorkbenchEffect, type WorkbenchEngine, type WorkbenchRuntimeEffect } from "../workbench/engine.js";
+import { type WorkbenchEffect, type WorkbenchRuntimeEffect } from "../workbench/engine.js";
 import { createWorkbenchAuthController, type WorkbenchAuthController } from "../workbench/auth-controller.js";
 import {
   authMethods,
@@ -17,22 +17,12 @@ import {
   type WorkbenchAuthGateController,
 } from "../workbench/auth-gate-controller.js";
 import {
-  createWorkbenchConversationController,
-  type WorkbenchConversationController,
-} from "../workbench/conversation-controller.js";
-import { createWorkbenchInputController, type WorkbenchInputController } from "../workbench/input-controller.js";
-import {
-  createWorkbenchLifecycleController,
-  type WorkbenchLifecycleController,
   type WorkbenchLifecycleEffect,
 } from "../workbench/lifecycle-controller.js";
-import { createWorkbenchLocalController, type WorkbenchLocalController } from "../workbench/local-controller.js";
 import {
-  createWorkbenchSettingsController,
   UnknownPresetError,
-  type WorkbenchSettingsController,
 } from "../workbench/settings-controller.js";
-import { createWorkbenchTurnController, type WorkbenchTurnController } from "../workbench/turn-controller.js";
+import { createWorkbenchSession, type WorkbenchSession } from "../workbench/session.js";
 import {
   buildTranscriptViewModel,
   elapsedDots,
@@ -155,56 +145,25 @@ function WorkbenchApp({
   const [draft, setDraft] = useState("");
   const [spinnerFrame, setSpinnerFrame] = useState(0);
   const [transcriptOffset, setTranscriptOffset] = useState(0);
-  const engineRef = useRef<WorkbenchEngine | null>(null);
-  const conversationControllerRef = useRef<WorkbenchConversationController | null>(null);
-  const inputControllerRef = useRef<WorkbenchInputController | null>(null);
-  const lifecycleControllerRef = useRef<WorkbenchLifecycleController | null>(null);
-  const settingsControllerRef = useRef<WorkbenchSettingsController | null>(null);
-  if (!engineRef.current) {
-    engineRef.current = createWorkbenchEngine({
-      accessMode: options.accessMode,
-      conversation: options.conversation,
-      contextEnabled: Boolean(options.includeLocalContext || options.workdir),
-      model: options.model,
-      preset: options.preset,
-    });
-  }
-  const engine = engineRef.current;
-  if (!settingsControllerRef.current) {
-    settingsControllerRef.current = createWorkbenchSettingsController();
-  }
-  if (!conversationControllerRef.current) {
-    conversationControllerRef.current = createWorkbenchConversationController();
-  }
-  if (!inputControllerRef.current) {
-    inputControllerRef.current = createWorkbenchInputController();
-  }
-  if (!lifecycleControllerRef.current) {
-    lifecycleControllerRef.current = createWorkbenchLifecycleController({ authController });
-  }
-  const conversationController = conversationControllerRef.current;
-  const inputController = inputControllerRef.current;
-  const lifecycleController = lifecycleControllerRef.current;
-  const settingsController = settingsControllerRef.current;
-  const state = useSyncExternalStore(engine.subscribe, engine.snapshot, engine.snapshot);
-  const dispatch = engine.dispatch;
-  const localControllerRef = useRef<WorkbenchLocalController | null>(null);
-  if (!localControllerRef.current) {
-    localControllerRef.current = createWorkbenchLocalController();
-  }
-  const localController = localControllerRef.current;
-  const turnControllerRef = useRef<WorkbenchTurnController | null>(null);
-  if (!turnControllerRef.current) {
-    turnControllerRef.current = createWorkbenchTurnController({
+  const sessionRef = useRef<WorkbenchSession | null>(null);
+  if (!sessionRef.current) {
+    sessionRef.current = createWorkbenchSession({
+      authController,
       baseOptions: options,
-      dispatch,
-      engine,
       flushTextDeltaBuffer,
-      getState: engine.snapshot,
       runRuntimeEffects,
     });
   }
-  const turnController = turnControllerRef.current;
+  const session = sessionRef.current;
+  const engine = session.engine;
+  const conversationController = session.conversation;
+  const inputController = session.input;
+  const lifecycleController = session.lifecycle;
+  const localController = session.local;
+  const settingsController = session.settings;
+  const turnController = session.turn;
+  const state = useSyncExternalStore(engine.subscribe, engine.snapshot, engine.snapshot);
+  const dispatch = engine.dispatch;
   const terminalRows = Math.max(18, stdout.rows || process.stdout.rows || 32);
   const terminalColumns = Math.max(80, stdout.columns || process.stdout.columns || 100);
   const viewportHeight = Math.max(6, terminalRows - 9);
