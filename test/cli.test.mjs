@@ -15,10 +15,14 @@ import {
   parseWorkbenchCommand,
   workbenchReducer,
 } from "../dist/tui/workbench.js";
-import { formatPresetList as formatChatPresetList } from "../dist/tui/chat.js";
 import { authStatusText, createWorkbenchAuthController } from "../dist/workbench/auth-controller.js";
 import { createWorkbenchEngine } from "../dist/workbench/engine.js";
 import { createWorkbenchLocalController } from "../dist/workbench/local-controller.js";
+import {
+  createWorkbenchSettingsController,
+  formatPresetList,
+  UnknownPresetError,
+} from "../dist/workbench/settings-controller.js";
 import { createWorkbenchTurnController } from "../dist/workbench/turn-controller.js";
 import { compareVersions, formatUpdateNotice } from "../dist/update.js";
 
@@ -524,13 +528,80 @@ test("update helper compares semver-ish CLI versions and formats npm notice", ()
 });
 
 test("preset list marks the current preset", () => {
-  assert.deepEqual(formatChatPresetList([
+  assert.deepEqual(formatPresetList([
     { preset: "pro-search", description: "Search preset" },
     { preset: "code-agent", description: "Code preset" },
   ], "pro-search"), [
     "* pro-search (current) - Search preset",
     "- code-agent - Code preset",
   ]);
+});
+
+test("workbench settings controller loads and saves default preset settings", async () => {
+  const calls = [];
+  const controller = createWorkbenchSettingsController({
+    async loadWorkbenchPreferencesImpl() {
+      calls.push(["load"]);
+      return { defaultPreset: "code-agent" };
+    },
+    async isAvailablePresetImpl(profile, preset) {
+      calls.push(["validate", profile, preset]);
+      return preset === "pro-search";
+    },
+    async updateWorkbenchPreferencesImpl(patch) {
+      calls.push(["update", patch.defaultPreset]);
+      return { defaultPreset: patch.defaultPreset };
+    },
+  });
+
+  assert.deepEqual(await controller.loadInitial({ modelExplicit: false, preset: "pro-search", presetExplicit: false }), {
+    defaultPreset: "code-agent",
+    runPreset: "code-agent",
+  });
+
+  assert.deepEqual(
+    await controller.saveDefaultPreset({
+      value: "pro-search",
+      profileName: "dev",
+      options: { modelExplicit: false, preset: "code-agent", presetExplicit: false },
+    }),
+    {
+      defaultPreset: "pro-search",
+      runPreset: "pro-search",
+      message: "Saved default preset: pro-search.",
+      activity: "Default preset saved: pro-search",
+    },
+  );
+
+  assert.deepEqual(calls, [
+    ["load"],
+    ["validate", "dev", "pro-search"],
+    ["update", "pro-search"],
+  ]);
+});
+
+test("workbench settings controller reports unknown presets with catalog text", async () => {
+  const controller = createWorkbenchSettingsController({
+    async isAvailablePresetImpl() {
+      return false;
+    },
+    async listAvailablePresetsImpl() {
+      return [{ preset: "pro-search", description: "Search preset" }];
+    },
+  });
+
+  await assert.rejects(
+    controller.saveDefaultPreset({
+      value: "missing",
+      profileName: "dev",
+      options: { modelExplicit: false, preset: "pro-search", presetExplicit: false },
+    }),
+    UnknownPresetError,
+  );
+  assert.match(
+    await controller.presetListText({ profileName: "dev", currentPreset: "pro-search", prefix: "Unknown preset: missing" }),
+    /\* pro-search \(current\) - Search preset/,
+  );
 });
 
 test("input history navigates submitted prompts like a shell", () => {

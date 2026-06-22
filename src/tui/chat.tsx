@@ -2,18 +2,10 @@ import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } fro
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { Box, Text, useApp, useInput, useStdout } from "ink";
-import {
-  defaultBaseURL,
-  loadWorkbenchPreferences,
-  updateWorkbenchPreferences,
-  type WorkbenchPreferences,
-} from "../config.js";
+import { defaultBaseURL } from "../config.js";
 import {
   conversationSummary,
-  clearPresetToolCatalogCache,
   deleteConversation,
-  isAvailablePreset,
-  listAvailablePresets,
   listConversations,
   type AgentRunOptions,
 } from "../agent.js";
@@ -30,6 +22,11 @@ import { checkForUpdate, formatUpdateNotice } from "../update.js";
 import { runtime } from "../runtime/index.js";
 import { createWorkbenchAuthController, type WorkbenchAuthController } from "../workbench/auth-controller.js";
 import { createWorkbenchLocalController, type WorkbenchLocalController } from "../workbench/local-controller.js";
+import {
+  createWorkbenchSettingsController,
+  UnknownPresetError,
+  type WorkbenchSettingsController,
+} from "../workbench/settings-controller.js";
 import { createWorkbenchTurnController, type WorkbenchTurnController } from "../workbench/turn-controller.js";
 
 export function ChatApp({ options }: { options: AgentRunOptions }) {
@@ -323,6 +320,7 @@ function WorkbenchApp({
   const [spinnerFrame, setSpinnerFrame] = useState(0);
   const [transcriptOffset, setTranscriptOffset] = useState(0);
   const engineRef = useRef<WorkbenchEngine | null>(null);
+  const settingsControllerRef = useRef<WorkbenchSettingsController | null>(null);
   if (!engineRef.current) {
     engineRef.current = createWorkbenchEngine({
       accessMode: options.accessMode,
@@ -333,6 +331,10 @@ function WorkbenchApp({
     });
   }
   const engine = engineRef.current;
+  if (!settingsControllerRef.current) {
+    settingsControllerRef.current = createWorkbenchSettingsController();
+  }
+  const settingsController = settingsControllerRef.current;
   const state = useSyncExternalStore(engine.subscribe, engine.snapshot, engine.snapshot);
   const dispatch = engine.dispatch;
   const localControllerRef = useRef<WorkbenchLocalController | null>(null);
@@ -401,13 +403,14 @@ function WorkbenchApp({
         })
         .catch(() => undefined);
     }
-    loadWorkbenchPreferences()
-      .then((preferences) => {
+    settingsController.loadInitial({
+      modelExplicit: options.modelExplicit,
+      preset: options.preset,
+      presetExplicit: options.presetExplicit,
+    })
+      .then((settings) => {
         if (!mounted) return;
-        dispatch({ type: "settings.set", settings: { defaultPreset: preferences.defaultPreset } });
-        if (!options.presetExplicit && !options.modelExplicit) {
-          dispatch({ type: "settings.set", settings: { runPreset: effectiveDefaultPreset(preferences, options.preset) } });
-        }
+        dispatch({ type: "settings.set", settings });
       })
       .catch((error) => {
         if (!mounted) return;
@@ -416,7 +419,7 @@ function WorkbenchApp({
     return () => {
       mounted = false;
     };
-  }, [dispatch, options.modelExplicit, options.preset, options.presetExplicit]);
+  }, [dispatch, options.modelExplicit, options.preset, options.presetExplicit, settingsController]);
 
   useEffect(() => {
     let mounted = true;
@@ -671,7 +674,7 @@ function WorkbenchApp({
           await exportTranscript(effect);
           break;
         case "clear_preset_tool_catalog_cache":
-          clearPresetToolCatalogCache();
+          settingsController.clearPresetToolCatalogCache();
           break;
       }
     }
@@ -682,7 +685,7 @@ function WorkbenchApp({
       dispatch({
         type: "message.add",
         role: "system",
-        text: runConfigText({
+        text: settingsController.configText({
           profileName,
           runPreset: state.runPreset,
           runModel: state.runModel,
@@ -700,25 +703,32 @@ function WorkbenchApp({
         dispatch({
           type: "message.add",
           role: "system",
-          text: `Default preset: ${formatDefaultPreset(state.defaultPreset)}. Use /config preset <name>, /config preset none, or /config preset reset.`,
+          text: settingsController.defaultPresetHelp(state.defaultPreset),
         });
         return;
       }
-      const normalized = normalizeDefaultPreset(command.value);
-      if (typeof normalized === "string" && !(await validatePresetName(normalized))) {
-        return;
+      try {
+        const settings = await settingsController.saveDefaultPreset({ value: command.value, profileName, options });
+        dispatch({ type: "settings.set", settings: { defaultPreset: settings.defaultPreset, runPreset: settings.runPreset } });
+        dispatch({
+          type: "message.add",
+          role: "system",
+          text: settings.message,
+        });
+        dispatch({ type: "activity.add", level: "success", text: settings.activity });
+      } catch (error) {
+        if (error instanceof UnknownPresetError) {
+          dispatch({
+            type: "message.add",
+            role: "system",
+            text: await presetListText(`Unknown preset: ${error.preset}`),
+          });
+          dispatch({ type: "activity.add", level: "warning", text: `Unknown preset: ${error.preset}` });
+          return;
+        }
+        dispatch({ type: "message.add", role: "system", text: `Could not save default preset: ${userFacingError(error)}` });
+        dispatch({ type: "activity.add", level: "error", text: "Default preset save failed" });
       }
-      const preferences = await updateWorkbenchPreferences({ defaultPreset: normalized });
-      dispatch({ type: "settings.set", settings: { defaultPreset: preferences.defaultPreset } });
-      if (!options.presetExplicit && !options.modelExplicit) {
-        dispatch({ type: "settings.set", settings: { runPreset: effectiveDefaultPreset(preferences, options.preset) } });
-      }
-      dispatch({
-        type: "message.add",
-        role: "system",
-        text: `Saved default preset: ${formatDefaultPreset(preferences.defaultPreset)}.`,
-      });
-      dispatch({ type: "activity.add", level: "success", text: `Default preset saved: ${formatDefaultPreset(preferences.defaultPreset)}` });
     }
   }
 
@@ -741,7 +751,7 @@ function WorkbenchApp({
 
   async function validatePresetName(preset: string) {
     try {
-      if (await isAvailablePreset(profileName, preset)) return true;
+      if (await settingsController.validatePreset(profileName, preset)) return true;
       dispatch({
         type: "message.add",
         role: "system",
@@ -757,21 +767,7 @@ function WorkbenchApp({
   }
 
   async function presetListText(prefix: string) {
-    try {
-      const presets = await listAvailablePresets(profileName);
-      return [
-        prefix,
-        "",
-        "Available presets:",
-        ...formatPresetList(presets, state.runPreset),
-      ].join("\n");
-    } catch (error) {
-      return [
-        prefix,
-        "",
-        `Available presets could not be loaded: ${userFacingError(error)}`,
-      ].join("\n");
-    }
+    return settingsController.presetListText({ profileName, currentPreset: state.runPreset, prefix });
   }
 
   async function showAuthStatus() {
@@ -1279,62 +1275,6 @@ function normalizeOptionalSetting(value: string, clearValues: string[]) {
   const trimmed = value.trim();
   if (!trimmed) return undefined;
   return clearValues.includes(trimmed.toLowerCase()) ? undefined : trimmed;
-}
-
-function runConfigText({
-  accessMode,
-  contextEnabled,
-  defaultPreset,
-  profileName,
-  runModel,
-  runPreset,
-  renderMode,
-}: {
-  accessMode: string;
-  contextEnabled: boolean;
-  defaultPreset?: string | null;
-  profileName: string;
-  runModel?: string;
-  runPreset?: string;
-  renderMode: RenderMode;
-}) {
-  return [
-    `Profile: ${profileName}`,
-    `Preset: ${runPreset || "none"}`,
-    `Default preset: ${formatDefaultPreset(defaultPreset)}`,
-    `Model: ${runModel || "auto"}`,
-    `Render mode: ${renderMode}`,
-    `local_workdir tool: ${contextEnabled ? "on" : "off"}`,
-    `local_shell tool: ${contextEnabled ? "on" : "off"}`,
-    `Local access: ${accessMode}`,
-  ].join("\n");
-}
-
-function normalizeDefaultPreset(value: string) {
-  const trimmed = value.trim();
-  const lowered = trimmed.toLowerCase();
-  if (!trimmed || lowered === "reset" || lowered === "default" || lowered === "builtin") return undefined;
-  if (["none", "off", "disable", "disabled"].includes(lowered)) return null;
-  return trimmed;
-}
-
-function formatDefaultPreset(value: string | null | undefined) {
-  if (value === undefined) return "built-in (pro-search)";
-  return value ?? "none";
-}
-
-function effectiveDefaultPreset(preferences: WorkbenchPreferences, builtInPreset?: string) {
-  if ("defaultPreset" in preferences) return preferences.defaultPreset ?? undefined;
-  return builtInPreset;
-}
-
-export function formatPresetList(presets: Awaited<ReturnType<typeof listAvailablePresets>>, currentPreset?: string) {
-  if (presets.length === 0) return ["- none returned by this endpoint"];
-  return presets.map((preset) => {
-    const description = preset.description ? ` - ${preset.description}` : "";
-    const current = currentPreset && preset.preset === currentPreset;
-    return `${current ? "*" : "-"} ${preset.preset}${current ? " (current)" : ""}${description}`;
-  });
 }
 
 function pendingLocalLabel(state: WorkbenchState) {
