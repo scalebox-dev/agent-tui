@@ -3,6 +3,7 @@ import {
   parsePendingApprovalCommand,
   parseWorkbenchCommand,
   workbenchReducer,
+  type RenderMode,
   type WorkbenchAction,
   type WorkbenchCommand,
   type WorkbenchState,
@@ -13,6 +14,10 @@ export interface WorkbenchEngineOptions {
   contextEnabled: boolean;
   accessMode?: WorkdirAccessMode;
   conversation?: string;
+  preset?: string;
+  model?: string;
+  renderMode?: RenderMode;
+  defaultPreset?: string | null;
 }
 
 export interface WorkbenchEngine {

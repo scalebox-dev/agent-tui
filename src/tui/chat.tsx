@@ -341,17 +341,15 @@ function WorkbenchApp({
   const inputHistoryRef = useRef(createInputHistory());
   const [draft, setDraft] = useState("");
   const [spinnerFrame, setSpinnerFrame] = useState(0);
-  const [runPreset, setRunPreset] = useState(options.preset);
-  const [runModel, setRunModel] = useState(options.model);
-  const [renderMode, setRenderMode] = useState<RenderMode>("markdown");
   const [transcriptOffset, setTranscriptOffset] = useState(0);
-  const [workbenchPreferences, setWorkbenchPreferences] = useState<WorkbenchPreferences>({});
   const engineRef = useRef<WorkbenchEngine | null>(null);
   if (!engineRef.current) {
     engineRef.current = createWorkbenchEngine({
       accessMode: options.accessMode,
       conversation: options.conversation,
       contextEnabled: Boolean(options.includeLocalContext || options.workdir),
+      model: options.model,
+      preset: options.preset,
     });
   }
   const engine = engineRef.current;
@@ -366,11 +364,11 @@ function WorkbenchApp({
       buildTranscriptLines(state.messages, {
         activeAssistantMessageId: state.activeAssistantMessageId,
         busy: state.busy,
-        renderMode,
+        renderMode: state.renderMode,
         spinnerFrame,
         width: transcriptWidth,
       }),
-    [state.activeAssistantMessageId, state.busy, state.messages, renderMode, spinnerFrame, transcriptWidth],
+    [state.activeAssistantMessageId, state.busy, state.messages, state.renderMode, spinnerFrame, transcriptWidth],
   );
   const maxTranscriptOffset = Math.max(0, transcriptLines.length - viewportHeight);
   const clampedTranscriptOffset = Math.min(transcriptOffset, maxTranscriptOffset);
@@ -409,9 +407,9 @@ function WorkbenchApp({
     loadWorkbenchPreferences()
       .then((preferences) => {
         if (!mounted) return;
-        setWorkbenchPreferences(preferences);
+        dispatch({ type: "settings.set", settings: { defaultPreset: preferences.defaultPreset } });
         if (!options.presetExplicit && !options.modelExplicit) {
-          setRunPreset(effectiveDefaultPreset(preferences, options.preset));
+          dispatch({ type: "settings.set", settings: { runPreset: effectiveDefaultPreset(preferences, options.preset) } });
         }
       })
       .catch((error) => {
@@ -421,7 +419,7 @@ function WorkbenchApp({
     return () => {
       mounted = false;
     };
-  }, [options.modelExplicit, options.presetExplicit]);
+  }, [dispatch, options.modelExplicit, options.preset, options.presetExplicit]);
 
   useEffect(() => {
     let mounted = true;
@@ -655,10 +653,10 @@ function WorkbenchApp({
         return;
       case "render":
         if (!command.mode) {
-          dispatch({ type: "message.add", role: "system", text: `Render mode: ${renderMode}. Use /render markdown or /render raw.` });
+          dispatch({ type: "message.add", role: "system", text: `Render mode: ${state.renderMode}. Use /render markdown or /render raw.` });
           return;
         }
-        setRenderMode(command.mode);
+        dispatch({ type: "settings.set", settings: { renderMode: command.mode } });
         dispatch({ type: "activity.add", level: "success", text: `Render mode: ${command.mode}` });
         dispatch({ type: "message.add", role: "system", text: `Render mode set to ${command.mode}.` });
         return;
@@ -684,10 +682,10 @@ function WorkbenchApp({
         return;
       case "model":
         if (!command.value) {
-          dispatch({ type: "message.add", role: "system", text: `Model: ${runModel || "auto"}. Use /model <name> or /model auto.` });
+          dispatch({ type: "message.add", role: "system", text: `Model: ${state.runModel || "auto"}. Use /model <name> or /model auto.` });
           return;
         }
-        setRunModel(normalizeOptionalSetting(command.value, ["auto", "none", "off", "clear"]));
+        dispatch({ type: "settings.set", settings: { runModel: normalizeOptionalSetting(command.value, ["auto", "none", "off", "clear"]) } });
         dispatch({ type: "activity.add", text: `Model: ${normalizeOptionalSetting(command.value, ["auto", "none", "off", "clear"]) || "auto"}` });
         return;
       case "workdir":
@@ -761,12 +759,12 @@ function WorkbenchApp({
         role: "system",
         text: runConfigText({
           profileName,
-          runPreset,
-          runModel,
+          runPreset: state.runPreset,
+          runModel: state.runModel,
           accessMode: state.accessMode,
           contextEnabled: state.contextEnabled,
-          defaultPreset: workbenchPreferences.defaultPreset,
-          renderMode,
+          defaultPreset: state.defaultPreset,
+          renderMode: state.renderMode,
         }),
       });
       return;
@@ -777,7 +775,7 @@ function WorkbenchApp({
         dispatch({
           type: "message.add",
           role: "system",
-          text: `Default preset: ${formatDefaultPreset(workbenchPreferences.defaultPreset)}. Use /config preset <name>, /config preset none, or /config preset reset.`,
+          text: `Default preset: ${formatDefaultPreset(state.defaultPreset)}. Use /config preset <name>, /config preset none, or /config preset reset.`,
         });
         return;
       }
@@ -786,9 +784,9 @@ function WorkbenchApp({
         return;
       }
       const preferences = await updateWorkbenchPreferences({ defaultPreset: normalized });
-      setWorkbenchPreferences(preferences);
+      dispatch({ type: "settings.set", settings: { defaultPreset: preferences.defaultPreset } });
       if (!options.presetExplicit && !options.modelExplicit) {
-        setRunPreset(effectiveDefaultPreset(preferences, options.preset));
+        dispatch({ type: "settings.set", settings: { runPreset: effectiveDefaultPreset(preferences, options.preset) } });
       }
       dispatch({
         type: "message.add",
@@ -804,7 +802,7 @@ function WorkbenchApp({
       dispatch({
         type: "message.add",
         role: "system",
-        text: await presetListText(`Preset: ${runPreset || "none"}. Use /preset <name> or /preset none.`),
+        text: await presetListText(`Preset: ${state.runPreset || "none"}. Use /preset <name> or /preset none.`),
       });
       return;
     }
@@ -812,7 +810,7 @@ function WorkbenchApp({
     if (normalized && !(await validatePresetName(normalized))) {
       return;
     }
-    setRunPreset(normalized);
+    dispatch({ type: "settings.set", settings: { runPreset: normalized } });
     dispatch({ type: "activity.add", text: `Preset: ${normalized || "none"}` });
   }
 
@@ -840,7 +838,7 @@ function WorkbenchApp({
         prefix,
         "",
         "Available presets:",
-        ...formatPresetList(presets, runPreset),
+        ...formatPresetList(presets, state.runPreset),
       ].join("\n");
     } catch (error) {
       return [
@@ -1036,8 +1034,8 @@ function WorkbenchApp({
         const continuation = await resumeAgentAfterLocalApproval(
           {
             ...options,
-            preset: runPreset,
-            model: runModel,
+            preset: state.runPreset,
+            model: state.runModel,
             stream: true,
             file: undefined,
             stdin: false,
@@ -1096,8 +1094,8 @@ function WorkbenchApp({
       const result = await runAgentTurn(
         {
           ...options,
-          preset: runPreset,
-          model: runModel,
+          preset: state.runPreset,
+          model: state.runModel,
           promptParts: [prompt],
           stream: true,
           file: undefined,
@@ -1290,12 +1288,12 @@ function WorkbenchApp({
       <Header
         contextEnabled={state.contextEnabled}
         conversation={state.currentConversation}
-        model={runModel || "auto"}
+        model={state.runModel || "auto"}
         accessMode={state.accessMode}
         pendingLocalLabel={pendingLocalLabel(state)}
-        preset={runPreset || "none"}
+        preset={state.runPreset || "none"}
         profile={profileName}
-        renderMode={renderMode}
+        renderMode={state.renderMode}
         workdir={state.workdir?.root || options.workdir || process.cwd()}
       />
       <Box marginTop={1} height={viewportHeight}>

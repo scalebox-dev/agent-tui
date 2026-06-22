@@ -30,6 +30,8 @@ export interface LocalToolApproval extends LocalToolApprovalRequest {
   createdAt: number;
 }
 
+export type RenderMode = "markdown" | "raw";
+
 export interface WorkbenchState {
   messages: WorkbenchMessage[];
   activities: WorkbenchActivity[];
@@ -40,6 +42,10 @@ export interface WorkbenchState {
   pendingLocalTool: LocalToolApproval | null;
   accessMode: WorkdirAccessMode;
   currentConversation: string;
+  runPreset?: string;
+  runModel?: string;
+  renderMode: RenderMode;
+  defaultPreset?: string | null;
 }
 
 export interface InputHistory {
@@ -49,8 +55,6 @@ export interface InputHistory {
   reset(): void;
   values(): string[];
 }
-
-export type RenderMode = "markdown" | "raw";
 
 export type WorkbenchAction =
   | { type: "message.add"; role: WorkbenchRole; text: string; id?: string }
@@ -65,7 +69,8 @@ export type WorkbenchAction =
   | { type: "local_tool.pending.set"; approval: LocalToolApprovalRequest }
   | { type: "local_tool.pending.clear" }
   | { type: "access.set"; mode: WorkdirAccessMode }
-  | { type: "conversation.set"; name: string };
+  | { type: "conversation.set"; name: string }
+  | { type: "settings.set"; settings: Partial<Pick<WorkbenchState, "runPreset" | "runModel" | "renderMode" | "defaultPreset">> };
 
 export type WorkbenchCommand =
   | { kind: "invalid"; command: string }
@@ -98,7 +103,15 @@ export type WorkbenchCommand =
   | { kind: "apply_all" }
   | { kind: "reject" };
 
-export function createInitialWorkbenchState(options: { contextEnabled: boolean; accessMode?: WorkdirAccessMode; conversation?: string }): WorkbenchState {
+export function createInitialWorkbenchState(options: {
+  contextEnabled: boolean;
+  accessMode?: WorkdirAccessMode;
+  conversation?: string;
+  preset?: string;
+  model?: string;
+  renderMode?: RenderMode;
+  defaultPreset?: string | null;
+}): WorkbenchState {
   const accessMode = options.accessMode ?? (options.contextEnabled ? "approval" : "off");
   return {
     messages: [
@@ -114,6 +127,10 @@ export function createInitialWorkbenchState(options: { contextEnabled: boolean; 
     pendingLocalTool: null,
     accessMode,
     currentConversation: options.conversation || "default",
+    runPreset: options.preset,
+    runModel: options.model,
+    renderMode: options.renderMode ?? "markdown",
+    defaultPreset: options.defaultPreset,
   };
 }
 
@@ -228,6 +245,11 @@ export function workbenchReducer(state: WorkbenchState, action: WorkbenchAction)
         ...state,
         currentConversation: action.name,
         activities: [...state.activities, newActivity("info", `Conversation: ${action.name}`)].slice(-20),
+      };
+    case "settings.set":
+      return {
+        ...state,
+        ...action.settings,
       };
     default:
       return state;

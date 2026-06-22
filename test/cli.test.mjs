@@ -164,6 +164,9 @@ test("workbench command parser and reducer handle local workflow state", () => {
   const initial = createInitialWorkbenchState({ contextEnabled: false, accessMode: "off" });
   assert.equal(initial.currentConversation, "default");
   assert.equal(initial.contextEnabled, false);
+  assert.equal(initial.renderMode, "markdown");
+  assert.equal(initial.runPreset, undefined);
+  assert.equal(initial.runModel, undefined);
   const approvalAccess = workbenchReducer(initial, { type: "access.set", mode: "approval" });
   assert.equal(approvalAccess.contextEnabled, true);
   const fullAccess = workbenchReducer(approvalAccess, { type: "access.set", mode: "full" });
@@ -176,6 +179,19 @@ test("workbench command parser and reducer handle local workflow state", () => {
   assert.equal(toggled.contextEnabled, true);
   const switchedConversation = workbenchReducer(fullAccess, { type: "conversation.set", name: "release" });
   assert.equal(switchedConversation.currentConversation, "release");
+  const withSettings = workbenchReducer(switchedConversation, {
+    type: "settings.set",
+    settings: {
+      defaultPreset: "pro-search",
+      renderMode: "raw",
+      runModel: "provider/model",
+      runPreset: "code-agent",
+    },
+  });
+  assert.equal(withSettings.defaultPreset, "pro-search");
+  assert.equal(withSettings.renderMode, "raw");
+  assert.equal(withSettings.runModel, "provider/model");
+  assert.equal(withSettings.runPreset, "code-agent");
 
   const pendingLocalTool = workbenchReducer(switchedConversation, {
     type: "local_tool.pending.set",
