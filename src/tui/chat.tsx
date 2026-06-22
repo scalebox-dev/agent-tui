@@ -5,7 +5,6 @@ import { type AgentRunOptions } from "../agent.js";
 import {
   activityColor,
   type RenderMode,
-  type WorkbenchState,
 } from "./workbench.js";
 import { type WorkbenchRuntimeEffect } from "../workbench/engine.js";
 import { createWorkbenchAuthController, type WorkbenchAuthController } from "../workbench/auth-controller.js";
@@ -19,12 +18,11 @@ import {
   type WorkbenchLifecycleEffect,
 } from "../workbench/lifecycle-controller.js";
 import { createWorkbenchCommandController } from "../workbench/command-controller.js";
-import { createWorkbenchSession, type WorkbenchSession } from "../workbench/session.js";
 import {
-  buildTranscriptViewModel,
-  elapsedDots,
-  spinnerGlyph,
-} from "../workbench/view-model.js";
+  buildWorkbenchRenderModel,
+  busySpinner,
+} from "../workbench/render-model.js";
+import { createWorkbenchSession, type WorkbenchSession } from "../workbench/session.js";
 
 export function ChatApp({ options }: { options: AgentRunOptions }) {
   return <AuthenticatedChatApp options={options} />;
@@ -176,35 +174,32 @@ function WorkbenchApp({
     onLogout,
     onSwitchProfile,
   });
-  const terminalRows = Math.max(18, stdout.rows || process.stdout.rows || 32);
-  const terminalColumns = Math.max(80, stdout.columns || process.stdout.columns || 100);
-  const viewportHeight = Math.max(6, terminalRows - 9);
-  const transcriptWidth = Math.max(36, Math.floor(terminalColumns * 0.72) - 4);
-  const transcript = useMemo(
-    () =>
-      buildTranscriptViewModel({
-        activeAssistantMessageId: state.activeAssistantMessageId,
-        busy: state.busy,
-        messages: state.messages,
-        offset: transcriptOffset,
-        renderMode: state.renderMode,
-        spinnerFrame,
-        viewportHeight,
-        width: transcriptWidth,
-      }),
-    [state.activeAssistantMessageId, state.busy, state.messages, state.renderMode, spinnerFrame, transcriptOffset, transcriptWidth, viewportHeight],
+  const renderModel = useMemo(
+    () => buildWorkbenchRenderModel({
+      draft,
+      profileName,
+      spinnerFrame,
+      state,
+      transcriptOffset,
+      viewport: {
+        rows: stdout.rows || process.stdout.rows,
+        columns: stdout.columns || process.stdout.columns,
+      },
+      workdirFallback: options.workdir || process.cwd(),
+    }),
+    [draft, options.workdir, profileName, spinnerFrame, state, stdout.columns, stdout.rows, transcriptOffset],
   );
 
   useEffect(() => {
-    setTranscriptOffset((offset) => Math.min(offset, transcript.maxOffset));
-  }, [transcript.maxOffset]);
+    setTranscriptOffset((offset) => Math.min(offset, renderModel.transcript.maxOffset));
+  }, [renderModel.transcript.maxOffset]);
 
   function scrollTranscript(delta: number) {
-    setTranscriptOffset((offset) => Math.max(0, Math.min(transcript.maxOffset, offset + delta)));
+    setTranscriptOffset((offset) => Math.max(0, Math.min(renderModel.transcript.maxOffset, offset + delta)));
   }
 
   function scrollTranscriptToTop() {
-    setTranscriptOffset(transcript.maxOffset);
+    setTranscriptOffset(renderModel.transcript.maxOffset);
   }
 
   function scrollTranscriptToBottom() {
@@ -278,7 +273,7 @@ function WorkbenchApp({
     const result = inputController.handle(input, key, {
       busy: state.busy,
       draft,
-      viewportHeight,
+      viewportHeight: renderModel.viewportHeight,
     });
     if (result.draft !== draft) setDraft(result.draft);
     for (const effect of result.effects) {
@@ -409,58 +404,55 @@ function WorkbenchApp({
   return (
     <Box flexDirection="column">
       <Header
-        contextEnabled={state.contextEnabled}
-        conversation={state.currentConversation}
-        model={state.runModel || "auto"}
-        accessMode={state.accessMode}
-        pendingLocalLabel={pendingLocalLabel(state)}
-        preset={state.runPreset || "none"}
-        profile={profileName}
-        renderMode={state.renderMode}
-        workdir={state.workdir?.root || options.workdir || process.cwd()}
+        contextEnabled={renderModel.header.contextEnabled}
+        conversation={renderModel.header.conversation}
+        model={renderModel.header.model}
+        accessMode={renderModel.header.accessMode}
+        pendingLocalLabel={renderModel.header.pendingLocalLabel}
+        preset={renderModel.header.preset}
+        profile={renderModel.header.profile}
+        renderMode={renderModel.header.renderMode}
+        workdir={renderModel.header.workdir}
       />
-      <Box marginTop={1} height={viewportHeight}>
+      <Box marginTop={1} height={renderModel.viewportHeight}>
         <Box flexDirection="column" width="72%" paddingRight={1}>
-          {transcript.visibleLines.map((line) => (
+          {renderModel.transcript.visibleLines.map((line) => (
             <Text bold={line.bold} color={line.color} inverse={line.inverse} key={line.id}>
               {line.text || " "}
             </Text>
           ))}
-          {transcript.visibleLines.length === 0 && <Text color="gray">No transcript lines.</Text>}
+          {renderModel.transcript.visibleLines.length === 0 && <Text color="gray">No transcript lines.</Text>}
         </Box>
-        <Box flexDirection="column" width="28%" height={viewportHeight} borderStyle="single" borderColor="gray" paddingX={1}>
+        <Box flexDirection="column" width="28%" height={renderModel.activityHeight} borderStyle="single" borderColor="gray" paddingX={1}>
           <Text bold>Activity</Text>
-          {state.activities.slice(-Math.max(1, viewportHeight - 2)).map((activity) => (
+          {renderModel.visibleActivities.map((activity) => (
             <Text color={activityColor(activity.level)} key={activity.id}>
               {new Date(activity.timestamp).toLocaleTimeString()} {activity.text}
             </Text>
           ))}
         </Box>
       </Box>
-      <Box borderStyle="single" borderColor={state.busy ? "yellow" : "green"} paddingX={1}>
-        {state.accessMode === "full" && (
+      <Box borderStyle="single" borderColor={renderModel.input.busy ? "yellow" : "green"} paddingX={1}>
+        {renderModel.input.fullAccess && (
           <Text color="red" bold inverse>
             FULL ACCESS
           </Text>
         )}
-        {state.accessMode === "full" && <Text> </Text>}
-        <Text color={state.busy ? "yellow" : "green"}>{state.busy ? "working" : "you"} </Text>
-        {state.busy ? (
+        {renderModel.input.fullAccess && <Text> </Text>}
+        <Text color={renderModel.input.busy ? "yellow" : "green"}>{renderModel.input.label} </Text>
+        {renderModel.input.busy ? (
           <Text>
-            <Text color="yellow">{spinnerGlyph(spinnerFrame)}</Text> waiting for agent {elapsedDots(spinnerFrame)}
+            <Text color="yellow">{busySpinner(spinnerFrame)}</Text> {renderModel.input.waitingText}
           </Text>
         ) : (
           <Text>
-            {draft}
+            {renderModel.input.draft}
             <Cursor visible />
           </Text>
         )}
       </Box>
       <Box paddingX={1}>
-        <Text color="gray">
-          PgUp/PgDn scroll · End live · /export save · /transcript preview
-          {transcript.offset > 0 ? ` · ${transcript.offset} rows from latest` : " · live"}
-        </Text>
+        <Text color="gray">{renderModel.footerText}</Text>
       </Box>
     </Box>
   );
@@ -553,11 +545,4 @@ function Cursor({ visible }: { visible: boolean }) {
 function userFacingError(error: unknown) {
   if (error instanceof Error) return error.message;
   return String(error);
-}
-
-function pendingLocalLabel(state: WorkbenchState) {
-  if (state.pendingLocalTool) {
-    return `${state.pendingLocalTool.name}${state.pendingLocalTool.action ? `.${state.pendingLocalTool.action}` : ""}`;
-  }
-  return "none";
 }

@@ -42,6 +42,10 @@ import {
   elapsedDots,
   spinnerGlyph,
 } from "../dist/workbench/view-model.js";
+import {
+  buildWorkbenchRenderModel,
+  pendingLocalLabel,
+} from "../dist/workbench/render-model.js";
 import { createWorkbenchSession, sessionState } from "../dist/workbench/session.js";
 import { compareVersions, formatUpdateNotice } from "../dist/update.js";
 
@@ -888,6 +892,63 @@ test("workbench command controller applies pending local approvals", async () =>
   assert.equal(continuations.length, 1);
   assert.equal(continuations[0].accessMode, "full");
   assert.deepEqual(continuations[0].result, { ok: true, command: "pwd" });
+});
+
+test("workbench render model exposes renderer-neutral screen state", () => {
+  const state = createInitialWorkbenchState({
+    accessMode: "full",
+    contextEnabled: true,
+    conversation: "demo",
+    preset: "pro-search",
+  });
+  const model = buildWorkbenchRenderModel({
+    draft: "hello",
+    profileName: "default",
+    spinnerFrame: 5,
+    state: {
+      ...state,
+      workdir: {
+        root: "/tmp/demo",
+        name: "demo",
+        fileCount: 2,
+        totalBytes: 42,
+        scanTruncated: false,
+      },
+    },
+    transcriptOffset: 0,
+    viewport: { rows: 30, columns: 120 },
+    workdirFallback: "/fallback",
+  });
+
+  assert.equal(model.header.profile, "default");
+  assert.equal(model.header.conversation, "demo");
+  assert.equal(model.header.workdir, "/tmp/demo");
+  assert.equal(model.header.pendingLocalLabel, "none");
+  assert.equal(model.input.fullAccess, true);
+  assert.equal(model.input.draft, "hello");
+  assert.equal(model.viewportHeight, 21);
+  assert.ok(model.transcript.visibleLines.length > 0);
+  assert.match(model.footerText, /live/);
+});
+
+test("pending local label is stable for renderer headers", () => {
+  const state = createInitialWorkbenchState({ contextEnabled: true });
+  assert.equal(pendingLocalLabel(state), "none");
+  assert.equal(
+    pendingLocalLabel({
+      ...state,
+      pendingLocalTool: {
+        id: "local_1",
+        createdAt: 1,
+        name: "local_shell",
+        action: "run",
+        arguments: {},
+        callID: "call_1",
+        responseID: "resp_1",
+      },
+    }),
+    "local_shell.run",
+  );
 });
 
 test("preset list marks the current preset", () => {
