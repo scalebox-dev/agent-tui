@@ -16,6 +16,7 @@ import {
   workbenchReducer,
 } from "../dist/tui/workbench.js";
 import { formatPresetList as formatChatPresetList } from "../dist/tui/chat.js";
+import { authStatusText, createWorkbenchAuthController } from "../dist/workbench/auth-controller.js";
 import { createWorkbenchEngine } from "../dist/workbench/engine.js";
 import { createWorkbenchLocalController } from "../dist/workbench/local-controller.js";
 import { createWorkbenchTurnController } from "../dist/workbench/turn-controller.js";
@@ -90,6 +91,113 @@ test("workdir status inspects a local directory", async () => {
   assert.equal(status.fileCount, 1);
   assert.equal(status.snapshotFiles, 1);
   assert.equal(status.scanTruncated, false);
+});
+
+test("workbench auth controller checks, logs in, deletes, and formats status", async () => {
+  const calls = [];
+  const controller = createWorkbenchAuthController({
+    async refreshActiveProfileIfNeededImpl(profile, refreshWindowMs) {
+      calls.push(["refresh", profile, refreshWindowMs]);
+      return { profile: { name: profile || "default" }, refreshed: true };
+    },
+    async loginWithAPIKeyImpl(input) {
+      calls.push(["api", input.profile, input.baseURL, input.apiKey]);
+      return { name: input.profile };
+    },
+    async getAuthStatusImpl(profile) {
+      calls.push(["status", profile]);
+      return {
+        profile: profile || "default",
+        baseURL: "https://api.example.test",
+        authType: "api_key",
+        me: { user: { email: "user@example.test" } },
+      };
+    },
+    async deleteProfileImpl(name) {
+      calls.push(["delete", name]);
+    },
+  });
+
+  assert.deepEqual(await controller.check("dev", 123), { profileName: "dev", refreshed: true });
+  assert.deepEqual(await controller.loginAPIKey({ profile: "dev", baseURL: "https://api", apiKey: "sk-test" }), {
+    profileName: "dev",
+  });
+  const status = await controller.statusText("dev");
+  assert.match(status, /Profile: dev/);
+  assert.match(status, /Account: user@example\.test/);
+  await controller.deleteProfile("dev");
+
+  assert.deepEqual(calls, [
+    ["refresh", "dev", 123],
+    ["api", "dev", "https://api", "sk-test"],
+    ["status", "dev"],
+    ["delete", "dev"],
+  ]);
+});
+
+test("workbench auth controller drives browser login callbacks", async () => {
+  const events = [];
+  const challenges = [];
+  const statuses = [];
+  const controller = createWorkbenchAuthController({
+    async startBrowserAuthChallengeImpl(input) {
+      events.push(["start", input.baseURL, input.clientName]);
+      return {
+        verification_uri_complete: "https://login.example.test/device",
+        user_code: "abcd1234",
+        device_code: "device-test",
+        interval_seconds: 0,
+        expires_at: Math.floor(Date.now() / 1000) + 60,
+      };
+    },
+    async openBrowserURLImpl(url) {
+      events.push(["open", url]);
+    },
+    async waitForBrowserAuthChallengeImpl(input) {
+      events.push(["wait", input.baseURL, input.challenge.device_code]);
+      input.on_poll?.({ status: "approved" });
+      return {
+        access_token: "access-test",
+        refresh_token: "refresh-test",
+        access_token_expires_at: 1,
+        refresh_token_expires_at: 2,
+      };
+    },
+    async saveBrowserProfileImpl(name, baseURL, session) {
+      events.push(["save", name, baseURL, session.access_token]);
+      return { name };
+    },
+  });
+
+  assert.deepEqual(
+    await controller.loginBrowser({
+      profile: "browser",
+      baseURL: "https://api.example.test",
+      onChallenge: (challenge) => challenges.push(challenge),
+      onStatus: (status) => statuses.push(status),
+    }),
+    { profileName: "browser" },
+  );
+  assert.deepEqual(challenges, [{ url: "https://login.example.test/device", code: "ABCD-1234" }]);
+  assert.deepEqual(statuses, ["approved"]);
+  assert.deepEqual(events, [
+    ["start", "https://api.example.test", "Agent API TUI"],
+    ["open", "https://login.example.test/device"],
+    ["wait", "https://api.example.test", "device-test"],
+    ["save", "browser", "https://api.example.test", "access-test"],
+  ]);
+});
+
+test("auth status text falls back to account availability", () => {
+  assert.match(
+    authStatusText({
+      profile: "default",
+      baseURL: "https://api.example.test",
+      authType: "browser",
+      me: {},
+    }),
+    /Account: available/,
+  );
 });
 
 test("top-level workdir argument must exist before launching TUI", async () => {

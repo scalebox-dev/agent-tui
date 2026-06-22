@@ -26,19 +26,9 @@ import {
   type WorkbenchState,
 } from "./workbench.js";
 import { createWorkbenchEngine, type WorkbenchEffect, type WorkbenchEngine, type WorkbenchRuntimeEffect } from "../workbench/engine.js";
-import {
-  deleteProfile,
-  formatDeviceUserCode,
-  getAuthStatus,
-  loginWithAPIKey,
-  openBrowserURL,
-  refreshActiveProfileIfNeeded,
-  saveBrowserProfile,
-  startBrowserAuthChallenge,
-  waitForBrowserAuthChallenge,
-} from "../profile.js";
 import { checkForUpdate, formatUpdateNotice } from "../update.js";
 import { runtime } from "../runtime/index.js";
+import { createWorkbenchAuthController, type WorkbenchAuthController } from "../workbench/auth-controller.js";
 import { createWorkbenchLocalController, type WorkbenchLocalController } from "../workbench/local-controller.js";
 import { createWorkbenchTurnController, type WorkbenchTurnController } from "../workbench/turn-controller.js";
 
@@ -69,6 +59,11 @@ const authMethods: Array<{ method: AuthMethod; label: string; description: strin
 function AuthenticatedChatApp({ options }: { options: AgentRunOptions }) {
   const app = useApp();
   const busyRef = useRef(false);
+  const authControllerRef = useRef<WorkbenchAuthController | null>(null);
+  if (!authControllerRef.current) {
+    authControllerRef.current = createWorkbenchAuthController();
+  }
+  const authController = authControllerRef.current;
   const [currentProfile, setCurrentProfile] = useState(options.profile || "default");
   const [auth, setAuth] = useState<AuthGateState>({
     status: "checking",
@@ -84,10 +79,10 @@ function AuthenticatedChatApp({ options }: { options: AgentRunOptions }) {
 
   useEffect(() => {
     let mounted = true;
-    refreshActiveProfileIfNeeded(options.profile, 5 * 60_000)
+    authController.check(options.profile)
       .then((result) => {
         if (!mounted) return;
-        setCurrentProfile(result.profile.name);
+        setCurrentProfile(result.profileName);
         setAuth((current) => ({ ...current, status: "ready", message: "Authenticated.", error: "" }));
       })
       .catch((error) => {
@@ -102,7 +97,7 @@ function AuthenticatedChatApp({ options }: { options: AgentRunOptions }) {
     return () => {
       mounted = false;
     };
-  }, [options.profile]);
+  }, [authController, options.profile]);
 
   useInput((input, key) => {
     if (key.ctrl && input === "c") {
@@ -186,8 +181,8 @@ function AuthenticatedChatApp({ options }: { options: AgentRunOptions }) {
         busyRef.current = true;
         setAuth((current) => ({ ...current, message: "Saving API key profile...", error: "" }));
         try {
-          const saved = await loginWithAPIKey({ profile, baseURL, apiKey });
-          setCurrentProfile(saved.name);
+          const saved = await authController.loginAPIKey({ profile, baseURL, apiKey });
+          setCurrentProfile(saved.profileName);
           setAuth((current) => ({ ...current, status: "ready", message: `Signed in as profile "${profile}".`, error: "" }));
         } catch (error) {
           setAuth((current) => ({ ...current, error: userFacingError(error) }));
@@ -221,25 +216,22 @@ function AuthenticatedChatApp({ options }: { options: AgentRunOptions }) {
       browserCode: "",
     }));
     try {
-      const challenge = await startBrowserAuthChallenge({ baseURL, clientName: "Agent API TUI" });
-      setAuth((current) => ({
-        ...current,
-        message: "Open the URL to approve this terminal session.",
-        browserURL: challenge.verification_uri_complete,
-        browserCode: formatDeviceUserCode(challenge.user_code),
-      }));
-      await openBrowserURL(challenge.verification_uri_complete).catch(() => undefined);
-      const session = await waitForBrowserAuthChallenge({
+      const saved = await authController.loginBrowser({
+        profile,
         baseURL,
-        challenge,
-        on_poll(result) {
-          if (result.status && result.status !== "pending") {
-            setAuth((current) => ({ ...current, message: `Browser auth status: ${result.status}` }));
-          }
+        onChallenge(challenge) {
+          setAuth((current) => ({
+            ...current,
+            message: "Open the URL to approve this terminal session.",
+            browserURL: challenge.url,
+            browserCode: challenge.code,
+          }));
+        },
+        onStatus(status) {
+          setAuth((current) => ({ ...current, message: `Browser auth status: ${status}` }));
         },
       });
-      const saved = await saveBrowserProfile(profile, baseURL, session);
-      setCurrentProfile(saved.name);
+      setCurrentProfile(saved.profileName);
       setAuth((current) => ({ ...current, status: "ready", message: `Signed in as profile "${profile}".`, error: "" }));
     } catch (error) {
       setAuth((current) => ({
@@ -275,7 +267,7 @@ function AuthenticatedChatApp({ options }: { options: AgentRunOptions }) {
           }));
         }}
         onDeleteProfile={async () => {
-          await deleteProfile(currentProfile);
+          await authController.deleteProfile(currentProfile);
           setAuth((current) => ({
             ...current,
             status: "select",
@@ -294,6 +286,7 @@ function AuthenticatedChatApp({ options }: { options: AgentRunOptions }) {
         }}
         options={{ ...options, profile: currentProfile }}
         profileName={currentProfile}
+        authController={authController}
       />
     );
   }
@@ -302,6 +295,7 @@ function AuthenticatedChatApp({ options }: { options: AgentRunOptions }) {
 }
 
 function WorkbenchApp({
+  authController,
   onLogin,
   onLogout,
   onDeleteProfile,
@@ -309,6 +303,7 @@ function WorkbenchApp({
   options,
   profileName,
 }: {
+  authController: WorkbenchAuthController;
   onLogin: () => void;
   onLogout: () => void;
   onDeleteProfile: () => Promise<void>;
@@ -453,7 +448,7 @@ function WorkbenchApp({
     const refreshIntervalMs = 60_000;
     const refreshAuth = async () => {
       try {
-        const result = await refreshActiveProfileIfNeeded(options.profile, refreshWindowMs);
+        const result = await authController.refresh(options.profile, refreshWindowMs);
         if (!mounted) return;
         if (result.refreshed) {
           authRefreshWarningShownRef.current = false;
@@ -479,7 +474,7 @@ function WorkbenchApp({
       mounted = false;
       clearInterval(interval);
     };
-  }, [app, options.profile]);
+  }, [app, authController, options.profile]);
 
   useInput((input, key) => {
     if (key.ctrl && input === "c") {
@@ -782,8 +777,7 @@ function WorkbenchApp({
   async function showAuthStatus() {
     dispatch({ type: "activity.add", text: "Checking auth status" });
     try {
-      const status = await getAuthStatus(profileName);
-      dispatch({ type: "message.add", role: "system", text: authStatusText(status) });
+      dispatch({ type: "message.add", role: "system", text: await authController.statusText(profileName) });
       dispatch({ type: "activity.add", level: "success", text: "Auth status ready" });
     } catch (error) {
       dispatch({ type: "message.add", role: "system", text: userFacingError(error) });
@@ -1341,38 +1335,6 @@ export function formatPresetList(presets: Awaited<ReturnType<typeof listAvailabl
     const current = currentPreset && preset.preset === currentPreset;
     return `${current ? "*" : "-"} ${preset.preset}${current ? " (current)" : ""}${description}`;
   });
-}
-
-function authStatusText(status: Awaited<ReturnType<typeof getAuthStatus>>) {
-  return [
-    `Profile: ${status.profile}`,
-    `Endpoint: ${status.baseURL}`,
-    `Auth: ${status.authType === "api_key" ? "API key" : "Browser session"}`,
-    `Account: ${summarizeMe(status.me)}`,
-  ].join("\n");
-}
-
-function summarizeMe(me: unknown) {
-  if (!me || typeof me !== "object") return "available";
-  const obj = me as Record<string, unknown>;
-  const candidates = [
-    obj.email,
-    obj.name,
-    obj.username,
-    obj.user_id,
-    obj.id,
-    nestedString(obj.user, "email"),
-    nestedString(obj.user, "name"),
-    nestedString(obj.user, "id"),
-  ];
-  const picked = candidates.find((value): value is string => typeof value === "string" && value.trim() !== "");
-  return picked || "available";
-}
-
-function nestedString(value: unknown, key: string) {
-  if (!value || typeof value !== "object") return undefined;
-  const nested = (value as Record<string, unknown>)[key];
-  return typeof nested === "string" ? nested : undefined;
 }
 
 function pendingLocalLabel(state: WorkbenchState) {
