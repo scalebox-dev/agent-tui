@@ -2,10 +2,11 @@ import type { AgentRunOptions } from "../agent.js";
 import type { WorkbenchState } from "../tui/workbench.js";
 import type { WorkbenchAuthController } from "./auth-controller.js";
 import { createWorkbenchConversationController, type WorkbenchConversationController } from "./conversation-controller.js";
-import { createWorkbenchEngine, type WorkbenchEngine, type WorkbenchRuntimeEffect } from "./engine.js";
+import { createWorkbenchEngine, type WorkbenchEngine } from "./engine.js";
 import { createWorkbenchInputController, type WorkbenchInputController } from "./input-controller.js";
 import { createWorkbenchLifecycleController, type WorkbenchLifecycleController } from "./lifecycle-controller.js";
 import { createWorkbenchLocalController, type WorkbenchLocalController } from "./local-controller.js";
+import { createWorkbenchRuntimeController, type WorkbenchRuntimeController } from "./runtime-controller.js";
 import { createWorkbenchSettingsController, type WorkbenchSettingsController } from "./settings-controller.js";
 import { createWorkbenchTurnController, type WorkbenchTurnController } from "./turn-controller.js";
 
@@ -15,6 +16,7 @@ export interface WorkbenchSession {
   input: WorkbenchInputController;
   lifecycle: WorkbenchLifecycleController;
   local: WorkbenchLocalController;
+  runtime: WorkbenchRuntimeController;
   settings: WorkbenchSettingsController;
   turn: WorkbenchTurnController;
 }
@@ -22,8 +24,6 @@ export interface WorkbenchSession {
 export interface WorkbenchSessionOptions {
   authController: WorkbenchAuthController;
   baseOptions: AgentRunOptions;
-  flushTextDeltaBuffer(): void;
-  runRuntimeEffects(effects: WorkbenchRuntimeEffect[], assistantId: string): void;
 }
 
 export function createWorkbenchSession(options: WorkbenchSessionOptions): WorkbenchSession {
@@ -35,13 +35,14 @@ export function createWorkbenchSession(options: WorkbenchSessionOptions): Workbe
     preset: options.baseOptions.preset,
   });
   const local = createWorkbenchLocalController();
+  const runtime = createWorkbenchRuntimeController({ dispatch: engine.dispatch });
   const turn = createWorkbenchTurnController({
     baseOptions: options.baseOptions,
     dispatch: engine.dispatch,
     engine,
-    flushTextDeltaBuffer: options.flushTextDeltaBuffer,
+    flushTextDeltaBuffer: runtime.flushTextDeltaBuffer,
     getState: engine.snapshot,
-    runRuntimeEffects: options.runRuntimeEffects,
+    runRuntimeEffects: runtime.runEffects,
   });
 
   return {
@@ -50,6 +51,7 @@ export function createWorkbenchSession(options: WorkbenchSessionOptions): Workbe
     input: createWorkbenchInputController(),
     lifecycle: createWorkbenchLifecycleController({ authController: options.authController }),
     local,
+    runtime,
     settings: createWorkbenchSettingsController(),
     turn,
   };

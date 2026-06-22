@@ -46,6 +46,7 @@ import {
   buildWorkbenchRenderModel,
   pendingLocalLabel,
 } from "../dist/workbench/render-model.js";
+import { createWorkbenchRuntimeController } from "../dist/workbench/runtime-controller.js";
 import { createWorkbenchSession, sessionState } from "../dist/workbench/session.js";
 import { compareVersions, formatUpdateNotice } from "../dist/update.js";
 
@@ -779,7 +780,6 @@ test("workbench lifecycle update notice helper ignores unavailable updates", () 
 });
 
 test("workbench session constructs shared engine and controllers", () => {
-  const runtimeEffects = [];
   const session = createWorkbenchSession({
     authController: {
       async check() { return { profileName: "default", refreshed: false }; },
@@ -795,20 +795,32 @@ test("workbench session constructs shared engine and controllers", () => {
       includeLocalContext: true,
       promptParts: [],
     },
-    flushTextDeltaBuffer() {},
-    runRuntimeEffects(effects) {
-      runtimeEffects.push(...effects);
-    },
   });
 
   assert.equal(sessionState(session).currentConversation, "demo");
   assert.equal(sessionState(session).contextEnabled, true);
   session.engine.dispatch({ type: "message.add", role: "user", text: "hello" });
   assert.equal(sessionState(session).messages.at(-1).text, "hello");
-  assert.deepEqual(runtimeEffects, []);
   assert.equal(typeof session.input.handle, "function");
   assert.equal(typeof session.lifecycle.initialPrompt, "function");
+  assert.equal(typeof session.runtime.runEffects, "function");
   assert.equal(typeof session.turn.startPrompt, "function");
+});
+
+test("workbench runtime controller buffers and flushes text deltas", () => {
+  const engine = createWorkbenchEngine({ contextEnabled: false });
+  engine.dispatch({ type: "message.add", role: "assistant", id: "assistant-test", text: "" });
+  const runtime = createWorkbenchRuntimeController({ dispatch: engine.dispatch, flushDelayMs: 1000 });
+
+  runtime.runEffects([
+    { type: "append_text_delta", delta: "hel" },
+    { type: "append_text_delta", delta: "lo" },
+  ], "assistant-test");
+  assert.equal(engine.snapshot().messages.at(-1).text, "");
+
+  runtime.flushTextDeltaBuffer();
+  assert.equal(engine.snapshot().messages.at(-1).text, "hello");
+  runtime.dispose();
 });
 
 test("workbench command controller applies renderer-neutral preset commands", async () => {

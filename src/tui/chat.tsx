@@ -6,7 +6,6 @@ import {
   activityColor,
   type RenderMode,
 } from "./workbench.js";
-import { type WorkbenchRuntimeEffect } from "../workbench/engine.js";
 import { createWorkbenchAuthController, type WorkbenchAuthController } from "../workbench/auth-controller.js";
 import {
   authMethods,
@@ -135,8 +134,6 @@ function WorkbenchApp({
 }) {
   const app = useApp();
   const { stdout } = useStdout();
-  const textDeltaBufferRef = useRef<{ id: string; text: string } | null>(null);
-  const textDeltaFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [draft, setDraft] = useState("");
   const [spinnerFrame, setSpinnerFrame] = useState(0);
   const [transcriptOffset, setTranscriptOffset] = useState(0);
@@ -145,8 +142,6 @@ function WorkbenchApp({
     sessionRef.current = createWorkbenchSession({
       authController,
       baseOptions: options,
-      flushTextDeltaBuffer,
-      runRuntimeEffects,
     });
   }
   const session = sessionRef.current;
@@ -325,13 +320,8 @@ function WorkbenchApp({
   }, [state.busy]);
 
   useEffect(() => {
-    return () => {
-      if (textDeltaFlushTimerRef.current) {
-        clearTimeout(textDeltaFlushTimerRef.current);
-        textDeltaFlushTimerRef.current = null;
-      }
-    };
-  }, []);
+    return () => session.runtime.dispose();
+  }, [session.runtime]);
 
   function runLifecycleEffects(effects: WorkbenchLifecycleEffect[], isMounted: () => boolean) {
     for (const effect of effects) {
@@ -357,48 +347,6 @@ function WorkbenchApp({
     if (submission.kind === "prompt") {
       await turnController.startPrompt(submission.prompt);
     }
-  }
-
-  function runRuntimeEffects(effects: WorkbenchRuntimeEffect[], assistantId: string) {
-    for (const effect of effects) {
-      switch (effect.type) {
-        case "append_text_delta":
-          appendTextDeltaBuffered(assistantId, effect.delta);
-          break;
-        case "set_active_response_id":
-          break;
-        case "flush_text_delta_buffer":
-          flushTextDeltaBuffer();
-          break;
-      }
-    }
-  }
-
-  function appendTextDeltaBuffered(id: string, delta: string) {
-    if (!delta) return;
-    const current = textDeltaBufferRef.current;
-    if (!current || current.id !== id) {
-      flushTextDeltaBuffer();
-      textDeltaBufferRef.current = { id, text: delta };
-    } else {
-      current.text += delta;
-    }
-    if (textDeltaFlushTimerRef.current) return;
-    textDeltaFlushTimerRef.current = setTimeout(() => {
-      textDeltaFlushTimerRef.current = null;
-      flushTextDeltaBuffer();
-    }, 80);
-  }
-
-  function flushTextDeltaBuffer() {
-    if (textDeltaFlushTimerRef.current) {
-      clearTimeout(textDeltaFlushTimerRef.current);
-      textDeltaFlushTimerRef.current = null;
-    }
-    const buffered = textDeltaBufferRef.current;
-    if (!buffered || !buffered.text) return;
-    textDeltaBufferRef.current = null;
-    dispatch({ type: "message.append", id: buffered.id, delta: buffered.text });
   }
 
   return (
