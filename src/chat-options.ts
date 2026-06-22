@@ -21,6 +21,8 @@ export function normalizeChatOptions(promptParts: string[], options: ChatOptions
   const presetExplicit = options.preset !== undefined;
   const modelExplicit = options.model !== undefined && options.model !== "";
   const preset = presetExplicit ? options.preset : (modelExplicit ? undefined : "pro-search");
+  const parsedAccessMode = parseAccessMode(options.access);
+  const accessMode = parsedAccessMode ?? (options.workdir || options.localContext ? "approval" : undefined);
   return {
     profile: options.profile,
     promptParts,
@@ -39,7 +41,7 @@ export function normalizeChatOptions(promptParts: string[], options: ChatOptions
     contextQuery: options.contextQuery,
     maxContextFiles: optionalNumber(options.maxContextFiles, "--max-context-files"),
     maxContextBytes: optionalNumber(options.maxContextBytes, "--max-context-bytes"),
-    accessMode: parseAccessMode(options.access),
+    accessMode,
   };
 }
 
@@ -50,8 +52,8 @@ function optionalNumber(value: string | undefined, label: string) {
   return parsed;
 }
 
-function parseAccessMode(value: string | undefined): WorkdirAccessMode {
-  const mode = value || "approval";
-  if (mode === "approval" || mode === "full") return mode;
-  throw new Error("--access must be either approval or full");
+function parseAccessMode(value: string | undefined): WorkdirAccessMode | undefined {
+  if (!value) return undefined;
+  if (value === "off" || value === "approval" || value === "full") return value;
+  throw new Error("--access must be off, approval, or full");
 }

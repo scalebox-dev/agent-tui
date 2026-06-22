@@ -113,6 +113,7 @@ test("workbench command parser and reducer handle local workflow state", () => {
   assert.deepEqual(parseWorkbenchCommand("/config preset none"), { kind: "config", field: "preset", value: "none" });
   assert.deepEqual(parseWorkbenchCommand("/config nope"), { kind: "invalid", command: "config nope" });
   assert.deepEqual(parseWorkbenchCommand("/access"), { kind: "access" });
+  assert.deepEqual(parseWorkbenchCommand("/access off"), { kind: "access", mode: "off" });
   assert.deepEqual(parseWorkbenchCommand("/access full"), { kind: "access", mode: "full" });
   assert.deepEqual(parseWorkbenchCommand("/access approval"), { kind: "access", mode: "approval" });
   assert.deepEqual(parseWorkbenchCommand("/preset pro-search"), { kind: "preset", value: "pro-search" });
@@ -134,12 +135,19 @@ test("workbench command parser and reducer handle local workflow state", () => {
   assert.equal(parsePendingApprovalCommand("/preview"), null);
   assert.equal(parsePendingApprovalCommand("plain prompt"), null);
 
-  const initial = createInitialWorkbenchState({ contextEnabled: false, accessMode: "approval" });
+  const initial = createInitialWorkbenchState({ contextEnabled: false, accessMode: "off" });
   assert.equal(initial.currentConversation, "default");
-  const toggled = workbenchReducer(initial, { type: "context.toggle" });
-  assert.equal(toggled.contextEnabled, true);
-  const fullAccess = workbenchReducer(toggled, { type: "access.set", mode: "full" });
+  assert.equal(initial.contextEnabled, false);
+  const approvalAccess = workbenchReducer(initial, { type: "access.set", mode: "approval" });
+  assert.equal(approvalAccess.contextEnabled, true);
+  const fullAccess = workbenchReducer(approvalAccess, { type: "access.set", mode: "full" });
   assert.equal(fullAccess.accessMode, "full");
+  assert.equal(fullAccess.contextEnabled, true);
+  const offAccess = workbenchReducer(fullAccess, { type: "access.set", mode: "off" });
+  assert.equal(offAccess.contextEnabled, false);
+  const toggled = workbenchReducer(offAccess, { type: "context.toggle" });
+  assert.equal(toggled.accessMode, "approval");
+  assert.equal(toggled.contextEnabled, true);
   const switchedConversation = workbenchReducer(fullAccess, { type: "conversation.set", name: "release" });
   assert.equal(switchedConversation.currentConversation, "release");
 
@@ -276,12 +284,19 @@ test("agent request tools preserve preset tools when appending local workdir too
       description: "Local workdir",
       parameters: { type: "object" },
     },
+    {
+      type: "function",
+      name: "local_shell",
+      description: "Local shell",
+      parameters: { type: "object" },
+    },
   ]);
 
   assert.deepEqual(calls, ["presets", "tools"]);
-  assert.deepEqual(tools.map((tool) => tool.name), ["smart_web_search", "fetch_url", "local_workdir"]);
+  assert.deepEqual(tools.map((tool) => tool.name), ["smart_web_search", "fetch_url", "local_workdir", "local_shell"]);
   assert.equal(tools[0].type, "search");
   assert.equal(tools[2].type, "function");
+  assert.equal(tools[3].type, "function");
 });
 
 test("agent request tools do not fetch catalogs without a preset", async () => {

@@ -85,6 +85,7 @@ export type WorkbenchCommand =
   | { kind: "reject" };
 
 export function createInitialWorkbenchState(options: { contextEnabled: boolean; accessMode?: WorkdirAccessMode; conversation?: string }): WorkbenchState {
+  const accessMode = options.accessMode ?? (options.contextEnabled ? "approval" : "off");
   return {
     messages: [
       newMessage("system", "Agent API Workbench is ready. Type /help for commands."),
@@ -93,11 +94,11 @@ export function createInitialWorkbenchState(options: { contextEnabled: boolean; 
       newActivity("info", "Workbench started"),
     ],
     busy: false,
-    contextEnabled: options.contextEnabled,
+    contextEnabled: options.contextEnabled || accessMode === "approval" || accessMode === "full",
     workdir: null,
     activeAssistantMessageId: null,
     pendingLocalTool: null,
-    accessMode: options.accessMode ?? "approval",
+    accessMode,
     currentConversation: options.conversation || "default",
   };
 }
@@ -129,16 +130,9 @@ export function workbenchReducer(state: WorkbenchState, action: WorkbenchAction)
     case "busy.set":
       return { ...state, busy: action.busy };
     case "context.toggle":
-      return {
-        ...state,
-        contextEnabled: !state.contextEnabled,
-        activities: [
-          ...state.activities,
-          newActivity("info", `Local context ${state.contextEnabled ? "disabled" : "enabled"}`),
-        ].slice(-20),
-      };
+      return setLocalAccess(state, state.contextEnabled ? "off" : "approval");
     case "context.set":
-      return { ...state, contextEnabled: action.enabled };
+      return setLocalAccess(state, action.enabled ? "approval" : "off");
     case "workdir.set":
       return {
         ...state,
@@ -168,11 +162,7 @@ export function workbenchReducer(state: WorkbenchState, action: WorkbenchAction)
         pendingLocalTool: null,
       };
     case "access.set":
-      return {
-        ...state,
-        accessMode: action.mode,
-        activities: [...state.activities, newActivity("warning", `Workdir access: ${action.mode}`)].slice(-20),
-      };
+      return setLocalAccess(state, action.mode);
     case "conversation.set":
       return {
         ...state,
@@ -182,6 +172,16 @@ export function workbenchReducer(state: WorkbenchState, action: WorkbenchAction)
     default:
       return state;
   }
+}
+
+function setLocalAccess(state: WorkbenchState, mode: WorkdirAccessMode): WorkbenchState {
+  return {
+    ...state,
+    accessMode: mode,
+    contextEnabled: mode !== "off",
+    pendingLocalTool: mode === "off" ? null : state.pendingLocalTool,
+    activities: [...state.activities, newActivity(mode === "off" ? "warning" : "success", `Local access: ${mode}`)].slice(-20),
+  };
 }
 
 export function parseWorkbenchCommand(input: string): WorkbenchCommand | null {
@@ -224,7 +224,7 @@ export function parseWorkbenchCommand(input: string): WorkbenchCommand | null {
       return { kind: "context", enabled: parseOnOff(rest[0]) };
     case "access": {
       const mode = rest[0];
-      if (mode === "approval" || mode === "full") return { kind: "access", mode };
+      if (mode === "off" || mode === "approval" || mode === "full") return { kind: "access", mode };
       return { kind: "access" };
     }
     case "preset": {
@@ -303,9 +303,9 @@ export function helpText() {
     "/config preset   save default preset; use none/off for no preset, reset for built-in",
     "/preset [name]   show or set preset; use none/off to clear",
     "/model [name]    show or set explicit model; use auto/none/off to clear",
-    "/access [mode]   show or set local write access: approval or full",
+    "/access [mode]   show or set local tool access: off, approval, or full",
     "/workdir       show local workdir status",
-    "/workdir on    expose local_workdir to the model; off hides it",
+    "/workdir on    shortcut for /access approval; /workdir off hides local tools",
     "/new [name]      start a fresh conversation in this workbench",
     "/switch <name>   switch to an existing/new conversation handle",
     "/conversations   list saved local conversation handles",

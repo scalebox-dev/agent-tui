@@ -12,8 +12,11 @@ import {
   type Tool,
 } from "@agent-api/sdk";
 import {
+  createLocalShellToolRegistry,
   createLocalWorkdirToolRegistry,
+  localShellToolInstructions,
   localWorkdirToolInstructions,
+  type LocalShellToolRegistry,
   type LocalWorkdirToolRegistry,
 } from "@agent-api/sdk/local";
 import { resolvePreviousResponseID, updateConversation } from "../conversation/index.js";
@@ -42,7 +45,7 @@ export interface AgentRunOptions {
   accessMode?: WorkdirAccessMode;
 }
 
-export type WorkdirAccessMode = "approval" | "full";
+export type WorkdirAccessMode = "off" | "approval" | "full";
 
 export interface AgentTurnResult {
   text: string;
@@ -181,7 +184,7 @@ export async function resumeAgentAfterLocalApproval(
   const runtimeProfile = await resolveRuntimeProfile(options.profile);
   const localWorkdir = await prepareLocalWorkdirTools(options);
   if (!localWorkdir) {
-    throw new Error("local workdir tools are not available for approval continuation");
+    throw new Error("local tools are not available for approval continuation");
   }
   const tools = await resolveAgentRequestTools(
     runtimeProfile.client,
@@ -249,7 +252,7 @@ async function runAgentTurnWithLocalTools(
     stream: boolean;
   },
   options: AgentRunOptions,
-  registry: LocalWorkdirToolRegistry,
+  registry: LocalToolRegistryBundle,
   onEvent?: (event: AgentTurnEvent) => void,
 ): Promise<AgentTurnResult> {
   let input = initialParams.input;
@@ -544,8 +547,8 @@ async function buildInput(options: AgentRunOptions) {
   if (chunks.length === 0) {
     throw new Error("Prompt is required. Pass text, --file, or pipe stdin.");
   }
-  if (options.includeLocalContext || options.workdir) {
-    chunks.push("Local workdir operations are available through the `local_workdir` function tool. Use tool calls for local file inspection and edits; do not encode local edits in the final answer.");
+  if (shouldUseLocalTools(options)) {
+    chunks.push("Local operations are available through the `local_workdir` and `local_shell` function tools. Use `local_workdir` for local file inspection and edits. Use `local_shell` for commands, tests, builds, package managers, and git. Do not encode local edits or commands in the final answer when a tool call is needed.");
     chunks.push(await buildWorkdirContextBlock({
       path: options.workdir || process.cwd(),
       query: options.contextQuery,
@@ -557,28 +560,69 @@ async function buildInput(options: AgentRunOptions) {
 }
 
 async function prepareLocalWorkdirTools(options: AgentRunOptions): Promise<{
-  registry: LocalWorkdirToolRegistry;
+  registry: LocalToolRegistryBundle;
   instructions: string;
 } | null> {
-  if (!options.includeLocalContext && !options.workdir) {
+  if (!shouldUseLocalTools(options)) {
     return null;
   }
   const service = await openWorkdir({ path: options.workdir || process.cwd() });
   const registry = createLocalWorkdirToolRegistry(service.workdir, {
-    accessMode: options.accessMode ?? "approval",
+    accessMode: localToolAccessMode(options),
+  });
+  const shellRegistry = createLocalShellToolRegistry({
+    accessMode: localToolAccessMode(options),
+    workdir: service.workdir,
   });
   return {
-    registry,
+    registry: combineLocalToolRegistries(registry, shellRegistry),
     instructions: [
       localWorkdirToolInstructions(),
-      "Use local_workdir for selected local workdir operations. Prefer summarize/list/search/grep before read/read_lines. Prefer preview_edits/apply_edits for source edits. In approval mode, mutating actions return requires_approval and must be explained to the user instead of retried blindly.",
+      localShellToolInstructions({
+        accessMode: localToolAccessMode(options),
+        cwd: service.workdir.root,
+      }),
+      "Use local_workdir for selected local workdir operations. Prefer summarize/list/search/grep before read/read_lines. Prefer preview_edits/apply_edits for source edits. Use local_shell for command/process tasks. In approval mode, local actions return requires_approval and must be explained to the user instead of retried blindly.",
     ].join("\n\n"),
+  };
+}
+
+function shouldUseLocalTools(options: AgentRunOptions) {
+  if (options.accessMode === "off") return false;
+  return Boolean(options.includeLocalContext || options.workdir || options.accessMode === "approval" || options.accessMode === "full");
+}
+
+function localToolAccessMode(options: AgentRunOptions): "approval" | "full" {
+  return options.accessMode === "full" ? "full" : "approval";
+}
+
+interface LocalToolRegistryBundle {
+  definitions(): Tool[];
+  execute(name: string, args: Record<string, unknown>): Promise<Record<string, unknown>>;
+  has(name: string): boolean;
+}
+
+function combineLocalToolRegistries(
+  workdir: LocalWorkdirToolRegistry,
+  shell: LocalShellToolRegistry,
+): LocalToolRegistryBundle {
+  return {
+    definitions: () => [
+      ...workdir.definitions(),
+      ...shell.definitions(),
+    ],
+    execute: async (name, args) => {
+      if (name === workdir.toolName) return await workdir.execute(name, args);
+      if (name === shell.toolName) return await shell.execute(name, args);
+      throw new Error(`no local handler registered for function ${name}`);
+    },
+    has: (name) => name === workdir.toolName || name === shell.toolName,
   };
 }
 
 async function executeLocalFunctionCalls(
   response: AgentResponse,
-  registry: LocalWorkdirToolRegistry,
+  registry: LocalToolRegistryBundle,
   onEvent?: (event: AgentTurnEvent) => void,
 ): Promise<{
   outputs: FunctionCallOutputInput[];
@@ -586,7 +630,7 @@ async function executeLocalFunctionCalls(
 }> {
   const outputs: FunctionCallOutputInput[] = [];
   for (const call of pendingFunctionCalls(response)) {
-    if (call.name !== registry.toolName) {
+    if (!registry.has(call.name)) {
       throw new Error(`no local handler registered for function ${call.name}`);
     }
     const args = call.arguments ? JSON.parse(call.arguments) as Record<string, unknown> : {};
@@ -624,7 +668,7 @@ async function executeLocalFunctionCalls(
 
 function localApprovalMessage(approval: { name: string; action?: string }) {
   return [
-    `Local workdir action requires approval: ${approval.name}${approval.action ? `.${approval.action}` : ""}.`,
+    `Local action requires approval: ${approval.name}${approval.action ? `.${approval.action}` : ""}.`,
     "Review it in the workbench, then use /apply to execute it or /reject to discard it.",
   ].join("\n");
 }

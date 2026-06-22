@@ -22,7 +22,7 @@ import {
   openWorkdir,
   type WorkdirService,
 } from "../workdir/index.js";
-import { createLocalWorkdirToolRegistry } from "@agent-api/sdk/local";
+import { createLocalShellToolRegistry, createLocalWorkdirToolRegistry } from "@agent-api/sdk/local";
 import {
   activityColor,
   createInitialWorkbenchState,
@@ -568,7 +568,7 @@ function WorkbenchApp({
         return;
       case "access":
         if (!command.mode) {
-          dispatch({ type: "message.add", role: "system", text: `Workdir access: ${state.accessMode}. Use /access approval or /access full.` });
+          dispatch({ type: "message.add", role: "system", text: `Local access: ${state.accessMode}. Use /access off, /access approval, or /access full.` });
           return;
         }
         dispatch({ type: "access.set", mode: command.mode });
@@ -593,7 +593,8 @@ function WorkbenchApp({
               workdirText(state.workdir),
               "",
               `local_workdir tool: ${state.contextEnabled ? "on" : "off"}`,
-              "Use /workdir on to expose it to the model, or /workdir off to hide it.",
+              `local_shell tool: ${state.contextEnabled ? "on" : "off"}`,
+              "Use /access approval or /access full to expose local tools, or /access off to hide them.",
             ].join("\n"),
           });
           return;
@@ -602,14 +603,14 @@ function WorkbenchApp({
         dispatch({
           type: "activity.add",
           level: command.enabled ? "success" : "warning",
-          text: `local_workdir ${command.enabled ? "enabled" : "disabled"}`,
+          text: `local tools ${command.enabled ? "enabled" : "disabled"}`,
         });
         dispatch({
           type: "message.add",
           role: "system",
           text: command.enabled
-            ? "local_workdir is now available to the model for future turns. Write access is still controlled by /access."
-            : "local_workdir is now hidden from the model for future turns.",
+            ? "local_workdir and local_shell are now available to the model in approval mode. Use /access full to allow execution without prompts."
+            : "local tools are now hidden from the model.",
         });
         return;
       case "summary":
@@ -891,8 +892,8 @@ function WorkbenchApp({
           role: "system",
           text: [
             allowFutureLocalActions
-              ? "Applied local action. Future local workdir actions in this workbench conversation are now allowed."
-              : "Applied local action once. Future local workdir actions still require approval.",
+              ? "Applied local action. Future local actions in this workbench conversation are now allowed."
+              : "Applied local action once. Future local actions still require approval.",
             "Continuing agent turn with the local result.",
             "Result:",
             JSON.stringify(result, null, 2),
@@ -1244,7 +1245,7 @@ function Header({
         profile={profile} conversation={conversation} preset={preset} model={model}
       </Text>
       <Text color="gray">
-        workdir={workdir} access={accessMode} local_workdir={contextEnabled ? "on" : "off"} pending={pendingLocalLabel}
+        workdir={workdir} access={accessMode} local_tools={contextEnabled ? "on" : "off"} pending={pendingLocalLabel}
       </Text>
     </Box>
   );
@@ -1338,7 +1339,8 @@ function runConfigText({
     `Default preset: ${formatDefaultPreset(defaultPreset)}`,
     `Model: ${runModel || "auto"}`,
     `local_workdir tool: ${contextEnabled ? "on" : "off"}`,
-    `Local workdir access: ${accessMode}`,
+    `local_shell tool: ${contextEnabled ? "on" : "off"}`,
+    `Local access: ${accessMode}`,
   ].join("\n");
 }
 
@@ -1404,8 +1406,15 @@ async function applyLocalToolApproval(
   workdir: WorkdirService,
   approval: NonNullable<ReturnType<typeof createInitialWorkbenchState>["pendingLocalTool"]>,
 ) {
-  const registry = createLocalWorkdirToolRegistry(workdir.workdir, { accessMode: "full" });
-  return await registry.execute(approval.name, approval.arguments);
+  const workdirRegistry = createLocalWorkdirToolRegistry(workdir.workdir, { accessMode: "full" });
+  const shellRegistry = createLocalShellToolRegistry({ workdir: workdir.workdir, accessMode: "full" });
+  if (approval.name === workdirRegistry.toolName) {
+    return await workdirRegistry.execute(approval.name, approval.arguments);
+  }
+  if (approval.name === shellRegistry.toolName) {
+    return await shellRegistry.execute(approval.name, approval.arguments);
+  }
+  throw new Error(`no local handler registered for function ${approval.name}`);
 }
 
 function formatLocalToolApproval(approval: {
