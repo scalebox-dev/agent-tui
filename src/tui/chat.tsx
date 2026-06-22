@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useReducer, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { Box, Text, useApp, useInput, useStdout } from "ink";
@@ -28,17 +28,17 @@ import { createLocalShellToolRegistry, createLocalWorkdirToolRegistry } from "@a
 import {
   activityColor,
   createInputHistory,
-  createInitialWorkbenchState,
   formatBytes,
   formatTranscript,
   helpText,
   parsePendingApprovalCommand,
   parseWorkbenchCommand,
-  workbenchReducer,
   type RenderMode,
   workdirText,
   type WorkbenchMessage,
+  type WorkbenchState,
 } from "./workbench.js";
+import { createWorkbenchEngine, type WorkbenchEngine } from "../workbench/engine.js";
 import {
   deleteProfile,
   formatDeviceUserCode,
@@ -348,15 +348,17 @@ function WorkbenchApp({
   const [renderMode, setRenderMode] = useState<RenderMode>("markdown");
   const [transcriptOffset, setTranscriptOffset] = useState(0);
   const [workbenchPreferences, setWorkbenchPreferences] = useState<WorkbenchPreferences>({});
-  const [state, dispatch] = useReducer(
-    workbenchReducer,
-    {
+  const engineRef = useRef<WorkbenchEngine | null>(null);
+  if (!engineRef.current) {
+    engineRef.current = createWorkbenchEngine({
       accessMode: options.accessMode,
       conversation: options.conversation,
       contextEnabled: Boolean(options.includeLocalContext || options.workdir),
-    },
-    createInitialWorkbenchState,
-  );
+    });
+  }
+  const engine = engineRef.current;
+  const state = useSyncExternalStore(engine.subscribe, engine.snapshot, engine.snapshot);
+  const dispatch = engine.dispatch;
   const terminalRows = Math.max(18, stdout.rows || process.stdout.rows || 32);
   const terminalColumns = Math.max(80, stdout.columns || process.stdout.columns || 100);
   const viewportHeight = Math.max(6, terminalRows - 9);
@@ -1711,7 +1713,7 @@ function nestedString(value: unknown, key: string) {
 
 async function applyLocalToolApproval(
   workdir: WorkdirService,
-  approval: NonNullable<ReturnType<typeof createInitialWorkbenchState>["pendingLocalTool"]>,
+  approval: NonNullable<WorkbenchState["pendingLocalTool"]>,
 ) {
   const workdirRegistry = createLocalWorkdirToolRegistry(workdir.workdir, { accessMode: "full" });
   const shellRegistry = createLocalShellToolRegistry({ workdir: workdir.workdir, accessMode: "full" });
@@ -1740,7 +1742,7 @@ function formatLocalToolApproval(approval: {
   ].filter(Boolean).join("\n");
 }
 
-function pendingLocalLabel(state: ReturnType<typeof createInitialWorkbenchState>) {
+function pendingLocalLabel(state: WorkbenchState) {
   if (state.pendingLocalTool) {
     return `${state.pendingLocalTool.name}${state.pendingLocalTool.action ? `.${state.pendingLocalTool.action}` : ""}`;
   }

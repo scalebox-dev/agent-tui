@@ -16,6 +16,7 @@ import {
   workbenchReducer,
 } from "../dist/tui/workbench.js";
 import { formatPresetList as formatChatPresetList } from "../dist/tui/chat.js";
+import { createWorkbenchEngine } from "../dist/workbench/engine.js";
 import { compareVersions, formatUpdateNotice } from "../dist/update.js";
 
 const execFileAsync = promisify(execFile);
@@ -431,4 +432,24 @@ test("workbench transcript formatter produces readable plain text", () => {
     { id: "2", role: "user", text: "Hello" },
     { id: "3", role: "assistant", text: "Hi there\n" },
   ]), "System:\nReady.\n\nYou:\nHello\n\nAgent:\nHi there\n");
+});
+
+
+test("workbench engine exposes renderer-neutral state snapshots", () => {
+  const engine = createWorkbenchEngine({ contextEnabled: false, accessMode: "off", conversation: "demo" });
+  const seen = [];
+  const unsubscribe = engine.subscribe(() => seen.push(engine.snapshot()));
+
+  assert.equal(engine.snapshot().currentConversation, "demo");
+  assert.equal(engine.snapshot().contextEnabled, false);
+
+  engine.dispatch({ type: "access.set", mode: "approval" });
+  assert.equal(engine.snapshot().accessMode, "approval");
+  assert.equal(engine.snapshot().contextEnabled, true);
+  assert.equal(seen.length, 1);
+
+  unsubscribe();
+  engine.dispatch({ type: "message.add", role: "user", text: "hello" });
+  assert.equal(engine.snapshot().messages.at(-1).text, "hello");
+  assert.equal(seen.length, 1);
 });
