@@ -29,6 +29,12 @@ import {
   defaultTranscriptExportPath,
 } from "../dist/workbench/conversation-controller.js";
 import { createWorkbenchTurnController } from "../dist/workbench/turn-controller.js";
+import {
+  buildTranscriptLines,
+  buildTranscriptViewModel,
+  elapsedDots,
+  spinnerGlyph,
+} from "../dist/workbench/view-model.js";
 import { compareVersions, formatUpdateNotice } from "../dist/update.js";
 
 const execFileAsync = promisify(execFile);
@@ -690,6 +696,60 @@ test("workbench transcript formatter produces readable plain text", () => {
   ]), "System:\nReady.\n\nYou:\nHello\n\nAgent:\nHi there\n");
 });
 
+test("workbench view model renders markdown transcript lines", () => {
+  const lines = buildTranscriptLines([
+    { id: "1", role: "assistant", text: "# Title\n- item\n> quoted" },
+  ], {
+    activeAssistantMessageId: null,
+    busy: false,
+    renderMode: "markdown",
+    spinnerFrame: 0,
+    width: 40,
+  });
+
+  assert.deepEqual(lines.map((line) => line.text), ["Agent", "Title", "• item", "│ quoted", ""]);
+  assert.equal(lines[1].bold, true);
+  assert.equal(lines[1].color, "cyan");
+  assert.equal(lines[3].color, "gray");
+});
+
+test("workbench view model slices transcript viewport and renders waiting state", () => {
+  const view = buildTranscriptViewModel({
+    activeAssistantMessageId: "assistant",
+    busy: true,
+    messages: [
+      { id: "system", role: "system", text: "Ready." },
+      { id: "assistant", role: "assistant", text: "" },
+    ],
+    offset: 0,
+    renderMode: "raw",
+    spinnerFrame: 0,
+    viewportHeight: 3,
+    width: 80,
+  });
+
+  assert.equal(spinnerGlyph(0), "⠋");
+  assert.equal(elapsedDots(0), ".");
+  assert.equal(view.maxOffset, 2);
+  assert.equal(view.offset, 0);
+  assert.deepEqual(view.visibleLines.map((line) => line.text), ["Agent", "⠋ thinking .", ""]);
+
+  const topView = buildTranscriptViewModel({
+    activeAssistantMessageId: "assistant",
+    busy: true,
+    messages: [
+      { id: "system", role: "system", text: "Ready." },
+      { id: "assistant", role: "assistant", text: "" },
+    ],
+    offset: 999,
+    renderMode: "raw",
+    spinnerFrame: 0,
+    viewportHeight: 3,
+    width: 80,
+  });
+  assert.equal(topView.offset, topView.maxOffset);
+  assert.deepEqual(topView.visibleLines.map((line) => line.text), ["System", "Ready.", "Agent"]);
+});
 
 test("workbench engine exposes renderer-neutral state snapshots", () => {
   const engine = createWorkbenchEngine({ contextEnabled: false, accessMode: "off", conversation: "demo" });

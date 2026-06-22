@@ -7,7 +7,6 @@ import {
   createInputHistory,
   type RenderMode,
   type WorkbenchCommand,
-  type WorkbenchMessage,
   type WorkbenchState,
 } from "./workbench.js";
 import { createWorkbenchEngine, type WorkbenchEffect, type WorkbenchEngine, type WorkbenchRuntimeEffect } from "../workbench/engine.js";
@@ -24,6 +23,11 @@ import {
   type WorkbenchSettingsController,
 } from "../workbench/settings-controller.js";
 import { createWorkbenchTurnController, type WorkbenchTurnController } from "../workbench/turn-controller.js";
+import {
+  buildTranscriptViewModel,
+  elapsedDots,
+  spinnerGlyph,
+} from "../workbench/view-model.js";
 
 export function ChatApp({ options }: { options: AgentRunOptions }) {
   return <AuthenticatedChatApp options={options} />;
@@ -359,32 +363,31 @@ function WorkbenchApp({
   const terminalColumns = Math.max(80, stdout.columns || process.stdout.columns || 100);
   const viewportHeight = Math.max(6, terminalRows - 9);
   const transcriptWidth = Math.max(36, Math.floor(terminalColumns * 0.72) - 4);
-  const transcriptLines = useMemo(
+  const transcript = useMemo(
     () =>
-      buildTranscriptLines(state.messages, {
+      buildTranscriptViewModel({
         activeAssistantMessageId: state.activeAssistantMessageId,
         busy: state.busy,
+        messages: state.messages,
+        offset: transcriptOffset,
         renderMode: state.renderMode,
         spinnerFrame,
+        viewportHeight,
         width: transcriptWidth,
       }),
-    [state.activeAssistantMessageId, state.busy, state.messages, state.renderMode, spinnerFrame, transcriptWidth],
+    [state.activeAssistantMessageId, state.busy, state.messages, state.renderMode, spinnerFrame, transcriptOffset, transcriptWidth, viewportHeight],
   );
-  const maxTranscriptOffset = Math.max(0, transcriptLines.length - viewportHeight);
-  const clampedTranscriptOffset = Math.min(transcriptOffset, maxTranscriptOffset);
-  const transcriptStart = Math.max(0, transcriptLines.length - viewportHeight - clampedTranscriptOffset);
-  const visibleTranscriptLines = transcriptLines.slice(transcriptStart, transcriptStart + viewportHeight);
 
   useEffect(() => {
-    setTranscriptOffset((offset) => Math.min(offset, Math.max(0, transcriptLines.length - viewportHeight)));
-  }, [transcriptLines.length, viewportHeight]);
+    setTranscriptOffset((offset) => Math.min(offset, transcript.maxOffset));
+  }, [transcript.maxOffset]);
 
   function scrollTranscript(delta: number) {
-    setTranscriptOffset((offset) => Math.max(0, Math.min(maxTranscriptOffset, offset + delta)));
+    setTranscriptOffset((offset) => Math.max(0, Math.min(transcript.maxOffset, offset + delta)));
   }
 
   function scrollTranscriptToTop() {
-    setTranscriptOffset(maxTranscriptOffset);
+    setTranscriptOffset(transcript.maxOffset);
   }
 
   function scrollTranscriptToBottom() {
@@ -1003,12 +1006,12 @@ function WorkbenchApp({
       />
       <Box marginTop={1} height={viewportHeight}>
         <Box flexDirection="column" width="72%" paddingRight={1}>
-          {visibleTranscriptLines.map((line) => (
+          {transcript.visibleLines.map((line) => (
             <Text bold={line.bold} color={line.color} inverse={line.inverse} key={line.id}>
               {line.text || " "}
             </Text>
           ))}
-          {visibleTranscriptLines.length === 0 && <Text color="gray">No transcript lines.</Text>}
+          {transcript.visibleLines.length === 0 && <Text color="gray">No transcript lines.</Text>}
         </Box>
         <Box flexDirection="column" width="28%" height={viewportHeight} borderStyle="single" borderColor="gray" paddingX={1}>
           <Text bold>Activity</Text>
@@ -1041,7 +1044,7 @@ function WorkbenchApp({
       <Box paddingX={1}>
         <Text color="gray">
           PgUp/PgDn scroll · End live · /export save · /transcript preview
-          {clampedTranscriptOffset > 0 ? ` · ${clampedTranscriptOffset} rows from latest` : " · live"}
+          {transcript.offset > 0 ? ` · ${transcript.offset} rows from latest` : " · live"}
         </Text>
       </Box>
     </Box>
@@ -1128,125 +1131,8 @@ function Header({
   );
 }
 
-type TranscriptLine = {
-  id: string;
-  text: string;
-  color?: string;
-  bold?: boolean;
-  inverse?: boolean;
-};
-
-function buildTranscriptLines(
-  messages: WorkbenchMessage[],
-  options: {
-    activeAssistantMessageId: string | null;
-    busy: boolean;
-    renderMode: RenderMode;
-    spinnerFrame: number;
-    width: number;
-  },
-) {
-  const lines: TranscriptLine[] = [];
-  for (const message of messages) {
-    const waiting = message.role === "assistant" && options.busy && message.id === options.activeAssistantMessageId && !message.text;
-    lines.push({
-      id: `${message.id}:role`,
-      text: roleLabel(message.role),
-      color: roleColor(message.role),
-    });
-    const content = message.text || (waiting ? `${spinnerGlyph(options.spinnerFrame)} thinking ${elapsedDots(options.spinnerFrame)}` : "");
-    const rendered = options.renderMode === "raw"
-      ? rawTranscriptLines(content, options.width)
-      : markdownTranscriptLines(content, options.width);
-    rendered.forEach((line, index) => {
-      lines.push({
-        ...line,
-        id: `${message.id}:line:${index}`,
-      });
-    });
-    if (message.role !== "system") {
-      lines.push({ id: `${message.id}:space`, text: "" });
-    }
-  }
-  return lines;
-}
-
-function rawTranscriptLines(text: string, width: number): Omit<TranscriptLine, "id">[] {
-  const source = text ? text.split(/\r?\n/) : [""];
-  return source.flatMap((line) => wrapTranscriptText(line, width).map((text) => ({ text })));
-}
-
-function markdownTranscriptLines(text: string, width: number): Omit<TranscriptLine, "id">[] {
-  const source = text ? text.split(/\r?\n/) : [""];
-  const lines: Omit<TranscriptLine, "id">[] = [];
-  let inCode = false;
-  for (const sourceLine of source) {
-    if (/^\s*```/.test(sourceLine)) {
-      inCode = !inCode;
-      lines.push(...wrapTranscriptText(sourceLine, width).map((line) => ({ text: line, color: "gray" })));
-      continue;
-    }
-    lines.push(...markdownTranscriptLine(sourceLine, { code: inCode, width }));
-  }
-  return lines;
-}
-
-function markdownTranscriptLine(line: string, options: { code: boolean; width: number }): Omit<TranscriptLine, "id">[] {
-  if (line === "") return [{ text: "" }];
-  if (options.code) return wrapTranscriptText(line, options.width).map((text) => ({ text, color: "gray" }));
-  const heading = /^(#{1,6})\s+(.+)$/.exec(line);
-  if (heading) {
-    const color = heading[1].length <= 2 ? "cyan" : "blue";
-    return wrapTranscriptText(heading[2], options.width).map((text) => ({ text, bold: true, color }));
-  }
-  if (/^\s*---+\s*$/.test(line)) return [{ text: "─".repeat(Math.min(48, options.width)), color: "gray" }];
-  const bullet = /^(\s*)[-*]\s+(.+)$/.exec(line);
-  if (bullet) return wrapTranscriptText(`${bullet[1]}• ${bullet[2]}`, options.width).map((text) => ({ text }));
-  const numbered = /^(\s*)(\d+\.)\s+(.+)$/.exec(line);
-  if (numbered) return wrapTranscriptText(`${numbered[1]}${numbered[2]} ${numbered[3]}`, options.width).map((text) => ({ text }));
-  const quote = /^\s*>\s?(.+)$/.exec(line);
-  if (quote) return wrapTranscriptText(`│ ${quote[1]}`, options.width).map((text) => ({ text, color: "gray" }));
-  return wrapTranscriptText(line, options.width).map((text) => ({ text }));
-}
-
-function wrapTranscriptText(text: string, width: number): string[] {
-  const max = Math.max(12, width);
-  if (text.length === 0) return [""];
-  const lines: string[] = [];
-  let rest = text;
-  while (rest.length > max) {
-    const hard = rest.slice(0, max);
-    const softBreak = Math.max(hard.lastIndexOf(" "), hard.lastIndexOf("\t"));
-    const index = softBreak > Math.floor(max * 0.45) ? softBreak : max;
-    lines.push(rest.slice(0, index).trimEnd());
-    rest = rest.slice(index).trimStart();
-  }
-  lines.push(rest);
-  return lines;
-}
-
-function roleLabel(role: WorkbenchMessage["role"]) {
-  if (role === "user") return "You";
-  if (role === "assistant") return "Agent";
-  return "System";
-}
-
-function roleColor(role: WorkbenchMessage["role"]) {
-  if (role === "user") return "green";
-  if (role === "assistant") return "cyan";
-  return "gray";
-}
-
 function Cursor({ visible }: { visible: boolean }) {
   return visible ? <Text inverse> </Text> : <Text> </Text>;
-}
-
-function spinnerGlyph(frame: number) {
-  return ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"][frame % 10];
-}
-
-function elapsedDots(frame: number) {
-  return ".".repeat((Math.floor(frame / 4) % 3) + 1);
 }
 
 function userFacingError(error: unknown) {
