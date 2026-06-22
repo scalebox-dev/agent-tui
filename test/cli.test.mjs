@@ -23,6 +23,11 @@ import {
   formatPresetList,
   UnknownPresetError,
 } from "../dist/workbench/settings-controller.js";
+import {
+  createConversationName,
+  createWorkbenchConversationController,
+  defaultTranscriptExportPath,
+} from "../dist/workbench/conversation-controller.js";
 import { createWorkbenchTurnController } from "../dist/workbench/turn-controller.js";
 import { compareVersions, formatUpdateNotice } from "../dist/update.js";
 
@@ -601,6 +606,60 @@ test("workbench settings controller reports unknown presets with catalog text", 
   assert.match(
     await controller.presetListText({ profileName: "dev", currentPreset: "pro-search", prefix: "Unknown preset: missing" }),
     /\* pro-search \(current\) - Search preset/,
+  );
+});
+
+test("workbench conversation controller manages handles and transcript export", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-api-cli-conversation-"));
+  const calls = [];
+  const now = () => new Date("2026-06-22T12:34:56.000Z");
+  const controller = createWorkbenchConversationController({
+    dataDir: root,
+    now,
+    async deleteConversationImpl(name, profile) {
+      calls.push(["delete", name, profile]);
+    },
+    async listConversationsImpl(profile) {
+      calls.push(["list", profile]);
+      return [
+        {
+          name: "release",
+          profile: profile || "default",
+          previousResponseId: "resp_test",
+          updatedAt: 4102444800,
+        },
+      ];
+    },
+  });
+
+  assert.deepEqual(await controller.startNewConversation(undefined, "dev"), {
+    name: "thread-20260622-123456",
+    message: 'Started fresh conversation "thread-20260622-123456".',
+  });
+  assert.deepEqual(controller.switchConversation("release"), {
+    name: "release",
+    message: 'Switched to conversation "release". Future turns will continue this handle when history exists.',
+  });
+  assert.match(await controller.listConversations("dev"), /release\tdev\t2100-01-01T00:00:00\.000Z response=resp_test/);
+
+  const exported = await controller.exportTranscript({
+    conversation: "release notes",
+    transcript: "System:\nReady.\n",
+  });
+  assert.equal(exported, join(root, "transcripts", "release-notes-2026-06-22T12-34-56-000Z.txt"));
+  assert.equal(await readFile(exported, "utf8"), "System:\nReady.\n");
+  assert.deepEqual(calls, [
+    ["delete", "thread-20260622-123456", "dev"],
+    ["list", "dev"],
+  ]);
+});
+
+test("workbench conversation naming helpers sanitize generated paths", () => {
+  const now = new Date("2026-06-22T01:02:03.000Z");
+  assert.equal(createConversationName(now), "thread-20260622-010203");
+  assert.equal(
+    defaultTranscriptExportPath("Release Notes!", { dataDir: "/tmp/agent-tui", now: () => now }),
+    "/tmp/agent-tui/transcripts/Release-Notes-2026-06-22T01-02-03-000Z.txt",
   );
 });
 

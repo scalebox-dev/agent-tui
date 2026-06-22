@@ -1,14 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { mkdir, writeFile } from "node:fs/promises";
-import path from "node:path";
 import { Box, Text, useApp, useInput, useStdout } from "ink";
 import { defaultBaseURL } from "../config.js";
-import {
-  conversationSummary,
-  deleteConversation,
-  listConversations,
-  type AgentRunOptions,
-} from "../agent.js";
+import { type AgentRunOptions } from "../agent.js";
 import {
   activityColor,
   createInputHistory,
@@ -19,8 +12,11 @@ import {
 } from "./workbench.js";
 import { createWorkbenchEngine, type WorkbenchEffect, type WorkbenchEngine, type WorkbenchRuntimeEffect } from "../workbench/engine.js";
 import { checkForUpdate, formatUpdateNotice } from "../update.js";
-import { runtime } from "../runtime/index.js";
 import { createWorkbenchAuthController, type WorkbenchAuthController } from "../workbench/auth-controller.js";
+import {
+  createWorkbenchConversationController,
+  type WorkbenchConversationController,
+} from "../workbench/conversation-controller.js";
 import { createWorkbenchLocalController, type WorkbenchLocalController } from "../workbench/local-controller.js";
 import {
   createWorkbenchSettingsController,
@@ -320,6 +316,7 @@ function WorkbenchApp({
   const [spinnerFrame, setSpinnerFrame] = useState(0);
   const [transcriptOffset, setTranscriptOffset] = useState(0);
   const engineRef = useRef<WorkbenchEngine | null>(null);
+  const conversationControllerRef = useRef<WorkbenchConversationController | null>(null);
   const settingsControllerRef = useRef<WorkbenchSettingsController | null>(null);
   if (!engineRef.current) {
     engineRef.current = createWorkbenchEngine({
@@ -334,6 +331,10 @@ function WorkbenchApp({
   if (!settingsControllerRef.current) {
     settingsControllerRef.current = createWorkbenchSettingsController();
   }
+  if (!conversationControllerRef.current) {
+    conversationControllerRef.current = createWorkbenchConversationController();
+  }
+  const conversationController = conversationControllerRef.current;
   const settingsController = settingsControllerRef.current;
   const state = useSyncExternalStore(engine.subscribe, engine.snapshot, engine.snapshot);
   const dispatch = engine.dispatch;
@@ -783,11 +784,7 @@ function WorkbenchApp({
 
   async function exportTranscript(effect: Extract<WorkbenchEffect, { type: "export_transcript" }>) {
     try {
-      const file = effect.path?.trim()
-        ? path.resolve(process.cwd(), effect.path.trim())
-        : defaultTranscriptExportPath(effect.conversation);
-      await mkdir(path.dirname(file), { recursive: true });
-      await writeFile(file, effect.transcript, "utf8");
+      const file = await conversationController.exportTranscript(effect);
       dispatch({ type: "message.add", role: "system", text: `Transcript exported:\n${file}` });
       dispatch({ type: "activity.add", level: "success", text: "Transcript exported" });
     } catch (error) {
@@ -819,36 +816,33 @@ function WorkbenchApp({
   }
 
   async function startNewConversation(name?: string) {
-    const conversation = name || createConversationName();
-    await deleteConversation(conversation, options.profile);
+    const conversation = await conversationController.startNewConversation(name, options.profile);
     dispatch({ type: "messages.clear" });
-    dispatch({ type: "conversation.set", name: conversation });
+    dispatch({ type: "conversation.set", name: conversation.name });
     dispatch({
       type: "message.add",
       role: "system",
-      text: `Started fresh conversation "${conversation}".`,
+      text: conversation.message,
     });
   }
 
   function switchConversation(name: string) {
+    const conversation = conversationController.switchConversation(name);
     dispatch({ type: "messages.clear" });
-    dispatch({ type: "conversation.set", name });
+    dispatch({ type: "conversation.set", name: conversation.name });
     dispatch({
       type: "message.add",
       role: "system",
-      text: `Switched to conversation "${name}". Future turns will continue this handle when history exists.`,
+      text: conversation.message,
     });
   }
 
   async function showConversations() {
     try {
-      const conversations = await listConversations(options.profile);
       dispatch({
         type: "message.add",
         role: "system",
-        text: conversations.length === 0
-          ? "No saved conversations yet."
-          : conversations.map(conversationSummary).join("\n"),
+        text: await conversationController.listConversations(options.profile),
       });
     } catch (error) {
       dispatch({ type: "message.add", role: "system", text: userFacingError(error) });
@@ -1253,17 +1247,6 @@ function spinnerGlyph(frame: number) {
 
 function elapsedDots(frame: number) {
   return ".".repeat((Math.floor(frame / 4) % 3) + 1);
-}
-
-function defaultTranscriptExportPath(conversation: string) {
-  const safeConversation = conversation.replace(/[^a-z0-9._-]+/gi, "-").replace(/^-+|-+$/g, "") || "conversation";
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  return path.join(runtime.dirs.data, "transcripts", `${safeConversation}-${stamp}.txt`);
-}
-
-function createConversationName() {
-  const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..+$/, "").replace("T", "-");
-  return `thread-${stamp}`;
 }
 
 function userFacingError(error: unknown) {
