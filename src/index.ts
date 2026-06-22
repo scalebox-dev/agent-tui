@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 
 import { Command, Option } from "commander";
+import { stat } from "node:fs/promises";
+import { resolve } from "node:path";
 import { render } from "ink";
 import React from "react";
 import { conversationSummary, deleteConversation, getConversation, listConversations, runAgent } from "./agent.js";
@@ -30,16 +32,18 @@ program
   .alias("agentsway")
   .alias("agent-tui")
   .description("First-class command line interface for Agent API")
+  .argument("[workdir]", "local workdir to open and expose to the agent")
   .version(cliVersion)
   .showHelpAfterError()
   .showSuggestionAfterError();
 
-program.action(async () => {
+program.action(async (workdir?: string) => {
+  const launchWorkdir = workdir ? await validateLaunchWorkdir(workdir) : undefined;
   if (!process.stdin.isTTY) {
     program.help();
     return;
   }
-  const options = normalizeChatOptions([], {});
+  const options = normalizeChatOptions([], launchWorkdir ? { workdir: launchWorkdir } : {});
   const app = render(React.createElement(ChatApp, { options }));
   await app.waitUntilExit();
 });
@@ -346,4 +350,18 @@ function optionalNumber(value: string | undefined, label: string) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) throw new Error(`${label} must be a number`);
   return parsed;
+}
+
+async function validateLaunchWorkdir(path: string) {
+  const resolved = resolve(path);
+  let info;
+  try {
+    info = await stat(resolved);
+  } catch {
+    throw new Error(`Workdir does not exist: ${path}`);
+  }
+  if (!info.isDirectory()) {
+    throw new Error(`Workdir is not a directory: ${path}`);
+  }
+  return resolved;
 }

@@ -73,6 +73,17 @@ Launch the first-class TUI from your current directory:
 agent-tui
 ```
 
+Open a specific local workdir and expose local tools to the agent:
+
+```bash
+agent-tui .
+agent-tui ./my-workdir
+agent-tui /absolute/path/to/my-workdir
+```
+
+The workdir argument must point to an existing directory. When provided, the
+workbench automatically turns on local workdir and shell tools in approval mode.
+
 The workbench opens with auth as the first gate. If the active profile is valid,
 it enters the conversation UI automatically. If not, it shows an in-terminal
 auth picker for browser session or API key login.

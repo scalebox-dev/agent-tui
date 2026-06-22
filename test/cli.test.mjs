@@ -86,6 +86,19 @@ test("workdir status inspects a local directory", async () => {
   assert.equal(status.scanTruncated, false);
 });
 
+test("top-level workdir argument must exist before launching TUI", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-api-cli-missing-workdir-"));
+  const missing = join(root, "missing");
+
+  await assert.rejects(
+    execFileAsync("node", [bin, missing]),
+    (error) => {
+      assert.match(error.stderr, /Workdir does not exist/);
+      return true;
+    },
+  );
+});
+
 test("workbench command parser and reducer handle local workflow state", () => {
   assert.deepEqual(parseWorkbenchCommand("/search auth flow"), {
     kind: "search",
