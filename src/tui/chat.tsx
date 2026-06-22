@@ -31,9 +31,8 @@ import {
   formatBytes,
   formatTranscript,
   helpText,
-  parsePendingApprovalCommand,
-  parseWorkbenchCommand,
   type RenderMode,
+  type WorkbenchCommand,
   workdirText,
   type WorkbenchMessage,
   type WorkbenchState,
@@ -332,7 +331,6 @@ function WorkbenchApp({
   const { stdout } = useStdout();
   const workdirRef = useRef<WorkdirService | null>(null);
   const initialPromptSubmittedRef = useRef(false);
-  const pendingApprovalInvalidInputsRef = useRef(0);
   const authRefreshWarningShownRef = useRef(false);
   const textDeltaBufferRef = useRef<{ id: string; text: string } | null>(null);
   const textDeltaFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -579,10 +577,6 @@ function WorkbenchApp({
   }, [options.promptParts, state.busy, state.workdir]);
 
   useEffect(() => {
-    pendingApprovalInvalidInputsRef.current = 0;
-  }, [state.pendingLocalTool?.id]);
-
-  useEffect(() => {
     if (!state.busy) {
       setSpinnerFrame(0);
       return;
@@ -603,48 +597,17 @@ function WorkbenchApp({
   }, []);
 
   async function submit(input: string) {
-    if (state.pendingLocalTool) {
-      const pendingApprovalCommand = parsePendingApprovalCommand(input);
-      if (pendingApprovalCommand) {
-        pendingApprovalInvalidInputsRef.current = 0;
-        await runCommand(pendingApprovalCommand);
-        return;
-      }
-      handleInvalidPendingApprovalInput();
+    const submission = engine.submit(input);
+    if (submission.kind === "command") {
+      await runCommand(submission.command);
       return;
     }
-    const command = parseWorkbenchCommand(input);
-    if (command) {
-      await runCommand(command);
-      return;
+    if (submission.kind === "prompt") {
+      await send(submission.prompt);
     }
-    await send(input);
   }
 
-  function handleInvalidPendingApprovalInput() {
-    pendingApprovalInvalidInputsRef.current += 1;
-    const attempts = pendingApprovalInvalidInputsRef.current;
-    const maxAttempts = 3;
-    if (attempts >= maxAttempts) {
-      dispatch({
-        type: "message.add",
-        role: "system",
-        text: "Local approval aborted after too many invalid inputs. The pending action was not executed.",
-      });
-      dispatch({ type: "activity.add", level: "warning", text: "Local approval aborted" });
-      dispatch({ type: "local_tool.pending.clear" });
-      pendingApprovalInvalidInputsRef.current = 0;
-      return;
-    }
-    dispatch({
-      type: "message.add",
-      role: "system",
-      text: `Local approval is pending. Enter /apply or /yes to execute once, /apply-all or /yes-all to allow future local actions, or /reject or /no to discard. Invalid input ${attempts}/${maxAttempts}.`,
-    });
-    dispatch({ type: "activity.add", level: "warning", text: "Waiting for local approval command" });
-  }
-
-  async function runCommand(command: NonNullable<ReturnType<typeof parseWorkbenchCommand>>) {
+  async function runCommand(command: WorkbenchCommand) {
     switch (command.kind) {
       case "invalid":
         dispatch({
@@ -791,7 +754,7 @@ function WorkbenchApp({
     }
   }
 
-  async function runConfigCommand(command: Extract<NonNullable<ReturnType<typeof parseWorkbenchCommand>>, { kind: "config" }>) {
+  async function runConfigCommand(command: Extract<WorkbenchCommand, { kind: "config" }>) {
     if (!command.field) {
       dispatch({
         type: "message.add",

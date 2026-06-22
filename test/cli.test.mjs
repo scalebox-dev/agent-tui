@@ -453,3 +453,48 @@ test("workbench engine exposes renderer-neutral state snapshots", () => {
   assert.equal(engine.snapshot().messages.at(-1).text, "hello");
   assert.equal(seen.length, 1);
 });
+
+test("workbench engine routes submitted input into prompts and commands", () => {
+  const engine = createWorkbenchEngine({ contextEnabled: false, accessMode: "off" });
+
+  assert.deepEqual(engine.submit("  "), { kind: "handled" });
+  assert.deepEqual(engine.submit("/help"), { kind: "command", command: { kind: "help" } });
+  assert.deepEqual(engine.submit("hello agent"), { kind: "prompt", prompt: "hello agent" });
+});
+
+test("workbench engine owns pending local approval input policy", () => {
+  const engine = createWorkbenchEngine({ contextEnabled: true, accessMode: "approval" });
+  engine.dispatch({
+    type: "local_tool.pending.set",
+    approval: {
+      name: "local_workdir",
+      action: "write",
+      arguments: { action: "write", path: "notes.txt", content: "hello\n" },
+      callID: "call_local",
+      responseID: "resp_local",
+    },
+  });
+
+  assert.deepEqual(engine.submit("approve"), { kind: "handled" });
+  assert.match(engine.snapshot().messages.at(-1).text, /Invalid input 1\/3/);
+  assert.equal(engine.snapshot().pendingLocalTool?.name, "local_workdir");
+
+  assert.deepEqual(engine.submit("/apply"), { kind: "command", command: { kind: "apply" } });
+
+  engine.dispatch({
+    type: "local_tool.pending.set",
+    approval: {
+      name: "local_workdir",
+      action: "write",
+      arguments: { action: "write", path: "notes.txt", content: "hello\n" },
+      callID: "call_local",
+      responseID: "resp_local",
+    },
+  });
+  engine.submit("bad one");
+  engine.submit("bad two");
+  engine.submit("bad three");
+
+  assert.equal(engine.snapshot().pendingLocalTool, null);
+  assert.match(engine.snapshot().messages.at(-1).text, /aborted after too many invalid inputs/);
+});
