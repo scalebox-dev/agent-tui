@@ -16,6 +16,7 @@ import {
   workbenchReducer,
 } from "../dist/tui/workbench.js";
 import { authStatusText, createWorkbenchAuthController } from "../dist/workbench/auth-controller.js";
+import { createWorkbenchAuthGateController } from "../dist/workbench/auth-gate-controller.js";
 import { createWorkbenchEngine } from "../dist/workbench/engine.js";
 import { createWorkbenchLocalController } from "../dist/workbench/local-controller.js";
 import {
@@ -214,6 +215,89 @@ test("auth status text falls back to account availability", () => {
     }),
     /Account: available/,
   );
+});
+
+test("workbench auth gate controller handles selection and API key login", async () => {
+  const calls = [];
+  const controller = createWorkbenchAuthGateController({
+    authController: {
+      async check() {
+        return { profileName: "default", refreshed: false };
+      },
+      async loginAPIKey(input) {
+        calls.push(["api", input.profile, input.baseURL, input.apiKey]);
+        return { profileName: input.profile };
+      },
+      async loginBrowser() {
+        throw new Error("not used");
+      },
+      async deleteProfile() {},
+      async statusText() {
+        return "";
+      },
+      async refresh() {
+        return { refreshed: false };
+      },
+    },
+  });
+
+  let state = controller.initialState({ profile: "dev", baseURL: "https://api.test" });
+  assert.equal(state.status, "checking");
+  state = controller.requestLogin(state, "dev");
+  assert.equal(state.status, "select");
+  state = controller.handleInput("", { downArrow: true }, state).state;
+  assert.equal(state.selectedMethod, 1);
+  state = controller.handleInput("", { return: true }, state).state;
+  assert.equal(state.status, "api_profile");
+  state = (await controller.submit(state)).state;
+  assert.equal(state.status, "api_base_url");
+  state = (await controller.submit(state)).state;
+  assert.equal(state.status, "api_key");
+  state = controller.handleInput("s", {}, state).state;
+  state = controller.handleInput("k", {}, state).state;
+  const result = await controller.submit(state);
+
+  assert.equal(result.profileName, "dev");
+  assert.equal(result.state.status, "ready");
+  assert.deepEqual(calls, [["api", "dev", "https://api.test", "sk"]]);
+});
+
+test("workbench auth gate controller reports browser challenge states", async () => {
+  const controller = createWorkbenchAuthGateController({
+    authController: {
+      async check() {
+        return { profileName: "default", refreshed: false };
+      },
+      async loginAPIKey() {
+        throw new Error("not used");
+      },
+      async loginBrowser(input) {
+        input.onChallenge?.({ url: "https://login.test", code: "ABCD-1234" });
+        input.onStatus?.("approved");
+        return { profileName: input.profile };
+      },
+      async deleteProfile() {},
+      async statusText() {
+        return "";
+      },
+      async refresh() {
+        return { refreshed: false };
+      },
+    },
+  });
+  const states = [];
+  let state = controller.requestLogin(controller.initialState({ profile: "dev", baseURL: "https://api.test" }), "dev");
+  state = controller.handleInput("", { return: true }, state).state;
+  assert.equal(state.status, "browser_profile");
+  state = (await controller.submit(state)).state;
+  assert.equal(state.status, "browser_base_url");
+  const result = await controller.submit(state, { onState: (next) => states.push(next) });
+
+  assert.equal(result.profileName, "dev");
+  assert.equal(result.state.status, "ready");
+  assert.equal(states[0].status, "browser_waiting");
+  assert.equal(states[1].browserURL, "https://login.test");
+  assert.equal(states[2].message, "Browser auth status: approved");
 });
 
 test("top-level workdir argument must exist before launching TUI", async () => {

@@ -12,6 +12,12 @@ import { createWorkbenchEngine, type WorkbenchEffect, type WorkbenchEngine, type
 import { checkForUpdate, formatUpdateNotice } from "../update.js";
 import { createWorkbenchAuthController, type WorkbenchAuthController } from "../workbench/auth-controller.js";
 import {
+  authMethods,
+  createWorkbenchAuthGateController,
+  type AuthGateState,
+  type WorkbenchAuthGateController,
+} from "../workbench/auth-gate-controller.js";
+import {
   createWorkbenchConversationController,
   type WorkbenchConversationController,
 } from "../workbench/conversation-controller.js";
@@ -33,210 +39,63 @@ export function ChatApp({ options }: { options: AgentRunOptions }) {
   return <AuthenticatedChatApp options={options} />;
 }
 
-type AuthMethod = "browser" | "api_key" | "exit";
-
-type AuthGateState = {
-  status: "checking" | "select" | "api_profile" | "api_base_url" | "api_key" | "browser_profile" | "browser_base_url" | "browser_waiting" | "ready";
-  selectedMethod: number;
-  profile: string;
-  baseURL: string;
-  apiKey: string;
-  message: string;
-  error: string;
-  browserURL: string;
-  browserCode: string;
-};
-
-const authMethods: Array<{ method: AuthMethod; label: string; description: string }> = [
-  { method: "browser", label: "Browser session", description: "Interactive login with refreshable local session." },
-  { method: "api_key", label: "API key", description: "Paste a static API key for shell-only environments." },
-  { method: "exit", label: "Exit", description: "Leave without signing in." },
-];
-
 function AuthenticatedChatApp({ options }: { options: AgentRunOptions }) {
   const app = useApp();
   const busyRef = useRef(false);
   const authControllerRef = useRef<WorkbenchAuthController | null>(null);
+  const authGateControllerRef = useRef<WorkbenchAuthGateController | null>(null);
   if (!authControllerRef.current) {
     authControllerRef.current = createWorkbenchAuthController();
   }
   const authController = authControllerRef.current;
+  if (!authGateControllerRef.current) {
+    authGateControllerRef.current = createWorkbenchAuthGateController({ authController });
+  }
+  const authGateController = authGateControllerRef.current;
   const [currentProfile, setCurrentProfile] = useState(options.profile || "default");
-  const [auth, setAuth] = useState<AuthGateState>({
-    status: "checking",
-    selectedMethod: 0,
-    profile: options.profile || "default",
-    baseURL: process.env.AGENT_API_BASE_URL || defaultBaseURL,
+  const [auth, setAuth] = useState<AuthGateState>(() => authGateController.initialState({
     apiKey: process.env.AGENT_API_KEY || "",
-    message: "Checking local auth profile...",
-    error: "",
-    browserURL: "",
-    browserCode: "",
-  });
+    baseURL: process.env.AGENT_API_BASE_URL || defaultBaseURL,
+    profile: options.profile || "default",
+  }));
 
   useEffect(() => {
     let mounted = true;
-    authController.check(options.profile)
+    authGateController.check(options.profile)
       .then((result) => {
         if (!mounted) return;
-        setCurrentProfile(result.profileName);
-        setAuth((current) => ({ ...current, status: "ready", message: "Authenticated.", error: "" }));
-      })
-      .catch((error) => {
-        if (!mounted) return;
-        setAuth((current) => ({
-          ...current,
-          status: "select",
-          message: "Choose an auth method to continue into the workbench.",
-          error: userFacingError(error),
-        }));
+        if (result.profileName) setCurrentProfile(result.profileName);
+        setAuth(result.state);
       });
     return () => {
       mounted = false;
     };
-  }, [authController, options.profile]);
+  }, [authGateController, options.profile]);
 
   useInput((input, key) => {
-    if (key.ctrl && input === "c") {
-      app.exit();
-      return;
-    }
-    if (auth.status === "ready" || auth.status === "checking" || auth.status === "browser_waiting") return;
-    if (auth.status === "select") {
-      if (key.upArrow) {
-        setAuth((current) => ({ ...current, selectedMethod: Math.max(0, current.selectedMethod - 1) }));
-        return;
-      }
-      if (key.downArrow) {
-        setAuth((current) => ({ ...current, selectedMethod: Math.min(authMethods.length - 1, current.selectedMethod + 1) }));
-        return;
-      }
-      if (key.return) {
-        const method = authMethods[auth.selectedMethod]?.method;
-        if (method === "exit") {
+    const result = authGateController.handleInput(input, key, auth);
+    if (result.state !== auth) setAuth(result.state);
+    for (const effect of result.effects) {
+      switch (effect.type) {
+        case "exit":
           app.exit();
-          return;
-        }
-        setAuth((current) => ({
-          ...current,
-          status: method === "api_key" ? "api_profile" : "browser_profile",
-          message: method === "api_key" ? "Save an API key profile." : "Create a browser session profile.",
-          error: "",
-        }));
-        return;
+          break;
+        case "submit":
+          void submitAuthField();
+          break;
       }
-      return;
-    }
-
-    if (key.return) {
-      void submitAuthField();
-      return;
-    }
-    if (key.backspace || key.delete) {
-      editAuthField((value) => value.slice(0, -1));
-      return;
-    }
-    if (input && !key.ctrl && !key.meta) {
-      editAuthField((value) => value + input);
     }
   });
 
-  function editAuthField(update: (value: string) => string) {
-    setAuth((current) => {
-      switch (current.status) {
-        case "api_profile":
-        case "browser_profile":
-          return { ...current, profile: update(current.profile), error: "" };
-        case "api_base_url":
-        case "browser_base_url":
-          return { ...current, baseURL: update(current.baseURL), error: "" };
-        case "api_key":
-          return { ...current, apiKey: update(current.apiKey), error: "" };
-        default:
-          return current;
-      }
-    });
-  }
-
   async function submitAuthField() {
     if (busyRef.current) return;
-    const profile = auth.profile.trim() || "default";
-    const baseURL = auth.baseURL.trim() || defaultBaseURL;
-    switch (auth.status) {
-      case "api_profile":
-        setAuth((current) => ({ ...current, profile, status: "api_base_url", error: "" }));
-        return;
-      case "api_base_url":
-        setAuth((current) => ({ ...current, baseURL, status: "api_key", error: "" }));
-        return;
-      case "api_key": {
-        const apiKey = auth.apiKey.trim();
-        if (!apiKey) {
-          setAuth((current) => ({ ...current, error: "API key is required." }));
-          return;
-        }
-        busyRef.current = true;
-        setAuth((current) => ({ ...current, message: "Saving API key profile...", error: "" }));
-        try {
-          const saved = await authController.loginAPIKey({ profile, baseURL, apiKey });
-          setCurrentProfile(saved.profileName);
-          setAuth((current) => ({ ...current, status: "ready", message: `Signed in as profile "${profile}".`, error: "" }));
-        } catch (error) {
-          setAuth((current) => ({ ...current, error: userFacingError(error) }));
-        } finally {
-          busyRef.current = false;
-        }
-        return;
-      }
-      case "browser_profile":
-        setAuth((current) => ({ ...current, profile, status: "browser_base_url", error: "" }));
-        return;
-      case "browser_base_url":
-        await runBrowserLogin(profile, baseURL);
-        return;
-      default:
-        return;
-    }
-  }
-
-  async function runBrowserLogin(profile: string, baseURL: string) {
-    if (busyRef.current) return;
     busyRef.current = true;
-    setAuth((current) => ({
-      ...current,
-      profile,
-      baseURL,
-      status: "browser_waiting",
-      message: "Starting browser auth challenge...",
-      error: "",
-      browserURL: "",
-      browserCode: "",
-    }));
     try {
-      const saved = await authController.loginBrowser({
-        profile,
-        baseURL,
-        onChallenge(challenge) {
-          setAuth((current) => ({
-            ...current,
-            message: "Open the URL to approve this terminal session.",
-            browserURL: challenge.url,
-            browserCode: challenge.code,
-          }));
-        },
-        onStatus(status) {
-          setAuth((current) => ({ ...current, message: `Browser auth status: ${status}` }));
-        },
+      const result = await authGateController.submit(auth, {
+        onState: setAuth,
       });
-      setCurrentProfile(saved.profileName);
-      setAuth((current) => ({ ...current, status: "ready", message: `Signed in as profile "${profile}".`, error: "" }));
-    } catch (error) {
-      setAuth((current) => ({
-        ...current,
-        status: "select",
-        message: "Browser auth did not complete. Choose an auth method to continue.",
-        error: userFacingError(error),
-      }));
+      if (result.profileName) setCurrentProfile(result.profileName);
+      setAuth(result.state);
     } finally {
       busyRef.current = false;
     }
@@ -246,40 +105,17 @@ function AuthenticatedChatApp({ options }: { options: AgentRunOptions }) {
     return (
       <WorkbenchApp
         onLogin={() => {
-          setAuth((current) => ({
-            ...current,
-            profile: currentProfile,
-            status: "select",
-            message: "Choose an auth method to continue into the workbench.",
-            error: "",
-          }));
+          setAuth((current) => authGateController.requestLogin(current, currentProfile));
         }}
         onLogout={() => {
-          setAuth((current) => ({
-            ...current,
-            profile: currentProfile,
-            status: "select",
-            message: `Logged out of profile "${currentProfile}" for this app session. Choose an auth method to continue.`,
-            error: "",
-          }));
+          setAuth((current) => authGateController.requestLogout(current, currentProfile));
         }}
         onDeleteProfile={async () => {
           await authController.deleteProfile(currentProfile);
-          setAuth((current) => ({
-            ...current,
-            status: "select",
-            message: `Deleted profile "${currentProfile}". Choose an auth method to continue.`,
-            error: "",
-          }));
+          setAuth((current) => authGateController.deletedProfile(current, currentProfile));
         }}
         onSwitchProfile={(name) => {
-          setAuth((current) => ({
-            ...current,
-            profile: name || currentProfile,
-            status: "select",
-            message: name ? `Choose an auth method for profile "${name}".` : "Choose an auth method for another profile.",
-            error: "",
-          }));
+          setAuth((current) => authGateController.requestSwitchProfile(current, currentProfile, name));
         }}
         options={{ ...options, profile: currentProfile }}
         profileName={currentProfile}
