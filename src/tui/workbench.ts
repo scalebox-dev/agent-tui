@@ -50,6 +50,8 @@ export interface InputHistory {
   values(): string[];
 }
 
+export type RenderMode = "markdown" | "raw";
+
 export type WorkbenchAction =
   | { type: "message.add"; role: WorkbenchRole; text: string; id?: string }
   | { type: "message.append"; id: string; delta: string }
@@ -77,6 +79,7 @@ export type WorkbenchCommand =
   | { kind: "switch_profile"; name?: string }
   | { kind: "auth_status" }
   | { kind: "config"; field?: "preset"; value?: string }
+  | { kind: "render"; mode?: RenderMode }
   | { kind: "context"; enabled?: boolean }
   | { kind: "workdir"; enabled?: boolean }
   | { kind: "access"; mode?: WorkdirAccessMode }
@@ -278,6 +281,13 @@ export function parseWorkbenchCommand(input: string): WorkbenchCommand | null {
       }
       return { kind: "invalid", command: `${name} ${field}` };
     }
+    case "render":
+    case "display":
+    case "view": {
+      const mode = rest[0];
+      if (mode === "raw" || mode === "markdown") return { kind: "render", mode };
+      return { kind: "render" };
+    }
     case "context":
       return { kind: "context", enabled: parseOnOff(rest[0]) };
     case "access": {
@@ -358,6 +368,7 @@ export function helpText() {
     "/switch-profile  switch/sign in with a different profile",
     "/delete-profile  delete current saved profile and return to auth",
     "/config          show current run configuration and saved defaults",
+    "/render [mode]   show or set output rendering: markdown or raw",
     "/config preset   save default preset; use none/off for no preset, reset for built-in",
     "/preset [name]   show or set preset; use none/off to clear",
     "/model [name]    show or set explicit model; use auto/none/off to clear",

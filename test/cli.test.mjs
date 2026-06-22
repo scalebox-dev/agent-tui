@@ -130,6 +130,9 @@ test("workbench command parser and reducer handle local workflow state", () => {
   assert.deepEqual(parseWorkbenchCommand("/config preset pro-search"), { kind: "config", field: "preset", value: "pro-search" });
   assert.deepEqual(parseWorkbenchCommand("/config preset none"), { kind: "config", field: "preset", value: "none" });
   assert.deepEqual(parseWorkbenchCommand("/config nope"), { kind: "invalid", command: "config nope" });
+  assert.deepEqual(parseWorkbenchCommand("/render"), { kind: "render" });
+  assert.deepEqual(parseWorkbenchCommand("/render raw"), { kind: "render", mode: "raw" });
+  assert.deepEqual(parseWorkbenchCommand("/render markdown"), { kind: "render", mode: "markdown" });
   assert.deepEqual(parseWorkbenchCommand("/access"), { kind: "access" });
   assert.deepEqual(parseWorkbenchCommand("/access off"), { kind: "access", mode: "off" });
   assert.deepEqual(parseWorkbenchCommand("/access full"), { kind: "access", mode: "full" });

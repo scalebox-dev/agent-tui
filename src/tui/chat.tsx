@@ -32,6 +32,7 @@ import {
   parsePendingApprovalCommand,
   parseWorkbenchCommand,
   workbenchReducer,
+  type RenderMode,
   workdirText,
   type WorkbenchMessage,
 } from "./workbench.js";
@@ -339,6 +340,7 @@ function WorkbenchApp({
   const [spinnerFrame, setSpinnerFrame] = useState(0);
   const [runPreset, setRunPreset] = useState(options.preset);
   const [runModel, setRunModel] = useState(options.model);
+  const [renderMode, setRenderMode] = useState<RenderMode>("markdown");
   const [workbenchPreferences, setWorkbenchPreferences] = useState<WorkbenchPreferences>({});
   const [state, dispatch] = useReducer(
     workbenchReducer,
@@ -629,6 +631,15 @@ function WorkbenchApp({
       case "config":
         await runConfigCommand(command);
         return;
+      case "render":
+        if (!command.mode) {
+          dispatch({ type: "message.add", role: "system", text: `Render mode: ${renderMode}. Use /render markdown or /render raw.` });
+          return;
+        }
+        setRenderMode(command.mode);
+        dispatch({ type: "activity.add", level: "success", text: `Render mode: ${command.mode}` });
+        dispatch({ type: "message.add", role: "system", text: `Render mode set to ${command.mode}.` });
+        return;
       case "context":
         dispatch({ type: "context.set", enabled: command.enabled ?? !state.contextEnabled });
         return;
@@ -726,6 +737,7 @@ function WorkbenchApp({
           accessMode: state.accessMode,
           contextEnabled: state.contextEnabled,
           defaultPreset: workbenchPreferences.defaultPreset,
+          renderMode,
         }),
       });
       return;
@@ -1238,6 +1250,7 @@ function WorkbenchApp({
         pendingLocalLabel={pendingLocalLabel(state)}
         preset={runPreset || "none"}
         profile={profileName}
+        renderMode={renderMode}
         workdir={state.workdir?.root || options.workdir || process.cwd()}
       />
       <Box marginTop={1}>
@@ -1248,6 +1261,7 @@ function WorkbenchApp({
               busy={state.busy}
               key={message.id}
               message={message}
+              renderMode={renderMode}
               spinnerFrame={spinnerFrame}
             />
           ))}
@@ -1281,7 +1295,7 @@ function WorkbenchApp({
         )}
       </Box>
       <Box paddingX={1}>
-        <Text color="gray">/help /auth /login /logout /switch-profile /delete-profile /config /preset /model /access /context /quit</Text>
+        <Text color="gray">/help /auth /login /logout /switch-profile /delete-profile /config /render /preset /model /access /context /quit</Text>
       </Box>
     </Box>
   );
@@ -1341,6 +1355,7 @@ function Header({
   pendingLocalLabel,
   preset,
   profile,
+  renderMode,
   workdir,
 }: {
   contextEnabled: boolean;
@@ -1350,6 +1365,7 @@ function Header({
   pendingLocalLabel: string;
   preset: string;
   profile: string;
+  renderMode: RenderMode;
   workdir: string;
 }) {
   return (
@@ -1359,7 +1375,7 @@ function Header({
         profile={profile} conversation={conversation} preset={preset} model={model}
       </Text>
       <Text color="gray">
-        workdir={workdir} access={accessMode} local_tools={contextEnabled ? "on" : "off"} pending={pendingLocalLabel}
+        workdir={workdir} access={accessMode} local_tools={contextEnabled ? "on" : "off"} render={renderMode} pending={pendingLocalLabel}
       </Text>
     </Box>
   );
@@ -1369,22 +1385,63 @@ function MessageBlock({
   active,
   busy,
   message,
+  renderMode,
   spinnerFrame,
 }: {
   active: boolean;
   busy: boolean;
   message: WorkbenchMessage;
+  renderMode: RenderMode;
   spinnerFrame: number;
 }) {
   const waiting = message.role === "assistant" && busy && active && !message.text;
   return (
     <Box flexDirection="column" marginBottom={message.role === "system" ? 0 : 1}>
       <Text color={roleColor(message.role)}>{roleLabel(message.role)}</Text>
-      <Text>
-        {message.text || (waiting ? `${spinnerGlyph(spinnerFrame)} thinking ${elapsedDots(spinnerFrame)}` : "")}
-      </Text>
+      {message.text
+        ? <MessageText mode={renderMode} text={message.text} />
+        : <Text>{waiting ? `${spinnerGlyph(spinnerFrame)} thinking ${elapsedDots(spinnerFrame)}` : ""}</Text>}
     </Box>
   );
+}
+
+function MessageText({ mode, text }: { mode: RenderMode; text: string }) {
+  if (mode === "raw") return <Text>{text}</Text>;
+  return <MarkdownText text={text} />;
+}
+
+function MarkdownText({ text }: { text: string }) {
+  const lines = text.split(/\r?\n/);
+  let inCode = false;
+  return (
+    <Box flexDirection="column">
+      {lines.map((line, index) => {
+        if (/^\s*```/.test(line)) {
+          inCode = !inCode;
+          return <Text color="gray" key={index}>{line}</Text>;
+        }
+        return <MarkdownLine code={inCode} key={index} line={line} />;
+      })}
+    </Box>
+  );
+}
+
+function MarkdownLine({ code, line }: { code: boolean; line: string }) {
+  if (line === "") return <Text> </Text>;
+  if (code) return <Text color="gray">{line}</Text>;
+  const heading = /^(#{1,6})\s+(.+)$/.exec(line);
+  if (heading) {
+    const color = heading[1].length <= 2 ? "cyan" : "blue";
+    return <Text bold color={color}>{heading[2]}</Text>;
+  }
+  if (/^\s*---+\s*$/.test(line)) return <Text color="gray">{"─".repeat(48)}</Text>;
+  const bullet = /^(\s*)[-*]\s+(.+)$/.exec(line);
+  if (bullet) return <Text><Text color="gray">{bullet[1]}• </Text>{bullet[2]}</Text>;
+  const numbered = /^(\s*)(\d+\.)\s+(.+)$/.exec(line);
+  if (numbered) return <Text><Text color="gray">{numbered[1]}{numbered[2]} </Text>{numbered[3]}</Text>;
+  const quote = /^\s*>\s?(.+)$/.exec(line);
+  if (quote) return <Text color="gray">│ {quote[1]}</Text>;
+  return <Text>{line}</Text>;
 }
 
 function roleLabel(role: WorkbenchMessage["role"]) {
@@ -1439,6 +1496,7 @@ function runConfigText({
   profileName,
   runModel,
   runPreset,
+  renderMode,
 }: {
   accessMode: string;
   contextEnabled: boolean;
@@ -1446,12 +1504,14 @@ function runConfigText({
   profileName: string;
   runModel?: string;
   runPreset?: string;
+  renderMode: RenderMode;
 }) {
   return [
     `Profile: ${profileName}`,
     `Preset: ${runPreset || "none"}`,
     `Default preset: ${formatDefaultPreset(defaultPreset)}`,
     `Model: ${runModel || "auto"}`,
+    `Render mode: ${renderMode}`,
     `local_workdir tool: ${contextEnabled ? "on" : "off"}`,
     `local_shell tool: ${contextEnabled ? "on" : "off"}`,
     `Local access: ${accessMode}`,
