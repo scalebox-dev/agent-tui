@@ -173,7 +173,7 @@ test("app engine package is importable through package exports", async () => {
   const rootExport = await execFileAsync("node", [
     "--input-type=module",
     "-e",
-    "import * as appEngine from '@agent-api/app-engine'; console.log(Object.keys(appEngine).length);",
+    "import * as appEngine from '@agent-api/app-engine'; console.log(String(Object.keys(appEngine).length));",
   ], { cwd: root });
   const subpathExports = await execFileAsync("node", [
     "--input-type=module",
