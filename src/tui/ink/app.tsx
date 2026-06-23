@@ -36,6 +36,7 @@ function AuthenticatedChatApp({ options }: { options: AgentRunOptions }) {
   }
   const authGateController = authGateControllerRef.current;
   const [currentProfile, setCurrentProfile] = useState(options.profile || "default");
+  const [authCursorVisible, setAuthCursorVisible] = useState(true);
   const [auth, setAuth] = useState<AuthGateState>(() => authGateController.initialState({
     apiKey: process.env.AGENT_API_KEY || "",
     baseURL: process.env.AGENT_API_BASE_URL || defaultBaseURL,
@@ -54,6 +55,17 @@ function AuthenticatedChatApp({ options }: { options: AgentRunOptions }) {
       mounted = false;
     };
   }, [authGateController, options.profile]);
+
+  useEffect(() => {
+    if (!isAuthInputStatus(auth.status)) {
+      setAuthCursorVisible(true);
+      return;
+    }
+    const interval = setInterval(() => {
+      setAuthCursorVisible((visible) => !visible);
+    }, 500);
+    return () => clearInterval(interval);
+  }, [auth.status]);
 
   useInput((input, key) => {
     const result = authGateController.handleInput(input, key, auth);
@@ -107,7 +119,15 @@ function AuthenticatedChatApp({ options }: { options: AgentRunOptions }) {
     );
   }
 
-  return <InkAuthGate state={auth} />;
+  return <InkAuthGate cursorVisible={authCursorVisible} state={auth} />;
+}
+
+function isAuthInputStatus(status: AuthGateState["status"]) {
+  return status === "api_profile"
+    || status === "api_base_url"
+    || status === "api_key"
+    || status === "browser_profile"
+    || status === "browser_base_url";
 }
 
 function WorkbenchApp({

@@ -71,7 +71,7 @@ export function InkWorkbenchScreen({
   );
 }
 
-export function InkAuthGate({ state }: { state: AuthGateState }) {
+export function InkAuthGate({ cursorVisible, state }: { cursorVisible: boolean; state: AuthGateState }) {
   return (
     <Box flexDirection="column">
       <Box borderStyle="round" borderColor="cyan" paddingX={1} flexDirection="column">
@@ -91,11 +91,11 @@ export function InkAuthGate({ state }: { state: AuthGateState }) {
             <Text color="gray">Use ↑/↓ and Enter.</Text>
           </Box>
         )}
-        {state.status === "api_profile" && <AuthPrompt label="Profile" value={state.profile} />}
-        {state.status === "api_base_url" && <AuthPrompt label="Base URL" value={state.baseURL} />}
-        {state.status === "api_key" && <AuthPrompt label="API key" value={state.apiKey ? "•".repeat(Math.min(state.apiKey.length, 32)) : ""} />}
-        {state.status === "browser_profile" && <AuthPrompt label="Profile" value={state.profile} />}
-        {state.status === "browser_base_url" && <AuthPrompt label="Base URL" value={state.baseURL} />}
+        {state.status === "api_profile" && <AuthPrompt cursorVisible={cursorVisible} label="Profile" value={state.profile} />}
+        {state.status === "api_base_url" && <AuthPrompt cursorVisible={cursorVisible} label="Base URL" value={state.baseURL} />}
+        {state.status === "api_key" && <AuthPrompt cursorVisible={cursorVisible} label="API key" value={state.apiKey ? "•".repeat(Math.min(state.apiKey.length, 32)) : ""} />}
+        {state.status === "browser_profile" && <AuthPrompt cursorVisible={cursorVisible} label="Profile" value={state.profile} />}
+        {state.status === "browser_base_url" && <AuthPrompt cursorVisible={cursorVisible} label="Base URL" value={state.baseURL} />}
         {state.status === "browser_waiting" && (
           <Box flexDirection="column" marginTop={1}>
             {state.browserURL && <Text>URL: {state.browserURL}</Text>}
@@ -108,11 +108,14 @@ export function InkAuthGate({ state }: { state: AuthGateState }) {
   );
 }
 
-function AuthPrompt({ label, value }: { label: string; value: string }) {
+function AuthPrompt({ cursorVisible, label, value }: { cursorVisible: boolean; label: string; value: string }) {
   return (
     <Box borderStyle="single" borderColor="green" paddingX={1} marginTop={1}>
       <Text color="green">{label}: </Text>
-      <Text>{value}</Text>
+      <Text>
+        {value}
+        <Cursor visible={cursorVisible} />
+      </Text>
     </Box>
   );
 }
