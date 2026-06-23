@@ -53,7 +53,7 @@ export interface BuildWorkbenchRenderModelInput {
 export function buildWorkbenchRenderModel(input: BuildWorkbenchRenderModelInput): WorkbenchRenderModel {
   const terminalRows = Math.max(18, input.viewport.rows || 32);
   const terminalColumns = Math.max(80, input.viewport.columns || 100);
-  const viewportHeight = Math.max(6, terminalRows - 9);
+  const viewportHeight = Math.max(6, terminalRows - 11);
   const activityHeight = viewportHeight;
   const transcriptWidth = Math.max(36, Math.floor(terminalColumns * 0.72) - 4);
   const transcript = buildTranscriptViewModel({

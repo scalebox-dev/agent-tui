@@ -243,7 +243,7 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
 
   async function showSummary() {
     if (!options.localController.isLoaded()) {
-      dispatch({ type: "message.add", role: "system", text: "Workdir is still loading." });
+      dispatch({ type: "message.add", role: "system", text: unavailableWorkdirText() });
       return;
     }
     dispatch({ type: "activity.add", text: "Summarizing workdir" });
@@ -303,7 +303,7 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
       return;
     }
     if (!options.localController.isLoaded()) {
-      dispatch({ type: "message.add", role: "system", text: "Workdir is still loading." });
+      dispatch({ type: "message.add", role: "system", text: unavailableWorkdirText() });
       return;
     }
     dispatch({ type: "activity.add", text: `Searching workdir: ${query}` });
@@ -340,7 +340,7 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
   async function applyPendingEdit(allowFutureLocalActions: boolean) {
     const state = options.engine.snapshot();
     if (!options.localController.isLoaded()) {
-      dispatch({ type: "message.add", role: "system", text: "Workdir is still loading." });
+      dispatch({ type: "message.add", role: "system", text: unavailableWorkdirText() });
       return;
     }
     if (state.pendingLocalTool) {
@@ -395,6 +395,14 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
       return;
     }
     dispatch({ type: "message.add", role: "system", text: "No pending local action." });
+  }
+
+  function unavailableWorkdirText() {
+    const state = options.engine.snapshot();
+    if (!state.contextEnabled || state.accessMode === "off") {
+      return "Local workdir tools are off. Use /workdir on, /access approval, or /access full to load and expose the current workdir.";
+    }
+    return "Workdir is still loading.";
   }
 }
 

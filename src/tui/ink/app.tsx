@@ -221,6 +221,7 @@ function WorkbenchApp({
   }, [dispatch, lifecycleController, options.modelExplicit, options.preset, options.presetExplicit, settingsController]);
 
   useEffect(() => {
+    if (!state.contextEnabled || state.workdir) return;
     let mounted = true;
     dispatch({ type: "activity.add", text: "Loading workdir" });
     localController.load(options.workdir || process.cwd())
@@ -242,7 +243,7 @@ function WorkbenchApp({
     return () => {
       mounted = false;
     };
-  }, [dispatch, localController, options.workdir]);
+  }, [dispatch, localController, options.workdir, state.contextEnabled, state.workdir]);
 
   useEffect(() => {
     let mounted = true;
@@ -298,10 +299,11 @@ function WorkbenchApp({
     const initialPrompt = lifecycleController.initialPrompt({
       busy: state.busy,
       promptParts: options.promptParts,
+      requiresWorkdir: state.contextEnabled,
       workdir: state.workdir,
     });
     if (initialPrompt) void turnController.startPrompt(initialPrompt);
-  }, [lifecycleController, options.promptParts, state.busy, state.workdir, turnController]);
+  }, [lifecycleController, options.promptParts, state.busy, state.contextEnabled, state.workdir, turnController]);
 
   useEffect(() => {
     if (!state.busy) {

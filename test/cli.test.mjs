@@ -750,7 +750,7 @@ test("workbench lifecycle controller maps auth refresh and failure", async () =>
   assert.deepEqual(await controller.refreshAuth("dev"), []);
 });
 
-test("workbench lifecycle controller starts initial prompt once after workdir load", () => {
+test("workbench lifecycle controller starts initial prompt immediately unless workdir is required", () => {
   const controller = createWorkbenchLifecycleController({
     authController: {
       async check() { return { profileName: "default", refreshed: false }; },
@@ -763,9 +763,26 @@ test("workbench lifecycle controller starts initial prompt once after workdir lo
   });
   const workdir = { root: "/tmp/example", name: "example", fileCount: 1, totalBytes: 1, scanTruncated: false };
 
-  assert.equal(controller.initialPrompt({ busy: false, promptParts: ["hello", "agent"], workdir: null }), undefined);
+  assert.equal(controller.initialPrompt({ busy: false, promptParts: ["hello", "agent"], workdir: null }), "hello agent");
+  assert.equal(controller.initialPrompt({ busy: false, promptParts: ["again"], workdir }), undefined);
+});
+
+test("workbench lifecycle controller waits for workdir when local tools are enabled", () => {
+  const controller = createWorkbenchLifecycleController({
+    authController: {
+      async check() { return { profileName: "default", refreshed: false }; },
+      async loginAPIKey() { return { profileName: "default" }; },
+      async loginBrowser() { return { profileName: "default" }; },
+      async deleteProfile() {},
+      async statusText() { return ""; },
+      async refresh() { return { refreshed: false }; },
+    },
+  });
+  const workdir = { root: "/tmp/example", name: "example", fileCount: 1, totalBytes: 1, scanTruncated: false };
+
+  assert.equal(controller.initialPrompt({ busy: false, promptParts: ["hello", "agent"], requiresWorkdir: true, workdir: null }), undefined);
   assert.equal(controller.initialPrompt({ busy: true, promptParts: ["hello", "agent"], workdir }), undefined);
-  assert.equal(controller.initialPrompt({ busy: false, promptParts: ["hello", "agent"], workdir }), "hello agent");
+  assert.equal(controller.initialPrompt({ busy: false, promptParts: ["hello", "agent"], requiresWorkdir: true, workdir }), "hello agent");
   assert.equal(controller.initialPrompt({ busy: false, promptParts: ["again"], workdir }), undefined);
 });
 
@@ -938,7 +955,7 @@ test("workbench render model exposes renderer-neutral screen state", () => {
   assert.equal(model.header.pendingLocalLabel, "none");
   assert.equal(model.input.fullAccess, true);
   assert.equal(model.input.draft, "hello");
-  assert.equal(model.viewportHeight, 21);
+  assert.equal(model.viewportHeight, 19);
   assert.ok(model.transcript.visibleLines.length > 0);
   assert.match(model.footerText, /live/);
 });

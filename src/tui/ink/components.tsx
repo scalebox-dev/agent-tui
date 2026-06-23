@@ -30,16 +30,16 @@ export function InkWorkbenchScreen({
       <Box marginTop={1} height={renderModel.viewportHeight}>
         <Box flexDirection="column" width="72%" paddingRight={1}>
           {renderModel.transcript.visibleLines.map((line) => (
-            <Text bold={line.bold} color={line.color} inverse={line.inverse} key={line.id}>
+            <Text bold={line.bold} color={line.color} inverse={line.inverse} key={line.id} wrap="truncate">
               {line.text || " "}
             </Text>
           ))}
           {renderModel.transcript.visibleLines.length === 0 && <Text color="gray">No transcript lines.</Text>}
         </Box>
         <Box flexDirection="column" width="28%" height={renderModel.activityHeight} borderStyle="single" borderColor="gray" paddingX={1}>
-          <Text bold>Activity</Text>
+          <Text bold wrap="truncate">Activity</Text>
           {renderModel.visibleActivities.map((activity) => (
-            <Text color={activityColor(activity.level)} key={activity.id}>
+            <Text color={activityColor(activity.level)} key={activity.id} wrap="truncate">
               {new Date(activity.timestamp).toLocaleTimeString()} {activity.text}
             </Text>
           ))}
@@ -54,18 +54,18 @@ export function InkWorkbenchScreen({
         {renderModel.input.fullAccess && <Text> </Text>}
         <Text color={renderModel.input.busy ? "yellow" : "green"}>{renderModel.input.label} </Text>
         {renderModel.input.busy ? (
-          <Text>
+          <Text wrap="truncate">
             <Text color="yellow">{busySpinner(spinnerFrame)}</Text> {renderModel.input.waitingText}
           </Text>
         ) : (
-          <Text>
+          <Text wrap="truncate">
             {renderModel.input.draft}
             <Cursor visible />
           </Text>
         )}
       </Box>
       <Box paddingX={1}>
-        <Text color="gray">{renderModel.footerText}</Text>
+        <Text color="gray" wrap="truncate">{renderModel.footerText}</Text>
       </Box>
     </Box>
   );
@@ -141,10 +141,10 @@ function Header({
   return (
     <Box borderStyle="round" borderColor="cyan" paddingX={1} flexDirection="column">
       <Text bold>Agent API Workbench</Text>
-      <Text color="gray">
+      <Text color="gray" wrap="truncate">
         profile={profile} conversation={conversation} preset={preset} model={model}
       </Text>
-      <Text color="gray">
+      <Text color="gray" wrap="truncate">
         workdir={workdir} access={accessMode} local_tools={contextEnabled ? "on" : "off"} render={renderMode} pending={pendingLocalLabel}
       </Text>
     </Box>

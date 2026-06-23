@@ -9,7 +9,12 @@ export type WorkbenchLifecycleEffect =
 export interface WorkbenchLifecycleController {
   maybeCheckForUpdate(): Promise<WorkbenchLifecycleEffect[]>;
   refreshAuth(profile?: string): Promise<WorkbenchLifecycleEffect[]>;
-  initialPrompt(input: { busy: boolean; promptParts: string[]; workdir: WorkbenchWorkdirStatus | null }): string | undefined;
+  initialPrompt(input: {
+    busy: boolean;
+    promptParts: string[];
+    requiresWorkdir?: boolean;
+    workdir: WorkbenchWorkdirStatus | null;
+  }): string | undefined;
 }
 
 export interface WorkbenchLifecycleControllerOptions {
@@ -72,7 +77,7 @@ export function createWorkbenchLifecycleController(
     },
 
     initialPrompt(input) {
-      if (initialPromptSubmitted || input.busy || !input.workdir) return undefined;
+      if (initialPromptSubmitted || input.busy || (input.requiresWorkdir && !input.workdir)) return undefined;
       const prompt = input.promptParts.join(" ").trim();
       if (!prompt) return undefined;
       initialPromptSubmitted = true;
