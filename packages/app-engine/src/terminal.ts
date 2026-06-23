@@ -6,6 +6,11 @@ export {
   busySpinner,
   pendingLocalLabel,
 } from "./workbench/render-model.js";
+export type {
+  TranscriptLine,
+  TranscriptSpan,
+  TranscriptViewModel,
+} from "./workbench/view-model.js";
 export {
   buildTranscriptLines,
   buildTranscriptViewModel,

@@ -6,6 +6,14 @@ export type TranscriptLine = {
   color?: string;
   bold?: boolean;
   inverse?: boolean;
+  spans?: TranscriptSpan[];
+};
+
+export type TranscriptSpan = {
+  text: string;
+  color?: string;
+  bold?: boolean;
+  inverse?: boolean;
 };
 
 export interface TranscriptViewModel {
@@ -118,15 +126,83 @@ function markdownTranscriptLine(line: string, options: { code: boolean; width: n
   }
   if (/^\s*---+\s*$/.test(line)) return [{ text: "─".repeat(Math.min(48, options.width)), color: "gray" }];
   const bullet = /^(\s*)[-*]\s+(.+)$/.exec(line);
-  if (bullet) return wrapTranscriptText(`${bullet[1]}• ${bullet[2]}`, options.width).map((text) => ({ text }));
+  if (bullet) return wrapMarkdownInline(`${bullet[1]}• ${bullet[2]}`, options.width);
   const numbered = /^(\s*)(\d+\.)\s+(.+)$/.exec(line);
-  if (numbered) return wrapTranscriptText(`${numbered[1]}${numbered[2]} ${numbered[3]}`, options.width).map((text) => ({ text }));
+  if (numbered) return wrapMarkdownInline(`${numbered[1]}${numbered[2]} ${numbered[3]}`, options.width);
   const quote = /^\s*>\s?(.+)$/.exec(line);
-  if (quote) return wrapTranscriptText(`│ ${quote[1]}`, options.width).map((text) => ({ text, color: "gray" }));
-  return wrapTranscriptText(line, options.width).map((text) => ({ text }));
+  if (quote) return wrapMarkdownInline(`│ ${quote[1]}`, options.width).map((item) => ({ ...item, color: "gray" }));
+  return wrapMarkdownInline(line, options.width);
 }
 
-function wrapTranscriptText(text: string, width: number): string[] {
+function wrapMarkdownInline(text: string, width: number): Omit<TranscriptLine, "id">[] {
+  return wrapTranscriptSpans(markdownInlineSpans(text), width);
+}
+
+function markdownInlineSpans(text: string): TranscriptSpan[] {
+  const spans: TranscriptSpan[] = [];
+  const pattern = /(\*\*([^*]+)\*\*)|(\[([^\]]+)\]\(([^)]+)\))/g;
+  let lastIndex = 0;
+  for (const match of text.matchAll(pattern)) {
+    const index = match.index ?? 0;
+    if (index > lastIndex) {
+      spans.push({ text: text.slice(lastIndex, index) });
+    }
+    if (match[2]) {
+      spans.push({ text: match[2], bold: true });
+    } else if (match[4]) {
+      spans.push({ text: match[4], color: "cyan" });
+      if (match[5]) spans.push({ text: ` (${match[5]})`, color: "gray" });
+    }
+    lastIndex = index + match[0].length;
+  }
+  if (lastIndex < text.length) {
+    spans.push({ text: text.slice(lastIndex) });
+  }
+  return spans.length > 0 ? spans : [{ text }];
+}
+
+function wrapTranscriptSpans(spans: TranscriptSpan[], width: number): Omit<TranscriptLine, "id">[] {
+  const text = spans.map((span) => span.text).join("");
+  const wrapped = wrapTranscriptText(text, width, { trimStart: false });
+  const lines: Omit<TranscriptLine, "id">[] = [];
+  let offset = 0;
+  for (const line of wrapped) {
+    const lineSpans = sliceSpans(spans, offset, line.length);
+    offset += line.length;
+    while (text[offset] === " ") offset += 1;
+    lines.push({
+      text: line,
+      spans: lineSpans.length > 0 ? lineSpans : undefined,
+    });
+  }
+  return lines;
+}
+
+function sliceSpans(spans: TranscriptSpan[], offset: number, length: number): TranscriptSpan[] {
+  const output: TranscriptSpan[] = [];
+  let position = 0;
+  let remaining = length;
+  for (const span of spans) {
+    if (remaining <= 0) break;
+    const spanEnd = position + span.text.length;
+    if (spanEnd <= offset) {
+      position = spanEnd;
+      continue;
+    }
+    if (position >= offset + length) break;
+    const start = Math.max(0, offset - position);
+    const end = Math.min(span.text.length, start + remaining);
+    const text = span.text.slice(start, end);
+    if (text) {
+      output.push({ ...span, text });
+      remaining -= text.length;
+    }
+    position = spanEnd;
+  }
+  return output;
+}
+
+function wrapTranscriptText(text: string, width: number, options: { trimStart?: boolean } = {}): string[] {
   const max = Math.max(12, width);
   if (text.length === 0) return [""];
   if (displayWidth(text) <= max) return [text];
@@ -140,7 +216,7 @@ function wrapTranscriptText(text: string, width: number): string[] {
     const chunk = useSoftBreak ? soft : hard.text;
     const index = useSoftBreak ? softBreak : hard.length;
     lines.push(chunk.trimEnd());
-    rest = rest.slice(index).trimStart();
+    rest = options.trimStart === false ? rest.slice(index) : rest.slice(index).trimStart();
   }
   lines.push(rest);
   return lines;

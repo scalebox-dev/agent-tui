@@ -3,6 +3,7 @@ import { Box, Text } from "ink";
 import {
   activityColor,
   busySpinner,
+  type TranscriptLine,
   type WorkbenchRenderModel,
 } from "@agent-api/app-engine/terminal";
 import {
@@ -37,9 +38,7 @@ export function InkWorkbenchScreen({
       <Box marginTop={1} height={renderModel.viewportHeight}>
         <Box flexDirection="column" width="72%" paddingRight={1}>
           {renderModel.transcript.visibleLines.map((line) => (
-            <Text bold={line.bold} color={line.color} inverse={line.inverse} key={line.id} wrap="truncate">
-              {line.text || " "}
-            </Text>
+            <TranscriptText key={line.id} line={line} />
           ))}
           {renderModel.transcript.visibleLines.length === 0 && <Text color="gray">No transcript lines.</Text>}
         </Box>
@@ -76,6 +75,25 @@ export function InkWorkbenchScreen({
         <Text color="gray" wrap="truncate">{renderModel.footerText}</Text>
       </Box>
     </Box>
+  );
+}
+
+function TranscriptText({ line }: { line: TranscriptLine }) {
+  if (!line.spans || line.spans.length === 0) {
+    return (
+      <Text bold={line.bold} color={line.color} inverse={line.inverse} wrap="truncate">
+        {line.text || " "}
+      </Text>
+    );
+  }
+  return (
+    <Text bold={line.bold} color={line.color} inverse={line.inverse} wrap="truncate">
+      {line.spans.map((span, index) => (
+        <Text bold={span.bold} color={span.color} inverse={span.inverse} key={index}>
+          {span.text}
+        </Text>
+      ))}
+    </Text>
   );
 }
 

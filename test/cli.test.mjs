@@ -9,13 +9,16 @@ import test from "node:test";
 import {
   agentResponseFailureMessage,
   agentTurnEventFromStreamEvent,
-  authStatusText,
-  buildTranscriptLines,
-  buildTranscriptViewModel,
-  buildWorkbenchRenderModel,
   clearPresetToolCatalogCache,
   compareVersions,
   createAgentEngine,
+  formatUpdateNotice,
+  localToolExecutionErrorResult,
+  normalizeChatOptions,
+  resolveAgentRequestTools,
+} from "@agent-api/app-engine/core";
+import {
+  authStatusText,
   createConversationName,
   createInputHistory,
   createInitialWorkbenchState,
@@ -25,7 +28,6 @@ import {
   createWorkbenchConversationController,
   createWorkbenchEngine,
   createWorkbenchEngine as createWorkbenchEngineFromBoundary,
-  createWorkbenchInputController,
   createWorkbenchLifecycleController,
   createWorkbenchLocalController,
   createWorkbenchRuntimeController,
@@ -34,25 +36,27 @@ import {
   createWorkbenchSettingsController,
   createWorkbenchTurnController,
   defaultTranscriptExportPath,
-  elapsedDots,
   formatPresetList,
   formatTranscript,
-  formatUpdateNotice,
   installConfiguredIsolator,
   localShellIsolationOptions,
   localShellIsolationOptions as localShellIsolationOptionsFromBoundary,
-  localToolExecutionErrorResult,
-  normalizeChatOptions,
-  pendingLocalLabel,
   parsePendingApprovalCommand,
   parseWorkbenchCommand,
-  resolveAgentRequestTools,
   sessionState,
-  spinnerGlyph,
   UnknownPresetError,
   updateNoticeEffects,
   workbenchReducer,
-} from "@agent-api/app-engine";
+} from "@agent-api/app-engine/workbench";
+import {
+  buildTranscriptLines,
+  buildTranscriptViewModel,
+  buildWorkbenchRenderModel,
+  createWorkbenchInputController,
+  elapsedDots,
+  pendingLocalLabel,
+  spinnerGlyph,
+} from "@agent-api/app-engine/terminal";
 
 const execFileAsync = promisify(execFile);
 const bin = new URL("../dist/index.js", import.meta.url).pathname;
@@ -169,7 +173,7 @@ test("app engine package is importable through package exports", async () => {
   const rootExport = await execFileAsync("node", [
     "--input-type=module",
     "-e",
-    "import { createAgentEngine } from '@agent-api/app-engine'; console.log(typeof createAgentEngine);",
+    "import * as appEngine from '@agent-api/app-engine'; console.log(Object.keys(appEngine).length);",
   ], { cwd: root });
   const subpathExports = await execFileAsync("node", [
     "--input-type=module",
@@ -182,7 +186,7 @@ test("app engine package is importable through package exports", async () => {
     ].join(" "),
   ], { cwd: root });
 
-  assert.equal(rootExport.stdout.trim(), "function");
+  assert.equal(rootExport.stdout.trim(), "0");
   assert.equal(subpathExports.stdout.trim(), "function,function,function");
 });
 
@@ -194,7 +198,7 @@ test("app engine runtime identity is configurable by host apps", async () => {
     "--input-type=module",
     "-e",
     [
-      "import { configureAgentAppRuntime, loginWithAPIKey, runtime } from '@agent-api/app-engine';",
+      "import { configureAgentAppRuntime, loginWithAPIKey, runtime } from '@agent-api/app-engine/core';",
       "configureAgentAppRuntime({ appName: 'desktop-shell', appAuthor: 'AgentsWay', appVersion: '9.8.7', legacyAppName: null });",
       "await loginWithAPIKey({ profile: 'desktop', baseURL: 'https://api.test', apiKey: 'sk-desktop' });",
       "console.log(JSON.stringify({ appName: runtime.appName, configDir: runtime.dirs.config }));",
@@ -337,7 +341,7 @@ test("workbench configuration is stored separately from profiles", async () => {
   await execFileAsync("node", [
     "--input-type=module",
     "-e",
-    "import { updateWorkbenchPreferences } from '@agent-api/app-engine'; await updateWorkbenchPreferences({ defaultPreset: 'pro-search', isolation: { mode: 'required', executablePath: '/opt/agent-isolator' } });",
+    "import { updateWorkbenchPreferences } from '@agent-api/app-engine/core'; await updateWorkbenchPreferences({ defaultPreset: 'pro-search', isolation: { mode: 'required', executablePath: '/opt/agent-isolator' } });",
   ], { cwd: new URL("..", import.meta.url).pathname, env });
 
   const updatedProfiles = JSON.parse(await readFile(profilesPath, "utf8"));
@@ -354,7 +358,7 @@ test("workbench configuration is stored separately from profiles", async () => {
   const { stdout: loadedPreferences } = await execFileAsync("node", [
     "--input-type=module",
     "-e",
-    "import { loadWorkbenchPreferences } from '@agent-api/app-engine'; console.log(JSON.stringify(await loadWorkbenchPreferences()));",
+    "import { loadWorkbenchPreferences } from '@agent-api/app-engine/core'; console.log(JSON.stringify(await loadWorkbenchPreferences()));",
   ], { cwd: new URL("..", import.meta.url).pathname, env });
   assert.deepEqual(JSON.parse(loadedPreferences), appConfig.workbench);
 
@@ -408,7 +412,7 @@ test("legacy agent-api-cli config merges into agent-tui config and removes old d
   await execFileAsync("node", [
     "--input-type=module",
     "-e",
-    "import { loadConfig } from '@agent-api/app-engine'; console.log(JSON.stringify(await loadConfig()));",
+    "import { loadConfig } from '@agent-api/app-engine/core'; console.log(JSON.stringify(await loadConfig()));",
   ], { cwd: new URL("..", import.meta.url).pathname, env });
 
   const migratedProfiles = JSON.parse(await readFile(join(configDir, "profiles.json"), "utf8"));
@@ -1943,7 +1947,7 @@ test("workbench transcript formatter produces readable plain text", () => {
 
 test("workbench view model renders markdown transcript lines", () => {
   const lines = buildTranscriptLines([
-    { id: "1", role: "assistant", text: "# Title\n- item\n> quoted" },
+    { id: "1", role: "assistant", text: "# Title\n- **item** [docs](https://example.test)\n> quoted" },
   ], {
     activeAssistantMessageId: null,
     busy: false,
@@ -1952,9 +1956,16 @@ test("workbench view model renders markdown transcript lines", () => {
     width: 40,
   });
 
-  assert.deepEqual(lines.map((line) => line.text), ["Agent", "Title", "• item", "│ quoted", ""]);
+  assert.deepEqual(lines.map((line) => line.text), ["Agent", "Title", "• item docs (https://example.test)", "│ quoted", ""]);
   assert.equal(lines[1].bold, true);
   assert.equal(lines[1].color, "cyan");
+  assert.deepEqual(lines[2].spans, [
+    { text: "• " },
+    { text: "item", bold: true },
+    { text: " " },
+    { text: "docs", color: "cyan" },
+    { text: " (https://example.test)", color: "gray" },
+  ]);
   assert.equal(lines[3].color, "gray");
 });
 

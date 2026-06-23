@@ -44,7 +44,8 @@ Host applications should call `configureAgentAppRuntime()` during startup so con
 - `@agent-api/app-engine/core`: UI-neutral APIs for auth, config, profiles, conversations, updates, local workdir setup, and agent turns.
 - `@agent-api/app-engine/workbench`: optional app/workbench state controllers for apps that want Agent API's conversation workflow.
 - `@agent-api/app-engine/terminal`: optional terminal-facing helpers for transcript wrapping, input viewport rendering, and spinner glyphs.
-- `@agent-api/app-engine`: compatibility barrel that re-exports the layers above.
+
+The root `@agent-api/app-engine` entry is intentionally empty. Use an explicit subpath so your application depends on a clear API layer.
 
 ## Boundaries
 
