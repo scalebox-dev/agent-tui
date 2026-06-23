@@ -23,6 +23,8 @@ import {
 import { resolvePreviousResponseID, updateConversation } from "../conversation/index.js";
 import { resolveRuntimeProfile } from "../profile.js";
 import { buildWorkdirContextBlock, openWorkdir } from "../workdir/index.js";
+import { localShellIsolationOptions } from "../workbench/shell-isolation.js";
+import type { ShellIsolationPreferences } from "../workbench/shell-isolation.js";
 
 export interface AgentRunOptions {
   profile?: string;
@@ -44,6 +46,7 @@ export interface AgentRunOptions {
   maxContextFiles?: number;
   maxContextBytes?: number;
   accessMode?: WorkdirAccessMode;
+  shellIsolation?: ShellIsolationPreferences;
   abortSignal?: AbortSignal;
 }
 
@@ -584,7 +587,8 @@ async function prepareLocalWorkdirTools(options: AgentRunOptions): Promise<{
   const shellRegistry = createLocalShellToolRegistry({
     accessMode: localToolAccessMode(options),
     workdir: service.workdir,
-  });
+    ...localShellIsolationOptions(options.shellIsolation),
+  } as Parameters<typeof createLocalShellToolRegistry>[0]);
   return {
     registry: combineLocalToolRegistries(registry, shellRegistry),
     instructions: [
@@ -592,7 +596,8 @@ async function prepareLocalWorkdirTools(options: AgentRunOptions): Promise<{
       localShellToolInstructions({
         accessMode: localToolAccessMode(options),
         cwd: service.workdir.root,
-      }),
+        ...localShellIsolationOptions(options.shellIsolation),
+      } as Parameters<typeof localShellToolInstructions>[0]),
       "Use local_workdir for selected local workdir operations. Prefer summarize/list/search/grep before read/read_lines. Prefer preview_edits/apply_edits for source edits. Use local_shell for command/process tasks. In approval mode, local actions return requires_approval and must be explained to the user instead of retried blindly.",
     ].join("\n\n"),
   };

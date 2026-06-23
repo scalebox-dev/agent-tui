@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { execFile } from "node:child_process";
@@ -48,6 +49,8 @@ import {
 } from "../dist/workbench/render-model.js";
 import { createWorkbenchRuntimeController } from "../dist/workbench/runtime-controller.js";
 import { createWorkbenchSession, sessionState } from "../dist/workbench/session.js";
+import { localShellIsolationOptions } from "../dist/workbench/shell-isolation.js";
+import { installConfiguredIsolator } from "../dist/workbench/isolator-installer.js";
 import { compareVersions, formatUpdateNotice } from "../dist/update.js";
 
 const execFileAsync = promisify(execFile);
@@ -109,10 +112,15 @@ function stubSettingsController() {
   return {
     async loadInitial() { return {}; },
     async saveDefaultPreset() { return { defaultPreset: "pro-search", runPreset: "pro-search", message: "saved", activity: "saved" }; },
+    async saveShellIsolationMode() { return { shellIsolation: { mode: "auto" }, message: "saved", activity: "saved" }; },
+    async saveIsolatorPath() { return { shellIsolation: { executablePath: "/opt/agent-isolator" }, message: "saved", activity: "saved" }; },
+    async saveIsolatorSource() { return { shellIsolation: { sourceURL: "https://example.test/agent-isolator" }, message: "saved", activity: "saved" }; },
     async validatePreset() { return true; },
     async presetListText(input) { return input.prefix; },
     configText() { return "config"; },
     defaultPresetHelp() { return "default preset help"; },
+    shellIsolationHelp() { return "shell isolation help"; },
+    isolatorPathHelp() { return "isolator path help"; },
     clearPresetToolCatalogCache() {},
   };
 }
@@ -147,15 +155,16 @@ test("agent conversation manager lists, shows, and deletes local conversation st
 
   await execFileAsync("node", [bin, "auth", "login", "--profile", "test", "--api-key", "sk-test-abcdefghijklmnopqrstuvwxyz", "--base-url", "https://api.test"], { env });
 
-  const configPath = join(root, ".config", "agent-api-cli", "profiles.json");
-  const config = JSON.parse(await readFile(configPath, "utf8"));
-  config.conversations["test:release"] = {
+  const configDir = join(root, ".config", "agent-tui");
+  const conversationsPath = join(configDir, "conversations.json");
+  const conversations = { conversations: {} };
+  conversations.conversations["test:release"] = {
     name: "release",
     profile: "test",
     previousResponseId: "resp_test",
     updatedAt: 4102444800,
   };
-  await writeFile(configPath, JSON.stringify(config, null, 2));
+  await writeFile(conversationsPath, JSON.stringify(conversations, null, 2));
 
   const { stdout: listOut } = await execFileAsync("node", [bin, "agent", "list"], { env });
   assert.match(listOut, /release\s+test\s+2100-01-01T00:00:00\.000Z response=resp_test/);
@@ -166,6 +175,60 @@ test("agent conversation manager lists, shows, and deletes local conversation st
   await execFileAsync("node", [bin, "agent", "delete", "release"], { env });
   const { stdout: emptyOut } = await execFileAsync("node", [bin, "agent", "list"], { env });
   assert.match(emptyOut, /No agent conversations yet/);
+});
+
+test("workbench configuration is stored separately from profiles", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-api-cli-config-split-"));
+  const env = isolatedEnv(root);
+
+  await execFileAsync("node", [bin, "auth", "login", "--profile", "test", "--api-key", "sk-test-abcdefghijklmnopqrstuvwxyz", "--base-url", "https://api.test"], { env });
+
+  const configDir = join(root, ".config", "agent-tui");
+  const profilesPath = join(configDir, "profiles.json");
+  const appConfigPath = join(configDir, "configuration.json");
+  const conversationsPath = join(configDir, "conversations.json");
+  const profiles = JSON.parse(await readFile(profilesPath, "utf8"));
+  assert.equal(profiles.workbench, undefined);
+  assert.equal(profiles.conversations, undefined);
+  profiles.workbench = { defaultPreset: "stale-profile-config" };
+  profiles.conversations = {
+    "test:stale": {
+      name: "stale",
+      profile: "test",
+      previousResponseId: "resp_stale",
+      updatedAt: 4102444800,
+    },
+  };
+  await writeFile(profilesPath, JSON.stringify(profiles, null, 2));
+
+  await execFileAsync("node", [
+    "--input-type=module",
+    "-e",
+    "import { updateWorkbenchPreferences } from './dist/config.js'; await updateWorkbenchPreferences({ defaultPreset: 'pro-search', isolation: { mode: 'required', executablePath: '/opt/agent-isolator' } });",
+  ], { cwd: new URL("..", import.meta.url).pathname, env });
+
+  const updatedProfiles = JSON.parse(await readFile(profilesPath, "utf8"));
+  const appConfig = JSON.parse(await readFile(appConfigPath, "utf8"));
+  const conversationConfig = JSON.parse(await readFile(conversationsPath, "utf8"));
+  assert.equal(updatedProfiles.workbench, undefined);
+  assert.equal(updatedProfiles.conversations, undefined);
+  assert.deepEqual(appConfig.workbench, {
+    defaultPreset: "pro-search",
+    isolation: { mode: "required", executablePath: "/opt/agent-isolator" },
+  });
+  assert.deepEqual(conversationConfig.conversations, profiles.conversations);
+
+  const { stdout: loadedPreferences } = await execFileAsync("node", [
+    "--input-type=module",
+    "-e",
+    "import { loadWorkbenchPreferences } from './dist/config.js'; console.log(JSON.stringify(await loadWorkbenchPreferences()));",
+  ], { cwd: new URL("..", import.meta.url).pathname, env });
+  assert.deepEqual(JSON.parse(loadedPreferences), appConfig.workbench);
+
+  await execFileAsync("node", [bin, "auth", "login", "--profile", "test", "--api-key", "sk-test-updated-abcdefghijklmnopqrstuvwxyz", "--base-url", "https://api.test"], { env });
+  const afterProfileSave = JSON.parse(await readFile(profilesPath, "utf8"));
+  assert.equal(afterProfileSave.workbench, undefined);
+  assert.equal(afterProfileSave.conversations, undefined);
 });
 
 test("workdir status inspects a local directory", async () => {
@@ -413,6 +476,8 @@ test("workbench command parser and reducer handle local workflow state", () => {
   assert.deepEqual(parseWorkbenchCommand("/config"), { kind: "config" });
   assert.deepEqual(parseWorkbenchCommand("/config preset pro-search"), { kind: "config", field: "preset", value: "pro-search" });
   assert.deepEqual(parseWorkbenchCommand("/config preset none"), { kind: "config", field: "preset", value: "none" });
+  assert.deepEqual(parseWorkbenchCommand("/config isolation required"), { kind: "config", field: "isolation", value: "required" });
+  assert.deepEqual(parseWorkbenchCommand("/config isolator /opt/agent-isolator"), { kind: "config", field: "isolator", value: "/opt/agent-isolator" });
   assert.deepEqual(parseWorkbenchCommand("/config nope"), { kind: "invalid", command: "config nope" });
   assert.deepEqual(parseWorkbenchCommand("/render"), { kind: "render" });
   assert.deepEqual(parseWorkbenchCommand("/render raw"), { kind: "render", mode: "raw" });
@@ -635,6 +700,89 @@ test("agent request tools do not fetch catalogs without a preset", async () => {
   assert.deepEqual(tools, localTools);
 });
 
+test("local shell isolation leaves isolator path explicit", () => {
+  const previousPath = process.env.AGENT_ISOLATOR_PATH;
+  delete process.env.AGENT_ISOLATOR_PATH;
+  try {
+    assert.deepEqual(localShellIsolationOptions(), {
+      isolation: "auto",
+      isolationOptions: {
+        filesystem: "workdir-readwrite",
+        network: "allowed",
+        env: "inherit",
+      },
+    });
+
+    process.env.AGENT_ISOLATOR_PATH = "/opt/agent-isolator";
+    assert.deepEqual(localShellIsolationOptions(), {
+      isolation: "auto",
+      isolationOptions: {
+        filesystem: "workdir-readwrite",
+        network: "allowed",
+        env: "inherit",
+      },
+      isolator: { executablePath: "/opt/agent-isolator" },
+    });
+  } finally {
+    if (previousPath == null) {
+      delete process.env.AGENT_ISOLATOR_PATH;
+    } else {
+      process.env.AGENT_ISOLATOR_PATH = previousPath;
+    }
+  }
+});
+
+test("isolator installer installs atomically after download and probe", async () => {
+  if (process.platform === "win32") {
+    return;
+  }
+  const root = await mkdtemp(join(tmpdir(), "agent-tui-isolator-install-"));
+  const target = join(root, "bin", "agent-isolator");
+  const script = [
+    "#!/bin/sh",
+    "cat >/dev/null",
+    "printf '%s\\n' '{\"id\":\"status\",\"result\":{\"driver\":\"fake\",\"status\":{\"executor\":\"isolator\",\"driver\":\"fake\",\"isolated\":true,\"fallback\":false,\"requested\":{\"filesystem\":\"host\",\"network\":\"allowed\",\"env\":\"inherit\",\"resources\":{}},\"guarantees\":{\"filesystem\":\"policy-enforced\",\"network\":\"allowed\",\"user\":\"namespace-user\",\"process\":\"pid-namespace\",\"resources\":\"timeout-only\"},\"warnings\":[]}}}'",
+  ].join("\n");
+  const body = Buffer.from(`${script}\n`);
+  const sha256 = createHash("sha256").update(body).digest("hex");
+
+  const result = await installConfiguredIsolator({
+    sourceURL: "https://example.test/agent-isolator",
+    executablePath: target,
+    sha256,
+  }, {
+    fetchImpl: async () => new Response(body),
+  });
+
+  assert.equal(result.executablePath, target);
+  assert.equal(result.sha256, sha256);
+  assert.equal(await readFile(target, "utf8"), `${script}\n`);
+});
+
+test("isolator installer leaves existing binary intact on failed refresh", async () => {
+  if (process.platform === "win32") {
+    return;
+  }
+  const root = await mkdtemp(join(tmpdir(), "agent-tui-isolator-install-fail-"));
+  const target = join(root, "bin", "agent-isolator");
+  await mkdir(join(root, "bin"), { recursive: true });
+  await writeFile(target, "existing-binary");
+  await chmod(target, 0o700);
+
+  await assert.rejects(
+    () => installConfiguredIsolator({
+      sourceURL: "https://example.test/agent-isolator",
+      executablePath: target,
+      sha256: "0".repeat(64),
+    }, {
+      fetchImpl: async () => new Response("new-binary"),
+    }),
+    /checksum mismatch/,
+  );
+
+  assert.equal(await readFile(target, "utf8"), "existing-binary");
+});
+
 test("agent request tools cache platform preset and tool catalogs by base URL", async () => {
   clearPresetToolCatalogCache("https://api.test");
   const calls = [];
@@ -852,10 +1000,15 @@ test("workbench command controller applies renderer-neutral preset commands", as
     settingsController: {
       async loadInitial() { return {}; },
       async saveDefaultPreset() { throw new Error("not used"); },
+      async saveShellIsolationMode() { throw new Error("not used"); },
+      async saveIsolatorPath() { throw new Error("not used"); },
+      async saveIsolatorSource() { throw new Error("not used"); },
       async validatePreset(_profile, preset) { return preset === "analysis"; },
       async presetListText(input) { return `${input.prefix}\n- analysis`; },
       configText() { return "config"; },
       defaultPresetHelp() { return "default preset help"; },
+      shellIsolationHelp() { return "shell isolation help"; },
+      isolatorPathHelp() { return "isolator path help"; },
       clearPresetToolCatalogCache() {},
     },
     turnController: stubTurnController(),
@@ -1031,6 +1184,189 @@ test("workbench settings controller loads and saves default preset settings", as
     ["validate", "dev", "pro-search"],
     ["update", "pro-search"],
   ]);
+});
+
+test("workbench settings controller persists shell isolation settings", async () => {
+  const calls = [];
+  const controller = createWorkbenchSettingsController({
+    async loadWorkbenchPreferencesImpl() {
+      calls.push(["load"]);
+      return {
+        defaultPreset: "pro-search",
+        isolation: { mode: "required", executablePath: "/opt/agent-isolator" },
+      };
+    },
+    async updateWorkbenchPreferencesImpl(patch) {
+      calls.push(["update", patch.isolation]);
+      return {
+        defaultPreset: "pro-search",
+        isolation: {
+          mode: patch.isolation?.mode ?? "required",
+          ...(
+            patch.isolation && "executablePath" in patch.isolation
+              ? (patch.isolation.executablePath ? { executablePath: patch.isolation.executablePath } : {})
+              : { executablePath: "/opt/agent-isolator" }
+          ),
+        },
+      };
+    },
+  });
+
+  assert.deepEqual(await controller.loadInitial({ modelExplicit: false, preset: "pro-search", presetExplicit: false }), {
+    defaultPreset: "pro-search",
+    runPreset: "pro-search",
+    shellIsolation: { mode: "required", executablePath: "/opt/agent-isolator" },
+  });
+
+  assert.deepEqual(await controller.saveShellIsolationMode("auto"), {
+    defaultPreset: "pro-search",
+    shellIsolation: { mode: "auto", executablePath: "/opt/agent-isolator" },
+    message: "Saved shell isolation mode: auto.",
+    activity: "Shell isolation mode saved: auto",
+  });
+
+  assert.deepEqual(await controller.saveIsolatorPath("none"), {
+    defaultPreset: "pro-search",
+    shellIsolation: { mode: "required" },
+    message: "Saved isolator path: not configured.",
+    activity: "Isolator path cleared",
+  });
+
+  assert.deepEqual(calls, [
+    ["load"],
+    ["update", { mode: "auto" }],
+    ["update", { executablePath: null }],
+  ]);
+});
+
+test("workbench settings controller validates isolator source before saving", async () => {
+  if (process.platform === "win32") {
+    return;
+  }
+  const root = await mkdtemp(join(tmpdir(), "agent-tui-isolator-settings-"));
+  const target = join(root, "bin", "agent-isolator");
+  const script = [
+    "#!/bin/sh",
+    "cat >/dev/null",
+    "printf '%s\\n' '{\"id\":\"status\",\"result\":{\"driver\":\"fake\",\"status\":{\"executor\":\"isolator\",\"driver\":\"fake\",\"isolated\":true,\"fallback\":false,\"requested\":{\"filesystem\":\"host\",\"network\":\"allowed\",\"env\":\"inherit\",\"resources\":{}},\"guarantees\":{\"filesystem\":\"policy-enforced\",\"network\":\"allowed\",\"user\":\"namespace-user\",\"process\":\"pid-namespace\",\"resources\":\"timeout-only\"},\"warnings\":[]}}}'",
+  ].join("\n");
+  const body = Buffer.from(`${script}\n`);
+  const sha256 = createHash("sha256").update(body).digest("hex");
+  const calls = [];
+  const controller = createWorkbenchSettingsController({
+    async loadWorkbenchPreferencesImpl() {
+      return { isolation: { executablePath: target } };
+    },
+    async updateWorkbenchPreferencesImpl(patch) {
+      calls.push(patch);
+      return { isolation: patch.isolation };
+    },
+    isolatorInstallOptions: {
+      fetchImpl: async () => new Response(body),
+    },
+  });
+
+  assert.deepEqual(await controller.saveIsolatorSource("https://example.test/agent-isolator"), {
+    shellIsolation: {
+      sourceURL: "https://example.test/agent-isolator",
+      executablePath: target,
+      sha256,
+      installSkipped: false,
+    },
+    message: "Installed isolator from https://example.test/agent-isolator.",
+    activity: "Isolator installed from source",
+  });
+  assert.deepEqual(calls, [{
+    isolation: {
+      sourceURL: "https://example.test/agent-isolator",
+      executablePath: target,
+      sha256,
+      installSkipped: false,
+    },
+  }]);
+});
+
+test("workbench settings controller repairs a missing configured isolator on startup", async () => {
+  if (process.platform === "win32") {
+    return;
+  }
+  const root = await mkdtemp(join(tmpdir(), "agent-tui-isolator-repair-"));
+  const target = join(root, "bin", "agent-isolator");
+  const script = [
+    "#!/bin/sh",
+    "cat >/dev/null",
+    "printf '%s\\n' '{\"id\":\"status\",\"result\":{\"driver\":\"fake\",\"status\":{\"executor\":\"isolator\",\"driver\":\"fake\",\"isolated\":true,\"fallback\":false,\"requested\":{\"filesystem\":\"host\",\"network\":\"allowed\",\"env\":\"inherit\",\"resources\":{}},\"guarantees\":{\"filesystem\":\"policy-enforced\",\"network\":\"allowed\",\"user\":\"namespace-user\",\"process\":\"pid-namespace\",\"resources\":\"timeout-only\"},\"warnings\":[]}}}'",
+  ].join("\n");
+  const body = Buffer.from(`${script}\n`);
+  const sha256 = createHash("sha256").update(body).digest("hex");
+  const calls = [];
+  const controller = createWorkbenchSettingsController({
+    async loadWorkbenchPreferencesImpl() {
+      calls.push(["load"]);
+      return {
+        defaultPreset: "pro-search",
+        isolation: {
+          mode: "auto",
+          sourceURL: "https://example.test/agent-isolator",
+          executablePath: target,
+        },
+      };
+    },
+    async updateWorkbenchPreferencesImpl(patch) {
+      calls.push(["update", patch.isolation]);
+      return {
+        defaultPreset: "pro-search",
+        isolation: {
+          mode: "auto",
+          ...patch.isolation,
+        },
+      };
+    },
+    isolatorInstallOptions: {
+      fetchImpl: async () => new Response(body),
+    },
+  });
+
+  assert.deepEqual(await controller.loadInitial({ modelExplicit: false, preset: "pro-search", presetExplicit: false }), {
+    defaultPreset: "pro-search",
+    runPreset: "pro-search",
+    shellIsolation: {
+      mode: "auto",
+      sourceURL: "https://example.test/agent-isolator",
+      executablePath: target,
+      sha256,
+      installSkipped: false,
+    },
+    activity: `Reinstalled isolator: ${target}`,
+  });
+  assert.deepEqual(calls, [
+    ["load"],
+    ["update", {
+      sourceURL: "https://example.test/agent-isolator",
+      executablePath: target,
+      sha256,
+      installSkipped: false,
+    }],
+  ]);
+});
+
+test("workbench settings controller rejects invalid isolator source without saving", async () => {
+  const calls = [];
+  const controller = createWorkbenchSettingsController({
+    async loadWorkbenchPreferencesImpl() {
+      return { isolation: { executablePath: "/tmp/agent-isolator" } };
+    },
+    async updateWorkbenchPreferencesImpl(patch) {
+      calls.push(patch);
+      return { isolation: patch.isolation };
+    },
+  });
+
+  await assert.rejects(
+    () => controller.saveIsolatorSource("http://example.test/agent-isolator"),
+    /must use https/,
+  );
+  assert.deepEqual(calls, []);
 });
 
 test("workbench settings controller reports unknown presets with catalog text", async () => {

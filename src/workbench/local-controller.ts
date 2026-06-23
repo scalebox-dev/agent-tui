@@ -1,6 +1,8 @@
 import { createLocalShellToolRegistry, createLocalWorkdirToolRegistry } from "@agent-api/sdk/local";
 import { openWorkdir, type WorkdirService } from "../workdir/index.js";
 import type { WorkbenchState, WorkbenchWorkdirStatus } from "../tui/workbench.js";
+import { localShellIsolationOptions } from "./shell-isolation.js";
+import type { ShellIsolationPreferences } from "./shell-isolation.js";
 
 export interface WorkbenchLocalController {
   load(path?: string): Promise<WorkbenchWorkdirStatus>;
@@ -13,6 +15,7 @@ export interface WorkbenchLocalController {
 
 export interface WorkbenchLocalControllerOptions {
   openWorkdirImpl?: typeof openWorkdir;
+  getShellIsolation?: () => ShellIsolationPreferences | undefined;
 }
 
 type LocalApprovalLike = NonNullable<WorkbenchState["pendingLocalTool"]>;
@@ -77,7 +80,11 @@ export function createWorkbenchLocalController(options: WorkbenchLocalController
     async applyApproval(approval) {
       const current = requireWorkdir();
       const workdirRegistry = createLocalWorkdirToolRegistry(current.workdir, { accessMode: "full" });
-      const shellRegistry = createLocalShellToolRegistry({ workdir: current.workdir, accessMode: "full" });
+      const shellRegistry = createLocalShellToolRegistry({
+        workdir: current.workdir,
+        accessMode: "full",
+        ...localShellIsolationOptions(options.getShellIsolation?.()),
+      } as Parameters<typeof createLocalShellToolRegistry>[0]);
       if (approval.name === workdirRegistry.toolName) {
         return await workdirRegistry.execute(approval.name, approval.arguments);
       }

@@ -8,7 +8,7 @@ import React from "react";
 import { conversationSummary, deleteConversation, getConversation, listConversations, runAgent } from "./agent.js";
 import { normalizeChatOptions, type ChatOptions } from "./chat-options.js";
 import { ChatApp } from "./tui/chat.js";
-import { activeProfile, loadConfig, redactSecret } from "./config.js";
+import { activeProfile, loadConfig, loadConversationConfiguration, redactSecret } from "./config.js";
 import { cliVersion, runtime } from "./runtime/index.js";
 import { openWorkdir } from "./workdir/index.js";
 import {
@@ -85,12 +85,13 @@ program
   .description("Print local CLI diagnostics")
   .action(async () => {
     const config = await loadConfig();
+    const conversations = await loadConversationConfiguration();
     const { profiles } = await listProfiles();
     console.log(JSON.stringify({
       version: cliVersion,
       activeProfile: config.activeProfile,
       profileCount: profiles.length,
-      conversationCount: Object.keys(config.conversations).length,
+      conversationCount: Object.keys(conversations.conversations).length,
       configDir: runtime.dirs.config,
       dataDir: runtime.dirs.data,
       node: process.version,

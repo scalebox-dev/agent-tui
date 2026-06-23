@@ -34,7 +34,9 @@ export function createWorkbenchSession(options: WorkbenchSessionOptions): Workbe
     model: options.baseOptions.model,
     preset: options.baseOptions.preset,
   });
-  const local = createWorkbenchLocalController();
+  const local = createWorkbenchLocalController({
+    getShellIsolation: () => engine.snapshot().shellIsolation,
+  });
   const runtime = createWorkbenchRuntimeController({ dispatch: engine.dispatch });
   const turn = createWorkbenchTurnController({
     baseOptions: options.baseOptions,

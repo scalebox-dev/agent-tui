@@ -1,4 +1,5 @@
 import type { LocalToolApprovalRequest, WorkdirAccessMode } from "../agent.js";
+import type { ShellIsolationPreferences } from "../workbench/shell-isolation.js";
 
 export type WorkbenchRole = "user" | "assistant" | "system";
 
@@ -46,6 +47,7 @@ export interface WorkbenchState {
   runModel?: string;
   renderMode: RenderMode;
   defaultPreset?: string | null;
+  shellIsolation?: ShellIsolationPreferences;
 }
 
 export interface InputHistory {
@@ -70,7 +72,7 @@ export type WorkbenchAction =
   | { type: "local_tool.pending.clear" }
   | { type: "access.set"; mode: WorkdirAccessMode }
   | { type: "conversation.set"; name: string }
-  | { type: "settings.set"; settings: Partial<Pick<WorkbenchState, "runPreset" | "runModel" | "renderMode" | "defaultPreset">> };
+  | { type: "settings.set"; settings: Partial<Pick<WorkbenchState, "runPreset" | "runModel" | "renderMode" | "defaultPreset" | "shellIsolation">> };
 
 export type WorkbenchCommand =
   | { kind: "invalid"; command: string }
@@ -83,7 +85,7 @@ export type WorkbenchCommand =
   | { kind: "delete_profile" }
   | { kind: "switch_profile"; name?: string }
   | { kind: "auth_status" }
-  | { kind: "config"; field?: "preset"; value?: string }
+  | { kind: "config"; field?: "preset" | "isolation" | "isolator"; value?: string }
   | { kind: "render"; mode?: RenderMode }
   | { kind: "transcript" }
   | { kind: "export"; path?: string }
@@ -111,6 +113,7 @@ export function createInitialWorkbenchState(options: {
   model?: string;
   renderMode?: RenderMode;
   defaultPreset?: string | null;
+  shellIsolation?: ShellIsolationPreferences;
 }): WorkbenchState {
   const accessMode = options.accessMode ?? (options.contextEnabled ? "approval" : "off");
   return {
@@ -131,6 +134,7 @@ export function createInitialWorkbenchState(options: {
     runModel: options.model,
     renderMode: options.renderMode ?? "markdown",
     defaultPreset: options.defaultPreset,
+    shellIsolation: options.shellIsolation,
   };
 }
 
@@ -300,7 +304,7 @@ export function parseWorkbenchCommand(input: string): WorkbenchCommand | null {
     case "settings": {
       const [field, ...valueParts] = rest;
       if (!field) return { kind: "config" };
-      if (field === "preset") {
+      if (field === "preset" || field === "isolation" || field === "isolator") {
         return { kind: "config", field, value: valueParts.join(" ").trim() || undefined };
       }
       return { kind: "invalid", command: `${name} ${field}` };
@@ -400,6 +404,8 @@ export function helpText() {
     "/transcript      show a plain-text transcript preview",
     "/export [file]   save the plain-text transcript to a file",
     "/config preset   save default preset; use none/off for no preset, reset for built-in",
+    "/config isolation save shell isolation mode: none, auto, or required",
+    "/config isolator save agent-isolator path; use none/off to clear",
     "/preset [name]   show or set preset; use none/off to clear",
     "/model [name]    show or set explicit model; use auto/none/off to clear",
     "/access [mode]   show or set local tool access: off, approval, or full",

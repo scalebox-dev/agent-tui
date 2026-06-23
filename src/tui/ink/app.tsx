@@ -210,6 +210,12 @@ function WorkbenchApp({
       .then((settings) => {
         if (!mounted) return;
         dispatch({ type: "settings.set", settings });
+        if (settings.activity) {
+          dispatch({ type: "activity.add", level: "success", text: settings.activity });
+        }
+        if (settings.warning) {
+          dispatch({ type: "activity.add", level: "warning", text: settings.warning });
+        }
       })
       .catch((error) => {
         if (!mounted) return;

@@ -133,6 +133,7 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
           contextEnabled: state.contextEnabled,
           defaultPreset: state.defaultPreset,
           renderMode: state.renderMode,
+          shellIsolation: state.shellIsolation,
         }),
       });
       return;
@@ -172,6 +173,53 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
         }
         dispatch({ type: "message.add", role: "system", text: `Could not save default preset: ${userFacingError(error)}` });
         dispatch({ type: "activity.add", level: "error", text: "Default preset save failed" });
+      }
+    }
+
+    if (command.field === "isolation") {
+      if (!command.value) {
+        dispatch({
+          type: "message.add",
+          role: "system",
+          text: options.settingsController.shellIsolationHelp(state.shellIsolation),
+        });
+        return;
+      }
+      try {
+        const settings = await options.settingsController.saveShellIsolationMode(command.value);
+        dispatch({ type: "settings.set", settings: { shellIsolation: settings.shellIsolation } });
+        dispatch({ type: "message.add", role: "system", text: settings.message });
+        dispatch({ type: "activity.add", level: "success", text: settings.activity });
+      } catch (error) {
+        dispatch({ type: "message.add", role: "system", text: `Could not save shell isolation mode: ${userFacingError(error)}` });
+        dispatch({ type: "activity.add", level: "error", text: "Shell isolation save failed" });
+      }
+      return;
+    }
+
+    if (command.field === "isolator") {
+      if (!command.value) {
+        dispatch({
+          type: "message.add",
+          role: "system",
+          text: options.settingsController.isolatorPathHelp(state.shellIsolation),
+        });
+        return;
+      }
+      try {
+        const [subcommand = "", ...rest] = command.value.split(/\s+/);
+        const value = rest.join(" ").trim();
+        const settings = subcommand === "source"
+          ? await options.settingsController.saveIsolatorSource(value)
+          : subcommand === "path"
+            ? await options.settingsController.saveIsolatorPath(value)
+            : await options.settingsController.saveIsolatorPath(command.value);
+        dispatch({ type: "settings.set", settings: { shellIsolation: settings.shellIsolation } });
+        dispatch({ type: "message.add", role: "system", text: settings.message });
+        dispatch({ type: "activity.add", level: "success", text: settings.activity });
+      } catch (error) {
+        dispatch({ type: "message.add", role: "system", text: `Could not save isolator path: ${userFacingError(error)}` });
+        dispatch({ type: "activity.add", level: "error", text: "Isolator path save failed" });
       }
     }
   }

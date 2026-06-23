@@ -1,5 +1,5 @@
 import type { ConversationState } from "../config.js";
-import { activeProfile, loadConfig, saveConfig } from "../config.js";
+import { activeProfile, loadConversationConfiguration, saveConversationConfiguration } from "../config.js";
 
 export function conversationKey(profile: string, name: string) {
   return `${profile}:${name}`;
@@ -16,7 +16,7 @@ export async function resolvePreviousResponseID(options: {
   if (options.restartConversation || !options.conversation) return undefined;
   if (!options.continueConversation) return undefined;
   const profile = await activeProfile(options.profile);
-  const config = await loadConfig();
+  const config = await loadConversationConfiguration();
   return config.conversations[conversationKey(profile.name, options.conversation)]?.previousResponseId;
 }
 
@@ -26,19 +26,19 @@ export async function updateConversation(options: {
 }, responseID: string) {
   if (!options.conversation) return;
   const profile = await activeProfile(options.profile);
-  const config = await loadConfig();
+  const config = await loadConversationConfiguration();
   config.conversations[conversationKey(profile.name, options.conversation)] = {
     name: options.conversation,
     profile: profile.name,
     previousResponseId: responseID,
     updatedAt: Math.floor(Date.now() / 1000),
   };
-  await saveConfig(config);
+  await saveConversationConfiguration(config);
 }
 
 export async function listConversations(profileName?: string): Promise<ConversationState[]> {
   const profile = await activeProfile(profileName);
-  const config = await loadConfig();
+  const config = await loadConversationConfiguration();
   return Object.values(config.conversations)
     .filter((conversation) => conversation.profile === profile.name)
     .sort((a, b) => b.updatedAt - a.updatedAt);
@@ -46,7 +46,7 @@ export async function listConversations(profileName?: string): Promise<Conversat
 
 export async function getConversation(name: string, profileName?: string): Promise<ConversationState> {
   const profile = await activeProfile(profileName);
-  const config = await loadConfig();
+  const config = await loadConversationConfiguration();
   const conversation = config.conversations[conversationKey(profile.name, name)];
   if (!conversation) throw new Error(`Conversation not found: ${name}`);
   return conversation;
@@ -54,9 +54,9 @@ export async function getConversation(name: string, profileName?: string): Promi
 
 export async function deleteConversation(name: string, profileName?: string): Promise<void> {
   const profile = await activeProfile(profileName);
-  const config = await loadConfig();
+  const config = await loadConversationConfiguration();
   delete config.conversations[conversationKey(profile.name, name)];
-  await saveConfig(config);
+  await saveConversationConfiguration(config);
 }
 
 export function conversationSummary(conversation: ConversationState) {
