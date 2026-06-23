@@ -239,6 +239,7 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
       return;
     }
     dispatch({ type: "settings.set", settings: { runPreset: normalized } });
+    dispatch({ type: "message.add", role: "system", text: `Preset set to ${normalized || "none"}.` });
     dispatch({ type: "activity.add", text: `Preset: ${normalized || "none"}` });
   }
 

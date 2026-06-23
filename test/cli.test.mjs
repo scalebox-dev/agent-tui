@@ -1213,6 +1213,7 @@ test("workbench command controller applies renderer-neutral preset commands", as
 
   await controller.run({ kind: "preset", value: "analysis" });
   assert.equal(engine.snapshot().runPreset, "analysis");
+  assert.match(engine.snapshot().messages.at(-1).text, /Preset set to analysis/);
 
   await controller.run({ kind: "preset", value: "missing" });
   assert.equal(engine.snapshot().runPreset, "analysis");
