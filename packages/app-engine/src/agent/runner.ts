@@ -648,11 +648,18 @@ async function executeLocalFunctionCalls(
   const outputs: FunctionCallOutputInput[] = [];
   for (const call of pendingFunctionCalls(response)) {
     throwIfAborted(abortSignal);
-    if (!registry.has(call.name)) {
-      throw new Error(`no local handler registered for function ${call.name}`);
+    let args: Record<string, unknown> = {};
+    let result: Record<string, unknown>;
+    try {
+      args = call.arguments ? JSON.parse(call.arguments) as Record<string, unknown> : {};
+      if (!registry.has(call.name)) {
+        throw new Error(`no local handler registered for function ${call.name}`);
+      }
+      result = await registry.execute(call.name, args, abortSignal);
+    } catch (error) {
+      throwIfAborted(abortSignal);
+      result = localToolExecutionErrorResult(call.name, args, error);
     }
-    const args = call.arguments ? JSON.parse(call.arguments) as Record<string, unknown> : {};
-    const result = await registry.execute(call.name, args, abortSignal);
     throwIfAborted(abortSignal);
     const action = typeof result.action === "string"
       ? result.action
@@ -685,9 +692,37 @@ async function executeLocalFunctionCalls(
   return { outputs };
 }
 
+export function localToolExecutionErrorResult(
+  toolName: string,
+  args: Record<string, unknown>,
+  error: unknown,
+): Record<string, unknown> {
+  return {
+    ok: false,
+    tool: toolName,
+    action: typeof args.action === "string" ? args.action : undefined,
+    error: {
+      message: userFacingError(error),
+      name: error instanceof Error ? error.name : undefined,
+      code: errorCode(error),
+    },
+  };
+}
+
 function throwIfAborted(signal?: AbortSignal) {
   if (!signal?.aborted) return;
   throw new Error("Agent turn aborted.");
+}
+
+function userFacingError(error: unknown) {
+  if (error instanceof Error) return error.message;
+  return String(error);
+}
+
+function errorCode(error: unknown) {
+  if (typeof error !== "object" || error === null) return undefined;
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "string" || typeof code === "number" ? code : undefined;
 }
 
 function requestAbortOptions(signal?: AbortSignal): RequestOptions | undefined {

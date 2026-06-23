@@ -37,6 +37,7 @@ export interface WorkbenchRenderModel {
     draft: string;
     fullAccess: boolean;
     label: string;
+    viewportColumns: number;
     waitingText: string;
   };
   terminalColumns: number;
@@ -75,9 +76,10 @@ export function buildWorkbenchRenderModel(input: BuildWorkbenchRenderModelInput)
     width: transcriptWidth,
   });
   const cursor = Math.max(0, Math.min(input.draft.length, input.cursor ?? input.draft.length));
-  const beforeCursor = input.draft.slice(0, cursor);
-  const cursorText = input.draft[cursor] ?? " ";
-  const afterCursor = input.draft.slice(cursor + (cursor < input.draft.length ? 1 : 0));
+  const fullAccess = input.state.accessMode === "full";
+  const label = input.state.busy ? "working" : "you";
+  const inputViewportColumns = Math.max(12, terminalColumns - 10 - label.length - (fullAccess ? 14 : 0));
+  const inputViewport = inputViewportText(input.draft, cursor, inputViewportColumns);
 
   return {
     activityHeight,
@@ -103,14 +105,15 @@ export function buildWorkbenchRenderModel(input: BuildWorkbenchRenderModelInput)
       workdir: input.state.workdir?.root || input.workdirFallback,
     },
     input: {
-      afterCursor,
-      beforeCursor,
+      afterCursor: inputViewport.afterCursor,
+      beforeCursor: inputViewport.beforeCursor,
       busy: input.state.busy,
       cursor,
-      cursorText,
+      cursorText: inputViewport.cursorText,
       draft: input.draft,
-      fullAccess: input.state.accessMode === "full",
-      label: input.state.busy ? "working" : "you",
+      fullAccess,
+      label,
+      viewportColumns: inputViewportColumns,
       waitingText: `waiting for agent ${elapsedDots(input.spinnerFrame)}`,
     },
     terminalColumns,
@@ -131,4 +134,33 @@ export function pendingLocalLabel(state: WorkbenchState) {
 
 export function busySpinner(frame: number) {
   return spinnerGlyph(frame);
+}
+
+function inputViewportText(draft: string, cursor: number, maxColumns: number) {
+  if (draft.length === 0) {
+    return { beforeCursor: "", cursorText: " ", afterCursor: "" };
+  }
+  const fullWidth = Math.max(1, maxColumns - (cursor >= draft.length ? 1 : 0));
+  if (draft.length <= fullWidth) {
+    return {
+      beforeCursor: draft.slice(0, cursor),
+      cursorText: draft[cursor] ?? " ",
+      afterCursor: draft.slice(cursor + (cursor < draft.length ? 1 : 0)),
+    };
+  }
+
+  const windowColumns = Math.max(4, maxColumns - 3);
+  const maxStart = Math.max(0, draft.length - windowColumns);
+  const preferredStart = cursor >= draft.length
+    ? maxStart
+    : Math.max(0, cursor - Math.floor(windowColumns * 0.65));
+  const start = Math.min(preferredStart, maxStart);
+  const end = Math.min(draft.length, start + windowColumns);
+  const visibleCursor = Math.max(start, Math.min(cursor, end));
+  const hasLeft = start > 0;
+  const hasRight = end < draft.length;
+  const beforeCursor = `${hasLeft ? "‹" : ""}${draft.slice(start, visibleCursor)}`;
+  const cursorText = draft[visibleCursor] ?? " ";
+  const afterCursor = `${draft.slice(visibleCursor + (visibleCursor < draft.length ? 1 : 0), end)}${hasRight ? "›" : ""}`;
+  return { beforeCursor, cursorText, afterCursor };
 }

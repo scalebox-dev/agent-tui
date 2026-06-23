@@ -1,6 +1,6 @@
 {
   "name": "@agent-api/app-engine",
-  "version": "0.0.6",
+  "version": "0.0.8",
   "description": "Renderer-neutral application engine for Agent API apps",
   "license": "MIT",
   "homepage": "https://github.com/scalebox-dev/agent-tui#readme",
@@ -18,6 +18,18 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
+    "./core": {
+      "types": "./dist/core.d.ts",
+      "import": "./dist/core.js"
+    },
+    "./workbench": {
+      "types": "./dist/workbench.d.ts",
+      "import": "./dist/workbench.js"
+    },
+    "./terminal": {
+      "types": "./dist/terminal.d.ts",
+      "import": "./dist/terminal.js"
+    },
     "./package.json": "./package.json"
   },
   "scripts": {
@@ -29,7 +41,7 @@
     "pack:local": "npm pack --pack-destination ./artifacts"
   },
   "dependencies": {
-    "@agent-api/sdk": "^1.3.0",
+    "@agent-api/sdk": "^1.3.1",
     "zod": "^4.4.3"
   },
   "devDependencies": {

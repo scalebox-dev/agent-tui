@@ -1,17 +1,19 @@
 import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useApp, useInput, useStdout } from "ink";
 import {
-  buildWorkbenchRenderModel,
   createAgentEngine,
-  createWorkbenchAuthController,
-  createWorkbenchAuthGateController,
   defaultBaseURL,
   type AgentEngineApp,
   type AgentRunOptions,
+} from "@agent-api/app-engine/core";
+import {
+  createWorkbenchAuthController,
+  createWorkbenchAuthGateController,
   type AuthGateState,
   type WorkbenchAuthController,
   type WorkbenchAuthGateController,
-} from "@agent-api/app-engine";
+} from "@agent-api/app-engine/workbench";
+import { buildWorkbenchRenderModel } from "@agent-api/app-engine/terminal";
 import { InkAuthGate, InkWorkbenchScreen } from "./components.js";
 
 export function ChatApp({ options }: { options: AgentRunOptions }) {

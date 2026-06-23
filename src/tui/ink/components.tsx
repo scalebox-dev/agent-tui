@@ -2,12 +2,14 @@ import React from "react";
 import { Box, Text } from "ink";
 import {
   activityColor,
-  authMethods,
   busySpinner,
-  type RenderMode,
-  type AuthGateState,
   type WorkbenchRenderModel,
-} from "@agent-api/app-engine";
+} from "@agent-api/app-engine/terminal";
+import {
+  authMethods,
+  type AuthGateState,
+  type RenderMode,
+} from "@agent-api/app-engine/workbench";
 
 export function InkWorkbenchScreen({
   renderModel,

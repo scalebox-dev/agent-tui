@@ -27,7 +27,7 @@ import {
   runtime,
   type ChatOptions,
   useProfile,
-} from "@agent-api/app-engine";
+} from "@agent-api/app-engine/core";
 import { ChatApp } from "./tui/chat.js";
 import { cliAuthor, cliName, cliVersion, legacyCliName } from "./runtime.js";
 

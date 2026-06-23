@@ -15,9 +15,9 @@ npm install @agent-api/app-engine
 ```ts
 import {
   configureAgentAppRuntime,
-  createAgentEngine,
-  createWorkbenchAuthController,
-} from "@agent-api/app-engine";
+  loginWithAPIKey,
+  runAgentTurn,
+} from "@agent-api/app-engine/core";
 
 configureAgentAppRuntime({
   appName: "my-agent-app",
@@ -25,17 +25,33 @@ configureAgentAppRuntime({
   appVersion: "1.0.0",
 });
 
-const engine = createAgentEngine();
-const auth = createWorkbenchAuthController();
+await loginWithAPIKey({
+  profile: "default",
+  baseURL: "https://api.agentsway.dev",
+  apiKey: process.env.AGENT_API_KEY!,
+});
+
+const result = await runAgentTurn({
+  profile: "default",
+  promptParts: ["Hello"],
+});
 ```
 
 Host applications should call `configureAgentAppRuntime()` during startup so config, profiles, and runtime files live under the host app's own platform config directory.
 
+## Import Layers
+
+- `@agent-api/app-engine/core`: UI-neutral APIs for auth, config, profiles, conversations, updates, local workdir setup, and agent turns.
+- `@agent-api/app-engine/workbench`: optional app/workbench state controllers for apps that want Agent API's conversation workflow.
+- `@agent-api/app-engine/terminal`: optional terminal-facing helpers for transcript wrapping, input viewport rendering, and spinner glyphs.
+- `@agent-api/app-engine`: compatibility barrel that re-exports the layers above.
+
 ## Boundaries
 
-- This package owns core application state and side effects.
-- Renderers own input widgets, layout, keyboard handling, and screen drawing.
-- The CLI/TUI package should import core behavior from this package rather than from private source paths.
+- Core APIs own application state and side effects.
+- Workbench APIs own reusable conversation/workbench semantics.
+- Terminal APIs are optional helpers for terminal renderers.
+- Renderers own widgets, native input controls, layout, keyboard mapping, and screen drawing.
 
 ## Local Development
 

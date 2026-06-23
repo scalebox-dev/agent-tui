@@ -9,6 +9,7 @@ export {
   clearPresetToolCatalogCache,
   isAvailablePreset,
   listAvailablePresets,
+  localToolExecutionErrorResult,
   resolveAgentRequestTools,
   resumeAgentAfterLocalApproval,
   runAgent,

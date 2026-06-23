@@ -41,6 +41,7 @@ import {
   installConfiguredIsolator,
   localShellIsolationOptions,
   localShellIsolationOptions as localShellIsolationOptionsFromBoundary,
+  localToolExecutionErrorResult,
   normalizeChatOptions,
   pendingLocalLabel,
   parsePendingApprovalCommand,
@@ -165,13 +166,24 @@ test("app engine package is importable through package exports", async () => {
   await mkdir(scope, { recursive: true });
   await symlink(new URL("../packages/app-engine", import.meta.url).pathname, join(scope, "app-engine"), "dir");
 
-  const { stdout } = await execFileAsync("node", [
+  const rootExport = await execFileAsync("node", [
     "--input-type=module",
     "-e",
     "import { createAgentEngine } from '@agent-api/app-engine'; console.log(typeof createAgentEngine);",
   ], { cwd: root });
+  const subpathExports = await execFileAsync("node", [
+    "--input-type=module",
+    "-e",
+    [
+      "import { createAgentEngine } from '@agent-api/app-engine/core';",
+      "import { createWorkbenchEngine } from '@agent-api/app-engine/workbench';",
+      "import { buildWorkbenchRenderModel } from '@agent-api/app-engine/terminal';",
+      "console.log([typeof createAgentEngine, typeof createWorkbenchEngine, typeof buildWorkbenchRenderModel].join(','));",
+    ].join(" "),
+  ], { cwd: root });
 
-  assert.equal(stdout.trim(), "function");
+  assert.equal(rootExport.stdout.trim(), "function");
+  assert.equal(subpathExports.stdout.trim(), "function,function,function");
 });
 
 test("app engine runtime identity is configurable by host apps", async () => {
@@ -813,6 +825,22 @@ test("agent failed response message includes response identity and code", () => 
   }), "Agent response resp_failed model=provider/model failed: The model request failed. Please try again. (model_call_failed)");
 });
 
+test("local tool execution errors are encoded as tool results", () => {
+  const error = new Error("ENOENT: no such file or directory, scandir 'missing'");
+  error.code = "ENOENT";
+
+  assert.deepEqual(localToolExecutionErrorResult("local_workdir", { action: "grep", path: "missing" }, error), {
+    ok: false,
+    tool: "local_workdir",
+    action: "grep",
+    error: {
+      message: "ENOENT: no such file or directory, scandir 'missing'",
+      name: "Error",
+      code: "ENOENT",
+    },
+  });
+});
+
 test("agent request tools preserve preset tools when appending local workdir tools", async () => {
   const calls = [];
   const client = {
@@ -1311,6 +1339,28 @@ test("workbench render model exposes renderer-neutral screen state", () => {
   assert.equal(model.viewportHeight, 19);
   assert.ok(model.transcript.visibleLines.length > 0);
   assert.match(model.footerText, /live/);
+});
+
+test("workbench render model scrolls long input around the cursor", () => {
+  const state = createInitialWorkbenchState({});
+  const draft = `${"x".repeat(90)}END`;
+  const model = buildWorkbenchRenderModel({
+    cursor: draft.length,
+    draft,
+    profileName: "default",
+    spinnerFrame: 0,
+    state,
+    transcriptOffset: 0,
+    viewport: { rows: 30, columns: 80 },
+    workdirFallback: "/fallback",
+  });
+
+  assert.equal(model.input.draft, draft);
+  assert.equal(model.input.cursorText, " ");
+  assert.match(model.input.beforeCursor, /^‹/);
+  assert.match(model.input.beforeCursor, /END$/);
+  assert.equal(model.input.afterCursor, "");
+  assert.ok(model.input.beforeCursor.length + model.input.cursorText.length <= model.input.viewportColumns);
 });
 
 test("pending local label is stable for renderer headers", () => {
