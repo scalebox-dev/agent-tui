@@ -1,5 +1,5 @@
 import type { AgentRunOptions } from "../agent.js";
-import type { WorkbenchCommand } from "../tui/workbench.js";
+import type { WorkbenchCommand } from "./state.js";
 import type { WorkbenchAuthController } from "./auth-controller.js";
 import type { WorkbenchConversationController } from "./conversation-controller.js";
 import type { WorkbenchEffect, WorkbenchEngine } from "./engine.js";
@@ -63,7 +63,7 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
           await startNewConversation(command.name);
           return;
         case "switch_conversation":
-          switchConversation(command.name);
+          await switchConversation(command.name);
           return;
         case "list_conversations":
           await showConversations();
@@ -314,7 +314,13 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
   async function startNewConversation(name?: string) {
     const conversation = await options.conversationController.startNewConversation(name, options.options.profile);
     dispatch({ type: "messages.clear" });
-    dispatch({ type: "conversation.set", name: conversation.name });
+    dispatch({
+      type: "conversation.set",
+      id: conversation.id,
+      name: conversation.name,
+      previousResponseId: conversation.previousResponseId,
+      status: conversation.status,
+    });
     dispatch({
       type: "message.add",
       role: "system",
@@ -322,10 +328,16 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
     });
   }
 
-  function switchConversation(name: string) {
-    const conversation = options.conversationController.switchConversation(name);
+  async function switchConversation(name: string) {
+    const conversation = await options.conversationController.switchConversation(name, options.options.profile);
     dispatch({ type: "messages.clear" });
-    dispatch({ type: "conversation.set", name: conversation.name });
+    dispatch({
+      type: "conversation.set",
+      id: conversation.id,
+      name: conversation.name,
+      previousResponseId: conversation.previousResponseId,
+      status: conversation.status,
+    });
     dispatch({
       type: "message.add",
       role: "system",

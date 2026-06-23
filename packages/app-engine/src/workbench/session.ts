@@ -1,5 +1,6 @@
 import type { AgentRunOptions } from "../agent.js";
-import type { WorkbenchState } from "../tui/workbench.js";
+import type { AgentEngineServices } from "../engine/services.js";
+import type { WorkbenchState } from "./state.js";
 import type { WorkbenchAuthController } from "./auth-controller.js";
 import { createWorkbenchConversationController, type WorkbenchConversationController } from "./conversation-controller.js";
 import { createWorkbenchEngine, type WorkbenchEngine } from "./engine.js";
@@ -24,21 +25,22 @@ export interface WorkbenchSession {
 export interface WorkbenchSessionOptions {
   authController: WorkbenchAuthController;
   baseOptions: AgentRunOptions;
+  services?: Omit<AgentEngineServices, "auth">;
 }
 
 export function createWorkbenchSession(options: WorkbenchSessionOptions): WorkbenchSession {
-  const engine = createWorkbenchEngine({
+  const engine = options.services?.engine ?? createWorkbenchEngine({
     accessMode: options.baseOptions.accessMode,
     conversation: options.baseOptions.conversation,
     contextEnabled: Boolean(options.baseOptions.includeLocalContext || options.baseOptions.workdir),
     model: options.baseOptions.model,
     preset: options.baseOptions.preset,
   });
-  const local = createWorkbenchLocalController({
+  const local = options.services?.local ?? createWorkbenchLocalController({
     getShellIsolation: () => engine.snapshot().shellIsolation,
   });
-  const runtime = createWorkbenchRuntimeController({ dispatch: engine.dispatch });
-  const turn = createWorkbenchTurnController({
+  const runtime = options.services?.runtime ?? createWorkbenchRuntimeController({ dispatch: engine.dispatch });
+  const turn = options.services?.turn ?? createWorkbenchTurnController({
     baseOptions: options.baseOptions,
     dispatch: engine.dispatch,
     engine,
@@ -48,13 +50,13 @@ export function createWorkbenchSession(options: WorkbenchSessionOptions): Workbe
   });
 
   return {
-    conversation: createWorkbenchConversationController(),
+    conversation: options.services?.conversation ?? createWorkbenchConversationController(),
     engine,
-    input: createWorkbenchInputController(),
-    lifecycle: createWorkbenchLifecycleController({ authController: options.authController }),
+    input: options.services?.input ?? createWorkbenchInputController(),
+    lifecycle: options.services?.lifecycle ?? createWorkbenchLifecycleController({ authController: options.authController }),
     local,
     runtime,
-    settings: createWorkbenchSettingsController(),
+    settings: options.services?.settings ?? createWorkbenchSettingsController(),
     turn,
   };
 }

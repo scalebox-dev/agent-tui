@@ -5,21 +5,38 @@ import { stat } from "node:fs/promises";
 import { resolve } from "node:path";
 import { render } from "ink";
 import React from "react";
-import { conversationSummary, deleteConversation, getConversation, listConversations, runAgent } from "./agent.js";
-import { normalizeChatOptions, type ChatOptions } from "./chat-options.js";
-import { ChatApp } from "./tui/chat.js";
-import { activeProfile, loadConfig, loadConversationConfiguration, redactSecret } from "./config.js";
-import { cliVersion, runtime } from "./runtime/index.js";
-import { openWorkdir } from "./workdir/index.js";
 import {
+  activeProfile,
+  configureAgentAppRuntime,
+  conversationSummary,
+  deleteConversation,
   deleteProfile,
+  getConversation,
+  listConversations,
   listProfiles,
+  loadConfig,
+  loadConversationConfiguration,
   loginWithAPIKey,
   loginWithBrowser,
+  normalizeChatOptions,
+  openWorkdir,
   profileSummary,
+  redactSecret,
   resolveRuntimeProfile,
+  runAgent,
+  runtime,
+  type ChatOptions,
   useProfile,
-} from "./profile.js";
+} from "@agent-api/app-engine";
+import { ChatApp } from "./tui/chat.js";
+import { cliAuthor, cliName, cliVersion, legacyCliName } from "./runtime.js";
+
+configureAgentAppRuntime({
+  appName: cliName,
+  appAuthor: cliAuthor,
+  appVersion: cliVersion,
+  legacyAppName: legacyCliName,
+});
 
 type GlobalOptions = {
   profile?: string;

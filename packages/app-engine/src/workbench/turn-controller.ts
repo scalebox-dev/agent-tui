@@ -10,7 +10,7 @@ import {
   type WorkdirAccessMode,
 } from "../agent.js";
 import type { WorkbenchEngine, WorkbenchRuntimeEffect } from "./engine.js";
-import type { WorkbenchAction, WorkbenchState } from "../tui/workbench.js";
+import type { WorkbenchAction, WorkbenchState } from "./state.js";
 
 export interface WorkbenchTurnController {
   startPrompt(prompt: string): Promise<void>;

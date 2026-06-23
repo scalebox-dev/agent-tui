@@ -1,6 +1,11 @@
 # Agent API CLI
 
-First-class command line interface for Agent API. The CLI is built on `@agent-api/sdk@^1.2.2` with Commander for command routing and Ink for interactive terminal UI.
+First-class command line interface for Agent API. The CLI shell is built on `@agent-api/app-engine`, which wraps `@agent-api/sdk@^1.3.0` behind a renderer-neutral application core. Commander handles command routing, and Ink renders the current terminal UI.
+
+This repository publishes two packages:
+
+- `@agent-api/app-engine`: reusable application core for agent apps.
+- `@agent-api/cli`: command-line shell and Ink TUI renderer.
 
 ## Development
 
@@ -40,10 +45,11 @@ If your npm account requires two-factor auth for publish:
 npm run release:local -- --otp 123456
 ```
 
-The local release script runs `npm ci`, builds and tests the package, creates an
-npm tarball in `artifacts/`, installs that tarball into a temporary npm prefix,
-smoke-tests the published bin aliases, and then publishes the verified tarball
-with `npm publish --access public`.
+The local release script runs `npm ci`, builds and tests both packages, creates
+npm tarballs in `artifacts/`, installs the app-engine and CLI tarballs into a
+temporary npm prefix, smoke-tests the published bin aliases, and then publishes
+`@agent-api/app-engine` before `@agent-api/cli` with
+`npm publish --access public`.
 
 For a no-publish rehearsal:
 

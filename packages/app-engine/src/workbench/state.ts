@@ -42,6 +42,9 @@ export interface WorkbenchState {
   activeAssistantMessageId: string | null;
   pendingLocalTool: LocalToolApproval | null;
   accessMode: WorkdirAccessMode;
+  conversationId?: string;
+  conversationPreviousResponseId?: string;
+  conversationStatus: "fresh" | "continued" | "unknown";
   currentConversation: string;
   runPreset?: string;
   runModel?: string;
@@ -71,7 +74,7 @@ export type WorkbenchAction =
   | { type: "local_tool.pending.set"; approval: LocalToolApprovalRequest }
   | { type: "local_tool.pending.clear" }
   | { type: "access.set"; mode: WorkdirAccessMode }
-  | { type: "conversation.set"; name: string }
+  | { type: "conversation.set"; id?: string; name: string; previousResponseId?: string; status?: "fresh" | "continued" | "unknown" }
   | { type: "settings.set"; settings: Partial<Pick<WorkbenchState, "runPreset" | "runModel" | "renderMode" | "defaultPreset" | "shellIsolation">> };
 
 export type WorkbenchCommand =
@@ -129,6 +132,9 @@ export function createInitialWorkbenchState(options: {
     activeAssistantMessageId: null,
     pendingLocalTool: null,
     accessMode,
+    conversationId: undefined,
+    conversationPreviousResponseId: undefined,
+    conversationStatus: "unknown",
     currentConversation: options.conversation || "default",
     runPreset: options.preset,
     runModel: options.model,
@@ -247,8 +253,11 @@ export function workbenchReducer(state: WorkbenchState, action: WorkbenchAction)
     case "conversation.set":
       return {
         ...state,
+        conversationId: action.id,
         currentConversation: action.name,
-        activities: [...state.activities, newActivity("info", `Conversation: ${action.name}`)].slice(-20),
+        conversationPreviousResponseId: action.previousResponseId,
+        conversationStatus: action.status ?? (action.previousResponseId ? "continued" : "fresh"),
+        activities: [...state.activities, newActivity("info", conversationActivityText(action))].slice(-20),
       };
     case "settings.set":
       return {
@@ -258,6 +267,11 @@ export function workbenchReducer(state: WorkbenchState, action: WorkbenchAction)
     default:
       return state;
   }
+}
+
+function conversationActivityText(action: Extract<WorkbenchAction, { type: "conversation.set" }>) {
+  const suffix = action.previousResponseId ? ` continues ${action.previousResponseId}` : action.status === "fresh" ? " fresh" : "";
+  return `Conversation: ${action.name}${suffix}`;
 }
 
 function setLocalAccess(state: WorkbenchState, mode: WorkdirAccessMode): WorkbenchState {

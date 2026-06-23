@@ -1,4 +1,4 @@
-import type { RenderMode, WorkbenchMessage } from "../tui/workbench.js";
+import type { RenderMode, WorkbenchMessage } from "./state.js";
 
 export type TranscriptLine = {
   id: string;

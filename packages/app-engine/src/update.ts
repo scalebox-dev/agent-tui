@@ -1,4 +1,4 @@
-import { cliVersion } from "./runtime/index.js";
+import { appVersion } from "./runtime/index.js";
 
 export interface UpdateCheckResult {
   current: string;
@@ -20,7 +20,7 @@ const defaultRegistryURL = "https://registry.npmjs.org";
 
 export async function checkForUpdate(options: UpdateCheckOptions = {}): Promise<UpdateCheckResult | null> {
   const packageName = options.packageName || process.env.AGENT_TUI_UPDATE_PACKAGE || defaultPackageName;
-  const current = options.currentVersion || cliVersion;
+  const current = options.currentVersion || appVersion();
   const registryURL = (options.registryURL || process.env.AGENT_TUI_NPM_REGISTRY || defaultRegistryURL).replace(/\/+$/, "");
   const timeoutMs = options.timeoutMs ?? 1500;
   const controller = new AbortController();

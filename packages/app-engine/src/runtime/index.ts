@@ -1,23 +1,48 @@
 import { createLocalRuntime } from "@agent-api/sdk/local";
+import type { LocalRuntime, LocalRuntimeOptions } from "@agent-api/sdk/local";
 import { cp, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-export const cliName = "agent-tui";
-export const cliAuthor = "AgentsWay";
-export const cliVersion = "0.2.1";
-const legacyCliName = "agent-api-cli";
+export const defaultAppName = "agent-tui";
+export const defaultAppAuthor = "AgentsWay";
+export const defaultAppVersion = "0.3.1";
+const defaultLegacyAppName = "agent-api-cli";
 
-export const runtime = createLocalRuntime({
-  appName: cliName,
-  appAuthor: cliAuthor,
-});
+export interface AgentAppRuntimeOptions extends Omit<LocalRuntimeOptions, "appName" | "appAuthor"> {
+  appName?: string;
+  appAuthor?: string;
+  appVersion?: string;
+  legacyAppName?: string | null;
+}
 
-const legacyRuntime = createLocalRuntime({
-  appName: legacyCliName,
-  appAuthor: cliAuthor,
-});
+export interface AgentAppRuntimeContext {
+  appName: string;
+  appAuthor: string;
+  appVersion: string;
+  legacyAppName?: string | null;
+  runtime: LocalRuntime;
+  legacyRuntime?: LocalRuntime;
+}
 
 let migrationPromise: Promise<void> | null = null;
+let runtimeContext = createRuntimeContext();
+
+export let runtime = runtimeContext.runtime;
+
+export function configureAgentAppRuntime(options: AgentAppRuntimeOptions = {}): AgentAppRuntimeContext {
+  runtimeContext = createRuntimeContext(options);
+  runtime = runtimeContext.runtime;
+  migrationPromise = null;
+  return runtimeContext;
+}
+
+export function currentAgentAppRuntime(): AgentAppRuntimeContext {
+  return runtimeContext;
+}
+
+export function appVersion() {
+  return runtimeContext.appVersion;
+}
 
 export async function ensureRuntime() {
   migrationPromise ??= migrateLegacyRuntime();
@@ -28,9 +53,10 @@ export async function ensureRuntime() {
 }
 
 async function migrateLegacyRuntime() {
-  await migrateLegacyConfigDirectory();
+  if (!runtimeContext.legacyRuntime) return;
+  await migrateLegacyConfigDirectory(runtimeContext.legacyRuntime);
   for (const key of ["data", "cache", "logs"] as const) {
-    await moveDirectoryIfNeeded(legacyRuntime.dirs[key], runtime.dirs[key]);
+    await moveDirectoryIfNeeded(runtimeContext.legacyRuntime.dirs[key], runtime.dirs[key]);
   }
 }
 
@@ -51,7 +77,7 @@ async function moveDirectoryIfNeeded(from: string, to: string) {
   }
 }
 
-async function migrateLegacyConfigDirectory() {
+async function migrateLegacyConfigDirectory(legacyRuntime: LocalRuntime) {
   const from = legacyRuntime.dirs.config;
   const to = runtime.dirs.config;
   if (from === to || !(await isDirectory(from))) return;
@@ -159,4 +185,22 @@ async function isDirectory(file: string) {
     if (error?.code === "ENOENT") return false;
     throw error;
   }
+}
+
+function createRuntimeContext(options: AgentAppRuntimeOptions = {}): AgentAppRuntimeContext {
+  const appName = options.appName || defaultAppName;
+  const appAuthor = options.appAuthor || defaultAppAuthor;
+  const appVersion = options.appVersion || defaultAppVersion;
+  const runtimeOptions = { ...options, appName, appAuthor };
+  delete (runtimeOptions as Partial<AgentAppRuntimeOptions>).appVersion;
+  delete (runtimeOptions as Partial<AgentAppRuntimeOptions>).legacyAppName;
+  const legacyAppName = "legacyAppName" in options ? options.legacyAppName : defaultLegacyAppName;
+  return {
+    appName,
+    appAuthor,
+    appVersion,
+    legacyAppName,
+    runtime: createLocalRuntime(runtimeOptions),
+    legacyRuntime: legacyAppName ? createLocalRuntime({ ...runtimeOptions, appName: legacyAppName }) : undefined,
+  };
 }

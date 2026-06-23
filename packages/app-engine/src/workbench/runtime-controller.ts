@@ -1,4 +1,4 @@
-import type { WorkbenchAction } from "../tui/workbench.js";
+import type { WorkbenchAction } from "./state.js";
 import type { WorkbenchRuntimeEffect } from "./engine.js";
 
 export interface WorkbenchRuntimeController {

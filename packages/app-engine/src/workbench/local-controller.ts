@@ -1,6 +1,6 @@
 import { createLocalShellToolRegistry, createLocalWorkdirToolRegistry } from "@agent-api/sdk/local";
 import { openWorkdir, type WorkdirService } from "../workdir/index.js";
-import type { WorkbenchState, WorkbenchWorkdirStatus } from "../tui/workbench.js";
+import type { WorkbenchState, WorkbenchWorkdirStatus } from "./state.js";
 import { localShellIsolationOptions } from "./shell-isolation.js";
 import type { ShellIsolationPreferences } from "./shell-isolation.js";
 

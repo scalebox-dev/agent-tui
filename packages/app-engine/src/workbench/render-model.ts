@@ -1,4 +1,4 @@
-import type { RenderMode, WorkbenchState } from "../tui/workbench.js";
+import type { RenderMode, WorkbenchState } from "./state.js";
 import {
   buildTranscriptViewModel,
   elapsedDots,
@@ -18,6 +18,9 @@ export interface WorkbenchRenderModel {
     accessMode: string;
     contextEnabled: boolean;
     conversation: string;
+    conversationId: string;
+    conversationPreviousResponseId: string;
+    conversationStatus: "fresh" | "continued" | "unknown";
     model: string;
     pendingLocalLabel: string;
     preset: string;
@@ -80,6 +83,9 @@ export function buildWorkbenchRenderModel(input: BuildWorkbenchRenderModelInput)
       accessMode: input.state.accessMode,
       contextEnabled: input.state.contextEnabled,
       conversation: input.state.currentConversation,
+      conversationId: input.state.conversationId || "unresolved",
+      conversationPreviousResponseId: input.state.conversationPreviousResponseId || "",
+      conversationStatus: input.state.conversationStatus,
       model: input.state.runModel || "auto",
       pendingLocalLabel: pendingLocalLabel(input.state),
       preset: input.state.runPreset || "none",

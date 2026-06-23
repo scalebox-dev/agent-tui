@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { createHash, randomUUID } from "node:crypto";
 import { ensureRuntime, runtime } from "./runtime/index.js";
 import type { ShellIsolationMode, ShellIsolationPreferences } from "./workbench/shell-isolation.js";
 
@@ -34,9 +35,11 @@ export interface CLIConfig {
 }
 
 export interface ConversationState {
+  id: string;
   name: string;
   profile: string;
   previousResponseId?: string;
+  createdAt: number;
   updatedAt: number;
 }
 
@@ -68,9 +71,11 @@ const profileSchema = z.object({
 });
 
 const conversationSchema = z.object({
+  id: z.string().optional(),
   name: z.string(),
   profile: z.string(),
   previousResponseId: z.string().optional(),
+  createdAt: z.number().optional(),
   updatedAt: z.number(),
 });
 
@@ -148,7 +153,11 @@ export async function loadConversationConfiguration(): Promise<ConversationConfi
   if (!parsed.success) {
     throw new Error(`Invalid conversation configuration: ${parsed.error.issues.map((issue) => issue.message).join("; ")}`);
   }
-  return parsed.data;
+  const normalized = normalizeConversationConfiguration(parsed.data);
+  if (normalized.changed) {
+    await saveConversationConfiguration(normalized.config);
+  }
+  return normalized.config;
 }
 
 export async function saveConversationConfiguration(config: ConversationConfiguration): Promise<void> {
@@ -191,6 +200,35 @@ export function emptyAppConfiguration(): AppConfiguration {
 
 export function emptyConversationConfiguration(): ConversationConfiguration {
   return { conversations: {} };
+}
+
+export function createConversationID() {
+  return `conv_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
+}
+
+export function legacyConversationID(profile: string, name: string) {
+  return `conv_${createHash("sha256").update(`${profile}:${name}`).digest("hex").slice(0, 24)}`;
+}
+
+function normalizeConversationConfiguration(config: {
+  conversations: Record<string, z.infer<typeof conversationSchema>>;
+}): { config: ConversationConfiguration; changed: boolean } {
+  let changed = false;
+  const conversations: Record<string, ConversationState> = {};
+  for (const [key, conversation] of Object.entries(config.conversations)) {
+    const id = conversation.id || legacyConversationID(conversation.profile, conversation.name);
+    const createdAt = conversation.createdAt ?? conversation.updatedAt;
+    if (!conversation.id || !conversation.createdAt) changed = true;
+    conversations[key] = {
+      id,
+      name: conversation.name,
+      profile: conversation.profile,
+      previousResponseId: conversation.previousResponseId,
+      createdAt,
+      updatedAt: conversation.updatedAt,
+    };
+  }
+  return { config: { conversations }, changed };
 }
 
 export async function loadWorkbenchPreferences(): Promise<WorkbenchPreferences> {

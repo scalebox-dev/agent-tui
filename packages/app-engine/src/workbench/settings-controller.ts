@@ -9,14 +9,14 @@ import {
   updateWorkbenchPreferences,
   type WorkbenchPreferences,
 } from "../config.js";
-import type { RenderMode } from "../tui/workbench.js";
+import type { RenderMode } from "./state.js";
 import type { ShellIsolationMode, ShellIsolationPreferences } from "./shell-isolation.js";
 import {
   ensureConfiguredIsolator,
   installConfiguredIsolator,
   normalizeSourceURL,
   relocateInstalledIsolator,
-  validateInstalledIsolator,
+  validateIsolatorInstallTarget,
   type IsolatorInstallOptions,
 } from "./isolator-installer.js";
 
@@ -113,7 +113,10 @@ export function createWorkbenchSettingsController(options: WorkbenchSettingsCont
     },
 
     async saveIsolatorPath(value) {
-      const executablePath = normalizeIsolatorPath(value);
+      const rawExecutablePath = normalizeIsolatorPath(value);
+      const executablePath = rawExecutablePath
+        ? await validateIsolatorInstallTarget(rawExecutablePath)
+        : null;
       if (!executablePath) {
         const preferences = await updateWorkbenchPreferencesImpl({ isolation: { executablePath } });
         return {
@@ -140,12 +143,12 @@ export function createWorkbenchSettingsController(options: WorkbenchSettingsCont
       }
       const validatedPath = current?.executablePath
         ? await relocateInstalledIsolator(current.executablePath, executablePath, isolatorInstallOptions)
-        : await validateInstalledIsolator(executablePath, isolatorInstallOptions);
+        : executablePath;
       const preferences = await updateWorkbenchPreferencesImpl({ isolation: { executablePath: validatedPath, installSkipped: false } });
       return {
         ...settingsSnapshot(preferences),
-        message: `Saved verified isolator path: ${formatIsolatorPath(preferences.isolation)}.`,
-        activity: "Isolator path verified",
+        message: `Saved isolator install target: ${formatIsolatorPath(preferences.isolation)}.`,
+        activity: "Isolator install target saved",
       };
     },
 

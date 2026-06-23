@@ -1,5 +1,5 @@
 import type { WorkbenchAuthController } from "./auth-controller.js";
-import type { WorkbenchAction, WorkbenchWorkdirStatus } from "../tui/workbench.js";
+import type { WorkbenchAction, WorkbenchWorkdirStatus } from "./state.js";
 import { checkForUpdate, formatUpdateNotice, type UpdateCheckResult } from "../update.js";
 
 export type WorkbenchLifecycleEffect =

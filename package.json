@@ -1,6 +1,6 @@
 {
   "name": "@agent-api/cli",
-  "version": "0.2.1",
+  "version": "0.3.1",
   "description": "First-class command line interface for Agent API",
   "license": "MIT",
   "homepage": "https://github.com/scalebox-dev/agent-tui#readme",
@@ -12,6 +12,9 @@
     "url": "https://github.com/scalebox-dev/agent-tui/issues"
   },
   "type": "module",
+  "workspaces": [
+    "packages/app-engine"
+  ],
   "bin": {
     "agent-api": "dist/index.js",
     "agentsway": "dist/index.js",
@@ -20,7 +23,8 @@
   "scripts": {
     "sync-version": "node scripts/sync-version.mjs",
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
-    "build": "npm run clean && tsc -p tsconfig.json && node scripts/prepare-bin.mjs",
+    "build:app-engine": "npm run build -w @agent-api/app-engine",
+    "build": "npm run build:app-engine && npm run clean && tsc -p tsconfig.json && node scripts/prepare-bin.mjs",
     "dev": "npm run build && node dist/index.js",
     "dev:link": "node scripts/dev-link.mjs",
     "start": "node dist/index.js",
@@ -28,14 +32,13 @@
     "pack:local": "npm pack --pack-destination ./artifacts",
     "release:local": "node scripts/release-local.mjs",
     "prepack": "npm run sync-version && npm run build",
-    "test": "npm run sync-version && npm run build && node --test test/*.test.mjs"
+    "test": "npm run sync-version && npm run build && npm run smoke -w @agent-api/app-engine && node --test test/*.test.mjs"
   },
   "dependencies": {
-    "@agent-api/sdk": "^1.3.0",
+    "@agent-api/app-engine": "^0.0.2",
     "commander": "^14.0.3",
     "ink": "^6.8.0",
-    "react": "^19.2.7",
-    "zod": "^4.4.3"
+    "react": "^19.2.7"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

@@ -1,11 +1,13 @@
 import React from "react";
 import { Box, Text } from "ink";
-import { authMethods, type AuthGateState } from "../../workbench/auth-gate-controller.js";
-import { busySpinner, type WorkbenchRenderModel } from "../../workbench/render-model.js";
 import {
   activityColor,
+  authMethods,
+  busySpinner,
   type RenderMode,
-} from "../workbench.js";
+  type AuthGateState,
+  type WorkbenchRenderModel,
+} from "@agent-api/app-engine";
 
 export function InkWorkbenchScreen({
   renderModel,
@@ -19,6 +21,9 @@ export function InkWorkbenchScreen({
       <Header
         contextEnabled={renderModel.header.contextEnabled}
         conversation={renderModel.header.conversation}
+        conversationId={renderModel.header.conversationId}
+        conversationPreviousResponseId={renderModel.header.conversationPreviousResponseId}
+        conversationStatus={renderModel.header.conversationStatus}
         model={renderModel.header.model}
         accessMode={renderModel.header.accessMode}
         pendingLocalLabel={renderModel.header.pendingLocalLabel}
@@ -123,6 +128,9 @@ function AuthPrompt({ cursorVisible, label, value }: { cursorVisible: boolean; l
 function Header({
   contextEnabled,
   conversation,
+  conversationId,
+  conversationPreviousResponseId,
+  conversationStatus,
   accessMode,
   model,
   pendingLocalLabel,
@@ -133,6 +141,9 @@ function Header({
 }: {
   contextEnabled: boolean;
   conversation: string;
+  conversationId: string;
+  conversationPreviousResponseId: string;
+  conversationStatus: "fresh" | "continued" | "unknown";
   accessMode: string;
   model: string;
   pendingLocalLabel: string;
@@ -145,7 +156,10 @@ function Header({
     <Box borderStyle="round" borderColor="cyan" paddingX={1} flexDirection="column">
       <Text bold>Agent API Workbench</Text>
       <Text color="gray" wrap="truncate">
-        profile={profile} conversation={conversation} preset={preset} model={model}
+        profile={profile} conversation={conversation} id={conversationId} preset={preset} model={model}
+      </Text>
+      <Text color={conversationStatus === "continued" ? "yellow" : conversationStatus === "fresh" ? "green" : "gray"} wrap="truncate">
+        conversation_state={conversationStatus}{conversationPreviousResponseId ? ` previous=${conversationPreviousResponseId}` : ""}
       </Text>
       <Text color="gray" wrap="truncate">
         workdir={workdir} access={accessMode} local_tools={contextEnabled ? "on" : "off"} render={renderMode} pending={pendingLocalLabel}

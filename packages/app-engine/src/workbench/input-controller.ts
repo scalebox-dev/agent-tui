@@ -1,4 +1,4 @@
-import { createInputHistory } from "../tui/workbench.js";
+import { createInputHistory } from "./state.js";
 
 export interface WorkbenchInputKey {
   backspace?: boolean;

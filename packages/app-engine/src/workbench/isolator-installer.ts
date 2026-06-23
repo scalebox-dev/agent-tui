@@ -89,6 +89,15 @@ export async function validateInstalledIsolator(executablePath: string, options:
   return normalized;
 }
 
+export async function validateIsolatorInstallTarget(value: string) {
+  const normalized = await normalizeInstallTargetPath(value);
+  const targetDir = path.dirname(normalized);
+  await mkdir(targetDir, { recursive: true });
+  await ensureWritableDirectory(targetDir);
+  await existingTargetState(normalized);
+  return normalized;
+}
+
 export async function ensureConfiguredIsolator(
   config: IsolatorInstallConfig,
   options: IsolatorInstallOptions = {},
@@ -143,6 +152,19 @@ export async function relocateInstalledIsolator(
 
 export function defaultIsolatorInstallPath() {
   return path.join(runtime.dirs.data, "bin", process.platform === "win32" ? "agent-isolator.exe" : "agent-isolator");
+}
+
+export async function normalizeInstallTargetPath(value: string | null | undefined) {
+  const normalized = normalizeInstallPath(value);
+  try {
+    const info = await stat(normalized);
+    if (info.isDirectory()) {
+      return path.join(normalized, process.platform === "win32" ? "agent-isolator.exe" : "agent-isolator");
+    }
+  } catch (error: any) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+  return normalized;
 }
 
 export function normalizeSourceURL(value: string | null | undefined) {

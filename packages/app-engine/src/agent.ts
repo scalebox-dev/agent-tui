@@ -17,6 +17,8 @@ export {
 export {
   conversationSummary,
   deleteConversation,
+  ensureConversation,
   getConversation,
   listConversations,
+  startFreshConversation,
 } from "./conversation/index.js";

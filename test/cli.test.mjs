@@ -1,57 +1,57 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { chmod, mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import test from "node:test";
-import { agentResponseFailureMessage, agentTurnEventFromStreamEvent, clearPresetToolCatalogCache, resolveAgentRequestTools } from "../dist/agent.js";
-import { normalizeChatOptions } from "../dist/chat-options.js";
 import {
-  createInputHistory,
-  createInitialWorkbenchState,
-  formatTranscript,
-  parsePendingApprovalCommand,
-  parseWorkbenchCommand,
-  workbenchReducer,
-} from "../dist/tui/workbench.js";
-import { authStatusText, createWorkbenchAuthController } from "../dist/workbench/auth-controller.js";
-import { createWorkbenchAuthGateController } from "../dist/workbench/auth-gate-controller.js";
-import { createWorkbenchCommandController } from "../dist/workbench/command-controller.js";
-import { createWorkbenchEngine } from "../dist/workbench/engine.js";
-import { createWorkbenchLocalController } from "../dist/workbench/local-controller.js";
-import {
-  createWorkbenchSettingsController,
-  formatPresetList,
-  UnknownPresetError,
-} from "../dist/workbench/settings-controller.js";
-import {
-  createConversationName,
-  createWorkbenchConversationController,
-  defaultTranscriptExportPath,
-} from "../dist/workbench/conversation-controller.js";
-import { createWorkbenchInputController } from "../dist/workbench/input-controller.js";
-import {
-  createWorkbenchLifecycleController,
-  updateNoticeEffects,
-} from "../dist/workbench/lifecycle-controller.js";
-import { createWorkbenchTurnController } from "../dist/workbench/turn-controller.js";
-import {
+  agentResponseFailureMessage,
+  agentTurnEventFromStreamEvent,
+  authStatusText,
   buildTranscriptLines,
   buildTranscriptViewModel,
-  elapsedDots,
-  spinnerGlyph,
-} from "../dist/workbench/view-model.js";
-import {
   buildWorkbenchRenderModel,
+  clearPresetToolCatalogCache,
+  compareVersions,
+  createAgentEngine,
+  createConversationName,
+  createInputHistory,
+  createInitialWorkbenchState,
+  createWorkbenchAuthController,
+  createWorkbenchAuthGateController,
+  createWorkbenchCommandController,
+  createWorkbenchConversationController,
+  createWorkbenchEngine,
+  createWorkbenchEngine as createWorkbenchEngineFromBoundary,
+  createWorkbenchInputController,
+  createWorkbenchLifecycleController,
+  createWorkbenchLocalController,
+  createWorkbenchRuntimeController,
+  createWorkbenchSession,
+  createWorkbenchSession as createWorkbenchSessionFromBoundary,
+  createWorkbenchSettingsController,
+  createWorkbenchTurnController,
+  defaultTranscriptExportPath,
+  elapsedDots,
+  formatPresetList,
+  formatTranscript,
+  formatUpdateNotice,
+  installConfiguredIsolator,
+  localShellIsolationOptions,
+  localShellIsolationOptions as localShellIsolationOptionsFromBoundary,
+  normalizeChatOptions,
   pendingLocalLabel,
-} from "../dist/workbench/render-model.js";
-import { createWorkbenchRuntimeController } from "../dist/workbench/runtime-controller.js";
-import { createWorkbenchSession, sessionState } from "../dist/workbench/session.js";
-import { localShellIsolationOptions } from "../dist/workbench/shell-isolation.js";
-import { installConfiguredIsolator } from "../dist/workbench/isolator-installer.js";
-import { compareVersions, formatUpdateNotice } from "../dist/update.js";
+  parsePendingApprovalCommand,
+  parseWorkbenchCommand,
+  resolveAgentRequestTools,
+  sessionState,
+  spinnerGlyph,
+  UnknownPresetError,
+  updateNoticeEffects,
+  workbenchReducer,
+} from "@agent-api/app-engine";
 
 const execFileAsync = promisify(execFile);
 const bin = new URL("../dist/index.js", import.meta.url).pathname;
@@ -80,11 +80,14 @@ function stubAuthController() {
 
 function stubConversationController() {
   return {
-    async startNewConversation(name) {
-      return { name: name || "new", message: "Started." };
+    async resolveConversation(name) {
+      return { id: "conv_stub", name, status: "fresh", message: "Fresh." };
     },
-    switchConversation(name) {
-      return { name, message: "Switched." };
+    async startNewConversation(name) {
+      return { id: "conv_stub", name: name || "new", status: "fresh", message: "Started." };
+    },
+    async switchConversation(name) {
+      return { id: "conv_stub", name, status: "fresh", message: "Switched." };
     },
     async listConversations() {
       return "No conversations.";
@@ -149,6 +152,122 @@ test("api-key login creates and selects profiles in isolated config", async () =
   assert.equal(shown.auth.type, "api_key");
 });
 
+test("agent engine boundary exports reusable workbench primitives", () => {
+  assert.equal(typeof createAgentEngine, "function");
+  assert.equal(createWorkbenchEngineFromBoundary, createWorkbenchEngine);
+  assert.equal(createWorkbenchSessionFromBoundary, createWorkbenchSession);
+  assert.equal(localShellIsolationOptionsFromBoundary, localShellIsolationOptions);
+});
+
+test("app engine package is importable through package exports", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-tui-engine-export-"));
+  const scope = join(root, "node_modules", "@agent-api");
+  await mkdir(scope, { recursive: true });
+  await symlink(new URL("../packages/app-engine", import.meta.url).pathname, join(scope, "app-engine"), "dir");
+
+  const { stdout } = await execFileAsync("node", [
+    "--input-type=module",
+    "-e",
+    "import { createAgentEngine } from '@agent-api/app-engine'; console.log(typeof createAgentEngine);",
+  ], { cwd: root });
+
+  assert.equal(stdout.trim(), "function");
+});
+
+test("app engine runtime identity is configurable by host apps", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-app-engine-runtime-"));
+  const env = isolatedEnv(root);
+
+  const { stdout } = await execFileAsync("node", [
+    "--input-type=module",
+    "-e",
+    [
+      "import { configureAgentAppRuntime, loginWithAPIKey, runtime } from '@agent-api/app-engine';",
+      "configureAgentAppRuntime({ appName: 'desktop-shell', appAuthor: 'AgentsWay', appVersion: '9.8.7', legacyAppName: null });",
+      "await loginWithAPIKey({ profile: 'desktop', baseURL: 'https://api.test', apiKey: 'sk-desktop' });",
+      "console.log(JSON.stringify({ appName: runtime.appName, configDir: runtime.dirs.config }));",
+    ].join(" "),
+  ], { cwd: new URL("..", import.meta.url).pathname, env });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.appName, "desktop-shell");
+  assert.match(result.configDir, /desktop-shell/);
+  const config = JSON.parse(await readFile(join(result.configDir, "profiles.json"), "utf8"));
+  assert.equal(config.profiles.desktop.baseURL, "https://api.test");
+});
+
+test("agent engine facade submits prompts and commands without renderer dependencies", async () => {
+  const prompts = [];
+  const aborts = [];
+  let exited = false;
+  const app = createAgentEngine({
+    authController: stubAuthController(),
+    baseOptions: { accessMode: "off", conversation: "default", promptParts: ["initial", "prompt"] },
+    profileName: "default",
+    services: {
+      conversation: {
+        async resolveConversation(name) {
+          return {
+            id: "conv_existing",
+            name,
+            previousResponseId: "resp_previous",
+            status: "continued",
+            message: "Continuing.",
+          };
+        },
+        async startNewConversation(name) {
+          return { id: "conv_new", name: name || "new", status: "fresh", message: "Started." };
+        },
+        async switchConversation(name) {
+          return { id: "conv_switch", name, status: "fresh", message: "Switched." };
+        },
+        async listConversations() {
+          return "No conversations.";
+        },
+        async exportTranscript() {
+          return "/tmp/transcript.txt";
+        },
+      },
+      turn: {
+        async startPrompt(prompt) {
+          prompts.push(prompt);
+        },
+        async continueAfterLocalApproval() {},
+        async abort(message) {
+          aborts.push(message);
+        },
+      },
+    },
+    async onDeleteProfile() {},
+    onExit() {
+      exited = true;
+    },
+    onLogin() {},
+    onLogout() {},
+    onSwitchProfile() {},
+  });
+
+  await app.loadInitialConversation();
+  assert.equal(app.snapshot().conversationId, "conv_existing");
+  assert.equal(app.snapshot().conversationStatus, "continued");
+  assert.equal(app.snapshot().conversationPreviousResponseId, "resp_previous");
+  assert.match(app.snapshot().messages.at(-1).text, /Continuing conversation "default" from resp_previous/);
+
+  await app.startInitialPrompt();
+  await app.startInitialPrompt();
+  assert.deepEqual(prompts, ["initial prompt"]);
+
+  await app.submit("hello");
+  assert.deepEqual(prompts, ["initial prompt", "hello"]);
+
+  await app.abortActiveTurn("stop");
+  assert.deepEqual(aborts, ["stop"]);
+
+  await app.submit("/quit");
+  assert.equal(exited, true);
+  app.dispose();
+});
+
 test("agent conversation manager lists, shows, and deletes local conversation state", async () => {
   const root = await mkdtemp(join(tmpdir(), "agent-api-cli-test-"));
   const env = isolatedEnv(root);
@@ -159,15 +278,17 @@ test("agent conversation manager lists, shows, and deletes local conversation st
   const conversationsPath = join(configDir, "conversations.json");
   const conversations = { conversations: {} };
   conversations.conversations["test:release"] = {
+    id: "conv_release",
     name: "release",
     profile: "test",
     previousResponseId: "resp_test",
+    createdAt: 4102444700,
     updatedAt: 4102444800,
   };
   await writeFile(conversationsPath, JSON.stringify(conversations, null, 2));
 
   const { stdout: listOut } = await execFileAsync("node", [bin, "agent", "list"], { env });
-  assert.match(listOut, /release\s+test\s+2100-01-01T00:00:00\.000Z response=resp_test/);
+  assert.match(listOut, /release\s+test\s+2100-01-01T00:00:00\.000Z\s+conv_release response=resp_test/);
 
   const { stdout: showOut } = await execFileAsync("node", [bin, "agent", "show", "release"], { env });
   assert.equal(JSON.parse(showOut).previousResponseId, "resp_test");
@@ -204,7 +325,7 @@ test("workbench configuration is stored separately from profiles", async () => {
   await execFileAsync("node", [
     "--input-type=module",
     "-e",
-    "import { updateWorkbenchPreferences } from './dist/config.js'; await updateWorkbenchPreferences({ defaultPreset: 'pro-search', isolation: { mode: 'required', executablePath: '/opt/agent-isolator' } });",
+    "import { updateWorkbenchPreferences } from '@agent-api/app-engine'; await updateWorkbenchPreferences({ defaultPreset: 'pro-search', isolation: { mode: 'required', executablePath: '/opt/agent-isolator' } });",
   ], { cwd: new URL("..", import.meta.url).pathname, env });
 
   const updatedProfiles = JSON.parse(await readFile(profilesPath, "utf8"));
@@ -221,7 +342,7 @@ test("workbench configuration is stored separately from profiles", async () => {
   const { stdout: loadedPreferences } = await execFileAsync("node", [
     "--input-type=module",
     "-e",
-    "import { loadWorkbenchPreferences } from './dist/config.js'; console.log(JSON.stringify(await loadWorkbenchPreferences()));",
+    "import { loadWorkbenchPreferences } from '@agent-api/app-engine'; console.log(JSON.stringify(await loadWorkbenchPreferences()));",
   ], { cwd: new URL("..", import.meta.url).pathname, env });
   assert.deepEqual(JSON.parse(loadedPreferences), appConfig.workbench);
 
@@ -275,7 +396,7 @@ test("legacy agent-api-cli config merges into agent-tui config and removes old d
   await execFileAsync("node", [
     "--input-type=module",
     "-e",
-    "import { loadConfig } from './dist/config.js'; console.log(JSON.stringify(await loadConfig()));",
+    "import { loadConfig } from '@agent-api/app-engine'; console.log(JSON.stringify(await loadConfig()));",
   ], { cwd: new URL("..", import.meta.url).pathname, env });
 
   const migratedProfiles = JSON.parse(await readFile(join(configDir, "profiles.json"), "utf8"));
@@ -1002,6 +1123,10 @@ test("workbench lifecycle update notice helper ignores unavailable updates", () 
 });
 
 test("workbench session constructs shared engine and controllers", () => {
+  const injectedConversation = stubConversationController();
+  const injectedInput = createWorkbenchInputController();
+  const injectedLocal = stubLocalController();
+  const injectedSettings = stubSettingsController();
   const session = createWorkbenchSession({
     authController: {
       async check() { return { profileName: "default", refreshed: false }; },
@@ -1017,6 +1142,12 @@ test("workbench session constructs shared engine and controllers", () => {
       includeLocalContext: true,
       promptParts: [],
     },
+    services: {
+      conversation: injectedConversation,
+      input: injectedInput,
+      local: injectedLocal,
+      settings: injectedSettings,
+    },
   });
 
   assert.equal(sessionState(session).currentConversation, "demo");
@@ -1025,6 +1156,10 @@ test("workbench session constructs shared engine and controllers", () => {
   assert.equal(sessionState(session).messages.at(-1).text, "hello");
   assert.equal(typeof session.input.handle, "function");
   assert.equal(typeof session.lifecycle.initialPrompt, "function");
+  assert.equal(session.conversation, injectedConversation);
+  assert.equal(session.input, injectedInput);
+  assert.equal(session.local, injectedLocal);
+  assert.equal(session.settings, injectedSettings);
   assert.equal(typeof session.runtime.runEffects, "function");
   assert.equal(typeof session.turn.startPrompt, "function");
 });
@@ -1161,6 +1296,9 @@ test("workbench render model exposes renderer-neutral screen state", () => {
 
   assert.equal(model.header.profile, "default");
   assert.equal(model.header.conversation, "demo");
+  assert.equal(model.header.conversationId, "unresolved");
+  assert.equal(model.header.conversationStatus, "unknown");
+  assert.equal(model.header.conversationPreviousResponseId, "");
   assert.equal(model.header.workdir, "/tmp/demo");
   assert.equal(model.header.pendingLocalLabel, "none");
   assert.equal(model.input.fullAccess, true);
@@ -1295,6 +1433,56 @@ test("workbench settings controller persists shell isolation settings", async ()
     ["update", { mode: "auto", installSkipped: false }],
     ["update", { executablePath: null }],
   ]);
+});
+
+test("workbench settings controller saves future isolator install targets", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-tui-isolator-target-"));
+  const target = join(root, "bin", "agent-isolator");
+  const calls = [];
+  const controller = createWorkbenchSettingsController({
+    async loadWorkbenchPreferencesImpl() {
+      return {};
+    },
+    async updateWorkbenchPreferencesImpl(patch) {
+      calls.push(patch);
+      return { isolation: patch.isolation };
+    },
+  });
+
+  assert.deepEqual(await controller.saveIsolatorPath(target), {
+    shellIsolation: { executablePath: target, installSkipped: false },
+    message: `Saved isolator install target: ${target}.`,
+    activity: "Isolator install target saved",
+  });
+  assert.deepEqual(calls, [{
+    isolation: { executablePath: target, installSkipped: false },
+  }]);
+});
+
+test("workbench settings controller resolves existing isolator target directories", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-tui-isolator-dir-target-"));
+  const binDir = join(root, "bin");
+  await mkdir(binDir, { recursive: true });
+  const expected = join(binDir, process.platform === "win32" ? "agent-isolator.exe" : "agent-isolator");
+  const calls = [];
+  const controller = createWorkbenchSettingsController({
+    async loadWorkbenchPreferencesImpl() {
+      return {};
+    },
+    async updateWorkbenchPreferencesImpl(patch) {
+      calls.push(patch);
+      return { isolation: patch.isolation };
+    },
+  });
+
+  assert.deepEqual(await controller.saveIsolatorPath(binDir), {
+    shellIsolation: { executablePath: expected, installSkipped: false },
+    message: `Saved isolator install target: ${expected}.`,
+    activity: "Isolator install target saved",
+  });
+  assert.deepEqual(calls, [{
+    isolation: { executablePath: expected, installSkipped: false },
+  }]);
 });
 
 test("workbench settings controller prompts once for isolator setup until skipped", async () => {
@@ -1503,24 +1691,52 @@ test("workbench conversation controller manages handles and transcript export", 
       calls.push(["list", profile]);
       return [
         {
+          id: "conv_release",
           name: "release",
           profile: profile || "default",
           previousResponseId: "resp_test",
+          createdAt: 4102444700,
           updatedAt: 4102444800,
         },
       ];
     },
+    async startFreshConversationImpl(name, profile) {
+      calls.push(["fresh", name, profile]);
+      return {
+        id: "conv_new",
+        name,
+        profile,
+        createdAt: 1782131696,
+        updatedAt: 1782131696,
+      };
+    },
+    async ensureConversationImpl(name, profile) {
+      calls.push(["ensure", name, profile]);
+      return {
+        id: "conv_release",
+        name,
+        profile,
+        previousResponseId: "resp_test",
+        createdAt: 4102444700,
+        updatedAt: 4102444800,
+      };
+    },
   });
 
   assert.deepEqual(await controller.startNewConversation(undefined, "dev"), {
+    id: "conv_new",
     name: "thread-20260622-123456",
-    message: 'Started fresh conversation "thread-20260622-123456".',
+    status: "fresh",
+    message: 'Started fresh conversation "thread-20260622-123456" (conv_new).',
   });
-  assert.deepEqual(controller.switchConversation("release"), {
+  assert.deepEqual(await controller.switchConversation("release", "dev"), {
+    id: "conv_release",
     name: "release",
-    message: 'Switched to conversation "release". Future turns will continue this handle when history exists.',
+    previousResponseId: "resp_test",
+    status: "continued",
+    message: 'Switched to conversation "release" (conv_release). Continuing from resp_test.',
   });
-  assert.match(await controller.listConversations("dev"), /release\tdev\t2100-01-01T00:00:00\.000Z response=resp_test/);
+  assert.match(await controller.listConversations("dev"), /release\tdev\t2100-01-01T00:00:00\.000Z\tconv_release response=resp_test/);
 
   const exported = await controller.exportTranscript({
     conversation: "release notes",
@@ -1530,6 +1746,8 @@ test("workbench conversation controller manages handles and transcript export", 
   assert.equal(await readFile(exported, "utf8"), "System:\nReady.\n");
   assert.deepEqual(calls, [
     ["delete", "thread-20260622-123456", "dev"],
+    ["fresh", "thread-20260622-123456", "dev"],
+    ["ensure", "release", "dev"],
     ["list", "dev"],
   ]);
 });

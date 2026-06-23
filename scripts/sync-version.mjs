@@ -11,10 +11,10 @@ if (!/^\d+\.\d+\.\d+(-[\w.-]+)?$/.test(version)) {
   process.exit(1);
 }
 
-const runtimePath = path.join(packageRoot, "src", "runtime", "index.ts");
+const runtimePath = path.join(packageRoot, "src", "runtime.ts");
 const current = fs.readFileSync(runtimePath, "utf8");
 const next = current.replace(/export const cliVersion = ".*";/, `export const cliVersion = "${version}";`);
 if (current !== next) {
   fs.writeFileSync(runtimePath, next);
 }
-console.log(`Synced @agent-api/cli version ${version} -> src/runtime/index.ts`);
+console.log(`Synced @agent-api/cli version ${version} -> src/runtime.ts`);

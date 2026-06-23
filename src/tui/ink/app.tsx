@@ -1,21 +1,17 @@
 import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useApp, useInput, useStdout } from "ink";
-import { defaultBaseURL } from "../../config.js";
-import { type AgentRunOptions } from "../../agent.js";
-import { createWorkbenchAuthController, type WorkbenchAuthController } from "../../workbench/auth-controller.js";
-import {
-  createWorkbenchAuthGateController,
-  type AuthGateState,
-  type WorkbenchAuthGateController,
-} from "../../workbench/auth-gate-controller.js";
-import {
-  type WorkbenchLifecycleEffect,
-} from "../../workbench/lifecycle-controller.js";
-import { createWorkbenchCommandController } from "../../workbench/command-controller.js";
 import {
   buildWorkbenchRenderModel,
-} from "../../workbench/render-model.js";
-import { createWorkbenchSession, type WorkbenchSession } from "../../workbench/session.js";
+  createAgentEngine,
+  createWorkbenchAuthController,
+  createWorkbenchAuthGateController,
+  defaultBaseURL,
+  type AgentEngineApp,
+  type AgentRunOptions,
+  type AuthGateState,
+  type WorkbenchAuthController,
+  type WorkbenchAuthGateController,
+} from "@agent-api/app-engine";
 import { InkAuthGate, InkWorkbenchScreen } from "./components.js";
 
 export function ChatApp({ options }: { options: AgentRunOptions }) {
@@ -152,38 +148,24 @@ function WorkbenchApp({
   const [draft, setDraft] = useState("");
   const [spinnerFrame, setSpinnerFrame] = useState(0);
   const [transcriptOffset, setTranscriptOffset] = useState(0);
-  const sessionRef = useRef<WorkbenchSession | null>(null);
-  if (!sessionRef.current) {
-    sessionRef.current = createWorkbenchSession({
+  const agentEngineRef = useRef<AgentEngineApp | null>(null);
+  if (!agentEngineRef.current) {
+    agentEngineRef.current = createAgentEngine({
       authController,
       baseOptions: options,
+      profileName,
+      onDeleteProfile,
+      onExit: app.exit,
+      onLogin,
+      onLogout,
+      onSwitchProfile,
     });
   }
-  const session = sessionRef.current;
-  const engine = session.engine;
-  const conversationController = session.conversation;
+  const agentEngine = agentEngineRef.current;
+  const session = agentEngine.session;
   const inputController = session.input;
-  const lifecycleController = session.lifecycle;
-  const localController = session.local;
-  const settingsController = session.settings;
-  const turnController = session.turn;
-  const state = useSyncExternalStore(engine.subscribe, engine.snapshot, engine.snapshot);
-  const dispatch = engine.dispatch;
-  const commandController = createWorkbenchCommandController({
-    authController,
-    conversationController,
-    engine,
-    localController,
-    options,
-    profileName,
-    settingsController,
-    turnController,
-    onDeleteProfile,
-    onExit: app.exit,
-    onLogin,
-    onLogout,
-    onSwitchProfile,
-  });
+  const state = useSyncExternalStore(agentEngine.subscribe, agentEngine.snapshot, agentEngine.snapshot);
+  const dispatch = agentEngine.dispatch;
   const renderModel = useMemo(
     () => buildWorkbenchRenderModel({
       draft,
@@ -218,69 +200,28 @@ function WorkbenchApp({
 
   useEffect(() => {
     let mounted = true;
-    lifecycleController.maybeCheckForUpdate()
-      .then((effects) => {
-        if (mounted) runLifecycleEffects(effects, () => mounted);
-      });
-    settingsController.loadInitial({
-      modelExplicit: options.modelExplicit,
-      preset: options.preset,
-      presetExplicit: options.presetExplicit,
-    })
-      .then((settings) => {
-        if (!mounted) return;
-        dispatch({ type: "settings.set", settings });
-        if (settings.activity) {
-          dispatch({ type: "activity.add", level: "success", text: settings.activity });
-        }
-        if (settings.notice) {
-          dispatch({ type: "message.add", role: "system", text: settings.notice });
-          dispatch({ type: "activity.add", level: "warning", text: "Shell isolation setup is not configured" });
-        }
-        if (settings.warning) {
-          dispatch({ type: "activity.add", level: "warning", text: settings.warning });
-        }
-      })
-      .catch((error) => {
-        if (!mounted) return;
-        dispatch({ type: "activity.add", level: "warning", text: `Config preferences unavailable: ${userFacingError(error)}` });
-      });
+    void agentEngine.maybeCheckForUpdate({ isMounted: () => mounted });
+    void agentEngine.loadInitialConversation({ isMounted: () => mounted });
+    void agentEngine.loadInitialSettings({ isMounted: () => mounted });
     return () => {
       mounted = false;
     };
-  }, [dispatch, lifecycleController, options.modelExplicit, options.preset, options.presetExplicit, settingsController]);
+  }, [agentEngine]);
 
   useEffect(() => {
     if (!state.contextEnabled || state.workdir) return;
     let mounted = true;
-    dispatch({ type: "activity.add", text: "Loading workdir" });
-    localController.load(options.workdir || process.cwd())
-      .then((workdir) => {
-        if (!mounted) return;
-        dispatch({
-          type: "workdir.set",
-          workdir,
-        });
-      })
-      .catch((error) => {
-        if (!mounted) return;
-        dispatch({
-          type: "activity.add",
-          level: "error",
-          text: `Workdir unavailable: ${error instanceof Error ? error.message : String(error)}`,
-        });
-      });
+    void agentEngine.loadWorkdir(options.workdir || process.cwd(), { isMounted: () => mounted });
     return () => {
       mounted = false;
     };
-  }, [dispatch, localController, options.workdir, state.contextEnabled, state.workdir]);
+  }, [agentEngine, options.workdir, state.contextEnabled, state.workdir]);
 
   useEffect(() => {
     let mounted = true;
     const refreshIntervalMs = 60_000;
     const refreshAuth = async () => {
-      const effects = await lifecycleController.refreshAuth(options.profile);
-      if (mounted) runLifecycleEffects(effects, () => mounted);
+      if (mounted) await agentEngine.refreshAuth(options.profile, { isMounted: () => mounted });
     };
     void refreshAuth();
     const interval = setInterval(refreshAuth, refreshIntervalMs);
@@ -288,7 +229,7 @@ function WorkbenchApp({
       mounted = false;
       clearInterval(interval);
     };
-  }, [lifecycleController, options.profile]);
+  }, [agentEngine, options.profile]);
 
   useInput((input, key) => {
     const result = inputController.handle(input, key, {
@@ -312,10 +253,10 @@ function WorkbenchApp({
           scrollTranscriptToBottom();
           break;
         case "abort":
-          void turnController.abort("Abort requested.");
+          void agentEngine.abortActiveTurn("Abort requested.");
           break;
         case "submit":
-          void submit(effect.input);
+          void agentEngine.submit(effect.input);
           break;
         case "ignored_busy":
           dispatch({ type: "message.add", role: "system", text: "Agent turn is running. Use /abort or Esc to cancel it." });
@@ -326,14 +267,8 @@ function WorkbenchApp({
   });
 
   useEffect(() => {
-    const initialPrompt = lifecycleController.initialPrompt({
-      busy: state.busy,
-      promptParts: options.promptParts,
-      requiresWorkdir: state.contextEnabled,
-      workdir: state.workdir,
-    });
-    if (initialPrompt) void turnController.startPrompt(initialPrompt);
-  }, [lifecycleController, options.promptParts, state.busy, state.contextEnabled, state.workdir, turnController]);
+    void agentEngine.startInitialPrompt();
+  }, [agentEngine, state.busy, state.contextEnabled, state.workdir]);
 
   useEffect(() => {
     if (!state.busy) {
@@ -347,39 +282,8 @@ function WorkbenchApp({
   }, [state.busy]);
 
   useEffect(() => {
-    return () => session.runtime.dispose();
-  }, [session.runtime]);
-
-  function runLifecycleEffects(effects: WorkbenchLifecycleEffect[], isMounted: () => boolean) {
-    for (const effect of effects) {
-      switch (effect.type) {
-        case "dispatch":
-          dispatch(effect.action);
-          break;
-        case "close":
-          setTimeout(() => {
-            if (isMounted()) app.exit();
-          }, effect.delayMs);
-          break;
-      }
-    }
-  }
-
-  async function submit(input: string) {
-    const submission = engine.submit(input);
-    if (submission.kind === "command") {
-      await commandController.run(submission.command);
-      return;
-    }
-    if (submission.kind === "prompt") {
-      await turnController.startPrompt(submission.prompt);
-    }
-  }
+    return () => agentEngine.dispose();
+  }, [agentEngine]);
 
   return <InkWorkbenchScreen renderModel={renderModel} spinnerFrame={spinnerFrame} />;
-}
-
-function userFacingError(error: unknown) {
-  if (error instanceof Error) return error.message;
-  return String(error);
 }

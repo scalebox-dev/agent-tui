@@ -11,7 +11,7 @@ import {
   type WorkbenchAction,
   type WorkbenchCommand,
   type WorkbenchState,
-} from "../tui/workbench.js";
+} from "./state.js";
 import type { AgentTurnEvent, WorkdirAccessMode } from "../agent.js";
 
 export interface WorkbenchEngineOptions {

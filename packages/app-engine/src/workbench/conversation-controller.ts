@@ -3,15 +3,26 @@ import path from "node:path";
 import {
   conversationSummary,
   deleteConversation,
+  ensureConversation,
   listConversations,
+  startFreshConversation,
 } from "../agent.js";
 import { runtime } from "../runtime/index.js";
 
 export interface WorkbenchConversationController {
-  startNewConversation(name: string | undefined, profileName?: string): Promise<{ name: string; message: string }>;
-  switchConversation(name: string): { name: string; message: string };
+  resolveConversation(name: string, profileName?: string): Promise<ConversationSelection>;
+  startNewConversation(name: string | undefined, profileName?: string): Promise<ConversationSelection>;
+  switchConversation(name: string, profileName?: string): Promise<ConversationSelection>;
   listConversations(profileName?: string): Promise<string>;
   exportTranscript(input: { path?: string; transcript: string; conversation: string }): Promise<string>;
+}
+
+export interface ConversationSelection {
+  id: string;
+  name: string;
+  previousResponseId?: string;
+  status: "fresh" | "continued";
+  message: string;
 }
 
 export interface WorkbenchConversationControllerOptions {
@@ -21,6 +32,8 @@ export interface WorkbenchConversationControllerOptions {
   writeFileImpl?: typeof writeFile;
   now?: () => Date;
   dataDir?: string;
+  ensureConversationImpl?: typeof ensureConversation;
+  startFreshConversationImpl?: typeof startFreshConversation;
 }
 
 export function createWorkbenchConversationController(
@@ -28,25 +41,33 @@ export function createWorkbenchConversationController(
 ): WorkbenchConversationController {
   const deleteConversationImpl = options.deleteConversationImpl ?? deleteConversation;
   const listConversationsImpl = options.listConversationsImpl ?? listConversations;
+  const ensureConversationImpl = options.ensureConversationImpl ?? ensureConversation;
+  const startFreshConversationImpl = options.startFreshConversationImpl ?? startFreshConversation;
   const mkdirImpl = options.mkdirImpl ?? mkdir;
   const writeFileImpl = options.writeFileImpl ?? writeFile;
   const now = options.now ?? (() => new Date());
 
   return {
-    async startNewConversation(name, profileName) {
-      const conversation = name || createConversationName(now());
-      await deleteConversationImpl(conversation, profileName);
-      return {
-        name: conversation,
-        message: `Started fresh conversation "${conversation}".`,
-      };
+    async resolveConversation(name, profileName) {
+      const conversation = await ensureConversationImpl(name, profileName);
+      return conversationSelection(conversation, `Conversation "${conversation.name}" is ${conversation.previousResponseId ? `continuing from ${conversation.previousResponseId}` : "fresh"}.`);
     },
 
-    switchConversation(name) {
-      return {
-        name,
-        message: `Switched to conversation "${name}". Future turns will continue this handle when history exists.`,
-      };
+    async startNewConversation(name, profileName) {
+      const nameToUse = name || createConversationName(now());
+      await deleteConversationImpl(nameToUse, profileName);
+      const conversation = await startFreshConversationImpl(nameToUse, profileName);
+      return conversationSelection(conversation, `Started fresh conversation "${conversation.name}" (${conversation.id}).`);
+    },
+
+    async switchConversation(name, profileName) {
+      const conversation = await ensureConversationImpl(name, profileName);
+      return conversationSelection(
+        conversation,
+        conversation.previousResponseId
+          ? `Switched to conversation "${name}" (${conversation.id}). Continuing from ${conversation.previousResponseId}.`
+          : `Switched to fresh conversation "${name}" (${conversation.id}).`,
+      );
     },
 
     async listConversations(profileName) {
@@ -68,6 +89,24 @@ export function createWorkbenchConversationController(
       return file;
     },
   };
+}
+
+function conversationSelection(
+  conversation: {
+    id: string;
+    name: string;
+    previousResponseId?: string;
+  },
+  message: string,
+): ConversationSelection {
+  const selection: ConversationSelection = {
+    id: conversation.id,
+    name: conversation.name,
+    status: conversation.previousResponseId ? "continued" : "fresh",
+    message,
+  };
+  if (conversation.previousResponseId) selection.previousResponseId = conversation.previousResponseId;
+  return selection;
 }
 
 export function defaultTranscriptExportPath(

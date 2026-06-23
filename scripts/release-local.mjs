@@ -20,14 +20,12 @@ await mkdir(artifactsDir, { recursive: true });
 await run(npm, ["ci"]);
 await run(npm, ["test"]);
 
-const { stdout } = await run(npm, ["pack", "--pack-destination", artifactsDir], { capture: true });
-const tarballName = stdout.trim().split(/\r?\n/).at(-1);
-if (!tarballName) throw new Error("npm pack did not report a tarball name");
-const tarball = resolve(artifactsDir, tarballName);
+const appEngineTarball = await pack(["pack", "--workspace", "@agent-api/app-engine", "--pack-destination", artifactsDir]);
+const cliTarball = await pack(["pack", "--pack-destination", artifactsDir]);
 
 const prefix = await mkdtemp(join(tmpdir(), "agent-tui-release-"));
 try {
-  await run(npm, ["install", "--global", "--prefix", prefix, tarball]);
+  await run(npm, ["install", "--global", "--prefix", prefix, appEngineTarball, cliTarball]);
   for (const bin of Object.keys(packageJSON.bin ?? {})) {
     await run(installedBin(prefix, bin), ["--version"]);
   }
@@ -36,14 +34,25 @@ try {
 }
 
 console.log("");
-console.log(`Verified local release package: ${tarball}`);
+console.log("Verified local release packages:");
+console.log(`  ${appEngineTarball}`);
+console.log(`  ${cliTarball}`);
 
 if (dryRun) {
   console.log("");
-  console.log("Dry run enabled. Publish with:");
-  console.log(`  npm publish ${tarball} --access public`);
+  console.log("Dry run enabled. Publish in dependency order with:");
+  console.log(`  npm publish ${appEngineTarball} --access public`);
+  console.log(`  npm publish ${cliTarball} --access public`);
 } else {
-  await run(npm, ["publish", tarball, "--access", "public", ...otp ? [`--otp=${otp}`] : []]);
+  await run(npm, ["publish", appEngineTarball, "--access", "public", ...otp ? [`--otp=${otp}`] : []]);
+  await run(npm, ["publish", cliTarball, "--access", "public", ...otp ? [`--otp=${otp}`] : []]);
+}
+
+async function pack(args) {
+  const { stdout } = await run(npm, args, { capture: true });
+  const tarballName = stdout.trim().split(/\r?\n/).at(-1);
+  if (!tarballName) throw new Error(`${args.join(" ")} did not report a tarball name`);
+  return resolve(artifactsDir, tarballName);
 }
 
 function installedBin(prefix, bin) {
