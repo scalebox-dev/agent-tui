@@ -25,6 +25,7 @@ export interface WorkbenchSettingsSnapshot {
   runPreset?: string;
   shellIsolation?: ShellIsolationPreferences;
   activity?: string;
+  notice?: string;
   warning?: string;
 }
 
@@ -88,6 +89,7 @@ export function createWorkbenchSettingsController(options: WorkbenchSettingsCont
         defaultPreset: preferences.defaultPreset,
         ...(preferences.isolation ? { shellIsolation: preferences.isolation } : {}),
         ...(activity ? { activity } : {}),
+        ...(isolatorSetupNotice(preferences.isolation) ? { notice: isolatorSetupNotice(preferences.isolation) } : {}),
         ...(warning ? { warning } : {}),
         runPreset: shouldApplyDefaultPreset(agentOptions)
           ? effectiveDefaultPreset(preferences, agentOptions.preset)
@@ -97,7 +99,12 @@ export function createWorkbenchSettingsController(options: WorkbenchSettingsCont
 
     async saveShellIsolationMode(value) {
       const mode = normalizeShellIsolationMode(value);
-      const preferences = await updateWorkbenchPreferencesImpl({ isolation: { mode } });
+      const preferences = await updateWorkbenchPreferencesImpl({
+        isolation: {
+          mode,
+          installSkipped: mode === "none" ? true : false,
+        },
+      });
       return {
         ...settingsSnapshot(preferences),
         message: `Saved shell isolation mode: ${formatShellIsolation(preferences.isolation)}.`,
@@ -352,6 +359,20 @@ function runConfigText({
 function userFacingError(error: unknown) {
   if (error instanceof Error) return error.message;
   return String(error);
+}
+
+function isolatorSetupNotice(shellIsolation: ShellIsolationPreferences | undefined) {
+  if (process.env.AGENT_ISOLATOR_PATH) return "";
+  if (shellIsolation?.installSkipped || shellIsolation?.mode === "none" || shellIsolation?.executablePath) return "";
+  return [
+    "Local shell isolation is not configured yet.",
+    "",
+    "To enable it, set a verified target path and downloadable source URL:",
+    "/config isolator path <absolute-path>",
+    "/config isolator source <https-url>",
+    "",
+    "To skip this setup for future starts, use /config isolation none.",
+  ].join("\n");
 }
 
 async function reconcileConfiguredIsolator(

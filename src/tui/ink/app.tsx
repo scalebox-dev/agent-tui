@@ -233,6 +233,10 @@ function WorkbenchApp({
         if (settings.activity) {
           dispatch({ type: "activity.add", level: "success", text: settings.activity });
         }
+        if (settings.notice) {
+          dispatch({ type: "message.add", role: "system", text: settings.notice });
+          dispatch({ type: "activity.add", level: "warning", text: "Shell isolation setup is not configured" });
+        }
         if (settings.warning) {
           dispatch({ type: "activity.add", level: "warning", text: settings.warning });
         }

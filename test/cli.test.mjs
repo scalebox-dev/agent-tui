@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { execFile } from "node:child_process";
@@ -229,6 +229,63 @@ test("workbench configuration is stored separately from profiles", async () => {
   const afterProfileSave = JSON.parse(await readFile(profilesPath, "utf8"));
   assert.equal(afterProfileSave.workbench, undefined);
   assert.equal(afterProfileSave.conversations, undefined);
+});
+
+test("legacy agent-api-cli config merges into agent-tui config and removes old dir", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-tui-legacy-config-"));
+  const env = isolatedEnv(root);
+  const legacyConfigDir = join(root, ".config", "agent-api-cli");
+  const configDir = join(root, ".config", "agent-tui");
+  await mkdir(legacyConfigDir, { recursive: true });
+  await mkdir(configDir, { recursive: true });
+  await writeFile(join(legacyConfigDir, "profiles.json"), JSON.stringify({
+    activeProfile: "legacy",
+    profiles: {
+      legacy: {
+        name: "legacy",
+        baseURL: "https://legacy.test",
+        auth: { type: "api_key", apiKey: "sk-legacy" },
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    },
+    workbench: { defaultPreset: "legacy-preset" },
+    conversations: {
+      "legacy:old": {
+        name: "old",
+        profile: "legacy",
+        previousResponseId: "resp_old",
+        updatedAt: 2,
+      },
+    },
+  }, null, 2));
+  await writeFile(join(configDir, "profiles.json"), JSON.stringify({
+    activeProfile: "new",
+    profiles: {
+      new: {
+        name: "new",
+        baseURL: "https://new.test",
+        auth: { type: "api_key", apiKey: "sk-new" },
+        createdAt: 3,
+        updatedAt: 3,
+      },
+    },
+  }, null, 2));
+
+  await execFileAsync("node", [
+    "--input-type=module",
+    "-e",
+    "import { loadConfig } from './dist/config.js'; console.log(JSON.stringify(await loadConfig()));",
+  ], { cwd: new URL("..", import.meta.url).pathname, env });
+
+  const migratedProfiles = JSON.parse(await readFile(join(configDir, "profiles.json"), "utf8"));
+  const migratedAppConfig = JSON.parse(await readFile(join(configDir, "configuration.json"), "utf8"));
+  const migratedConversations = JSON.parse(await readFile(join(configDir, "conversations.json"), "utf8"));
+  assert.equal(migratedProfiles.activeProfile, "new");
+  assert.deepEqual(Object.keys(migratedProfiles.profiles).sort(), ["legacy", "new"]);
+  assert.deepEqual(migratedAppConfig, { workbench: { defaultPreset: "legacy-preset" } });
+  assert.deepEqual(Object.keys(migratedConversations.conversations), ["legacy:old"]);
+  await assert.rejects(() => stat(legacyConfigDir), /ENOENT/);
 });
 
 test("workdir status inspects a local directory", async () => {
@@ -1148,7 +1205,7 @@ test("workbench settings controller loads and saves default preset settings", as
   const controller = createWorkbenchSettingsController({
     async loadWorkbenchPreferencesImpl() {
       calls.push(["load"]);
-      return { defaultPreset: "code-agent" };
+      return { defaultPreset: "code-agent", isolation: { installSkipped: true } };
     },
     async isAvailablePresetImpl(profile, preset) {
       calls.push(["validate", profile, preset]);
@@ -1163,6 +1220,7 @@ test("workbench settings controller loads and saves default preset settings", as
   assert.deepEqual(await controller.loadInitial({ modelExplicit: false, preset: "pro-search", presetExplicit: false }), {
     defaultPreset: "code-agent",
     runPreset: "code-agent",
+    shellIsolation: { installSkipped: true },
   });
 
   assert.deepEqual(
@@ -1234,9 +1292,47 @@ test("workbench settings controller persists shell isolation settings", async ()
 
   assert.deepEqual(calls, [
     ["load"],
-    ["update", { mode: "auto" }],
+    ["update", { mode: "auto", installSkipped: false }],
     ["update", { executablePath: null }],
   ]);
+});
+
+test("workbench settings controller prompts once for isolator setup until skipped", async () => {
+  const previousPath = process.env.AGENT_ISOLATOR_PATH;
+  delete process.env.AGENT_ISOLATOR_PATH;
+  const calls = [];
+  try {
+    const controller = createWorkbenchSettingsController({
+      async loadWorkbenchPreferencesImpl() {
+        calls.push(["load"]);
+        return {};
+      },
+      async updateWorkbenchPreferencesImpl(patch) {
+        calls.push(["update", patch.isolation]);
+        return { isolation: patch.isolation };
+      },
+    });
+
+    const initial = await controller.loadInitial({ modelExplicit: false, preset: "pro-search", presetExplicit: false });
+    assert.match(initial.notice, /Local shell isolation is not configured yet/);
+    assert.match(initial.notice, /\/config isolator source <https-url>/);
+
+    assert.deepEqual(await controller.saveShellIsolationMode("none"), {
+      shellIsolation: { mode: "none", installSkipped: true },
+      message: "Saved shell isolation mode: none.",
+      activity: "Shell isolation mode saved: none",
+    });
+    assert.deepEqual(calls, [
+      ["load"],
+      ["update", { mode: "none", installSkipped: true }],
+    ]);
+  } finally {
+    if (previousPath === undefined) {
+      delete process.env.AGENT_ISOLATOR_PATH;
+    } else {
+      process.env.AGENT_ISOLATOR_PATH = previousPath;
+    }
+  }
 });
 
 test("workbench settings controller validates isolator source before saving", async () => {
