@@ -64,8 +64,9 @@ export function InkWorkbenchScreen({
           </Text>
         ) : (
           <Text wrap="truncate">
-            {renderModel.input.draft}
-            <Cursor visible />
+            {renderModel.input.beforeCursor}
+            <Cursor text={renderModel.input.cursorText} visible />
+            {renderModel.input.afterCursor}
           </Text>
         )}
       </Box>
@@ -168,6 +169,6 @@ function Header({
   );
 }
 
-function Cursor({ visible }: { visible: boolean }) {
-  return visible ? <Text inverse> </Text> : <Text> </Text>;
+function Cursor({ text = " ", visible }: { text?: string; visible: boolean }) {
+  return visible ? <Text inverse>{text}</Text> : <Text>{text}</Text>;
 }

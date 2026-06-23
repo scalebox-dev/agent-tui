@@ -29,7 +29,11 @@ export interface WorkbenchRenderModel {
     workdir: string;
   };
   input: {
+    afterCursor: string;
+    beforeCursor: string;
     busy: boolean;
+    cursor: number;
+    cursorText: string;
     draft: string;
     fullAccess: boolean;
     label: string;
@@ -44,6 +48,7 @@ export interface WorkbenchRenderModel {
 }
 
 export interface BuildWorkbenchRenderModelInput {
+  cursor?: number;
   draft: string;
   profileName: string;
   spinnerFrame: number;
@@ -69,6 +74,10 @@ export function buildWorkbenchRenderModel(input: BuildWorkbenchRenderModelInput)
     viewportHeight,
     width: transcriptWidth,
   });
+  const cursor = Math.max(0, Math.min(input.draft.length, input.cursor ?? input.draft.length));
+  const beforeCursor = input.draft.slice(0, cursor);
+  const cursorText = input.draft[cursor] ?? " ";
+  const afterCursor = input.draft.slice(cursor + (cursor < input.draft.length ? 1 : 0));
 
   return {
     activityHeight,
@@ -94,7 +103,11 @@ export function buildWorkbenchRenderModel(input: BuildWorkbenchRenderModelInput)
       workdir: input.state.workdir?.root || input.workdirFallback,
     },
     input: {
+      afterCursor,
+      beforeCursor,
       busy: input.state.busy,
+      cursor,
+      cursorText,
       draft: input.draft,
       fullAccess: input.state.accessMode === "full",
       label: input.state.busy ? "working" : "you",

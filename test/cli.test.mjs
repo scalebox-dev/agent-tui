@@ -1277,6 +1277,7 @@ test("workbench render model exposes renderer-neutral screen state", () => {
     preset: "pro-search",
   });
   const model = buildWorkbenchRenderModel({
+    cursor: 2,
     draft: "hello",
     profileName: "default",
     spinnerFrame: 5,
@@ -1304,6 +1305,9 @@ test("workbench render model exposes renderer-neutral screen state", () => {
   assert.equal(model.header.pendingLocalLabel, "none");
   assert.equal(model.input.fullAccess, true);
   assert.equal(model.input.draft, "hello");
+  assert.equal(model.input.beforeCursor, "he");
+  assert.equal(model.input.cursorText, "l");
+  assert.equal(model.input.afterCursor, "lo");
   assert.equal(model.viewportHeight, 19);
   assert.ok(model.transcript.visibleLines.length > 0);
   assert.match(model.footerText, /live/);
@@ -1784,51 +1788,96 @@ test("input history navigates submitted prompts like a shell", () => {
 test("workbench input controller edits, submits, and recalls drafts", () => {
   const controller = createWorkbenchInputController();
   let draft = "";
-  const context = (overrides = {}) => ({ busy: false, draft, viewportHeight: 10, ...overrides });
+  let cursor = 0;
+  const context = (overrides = {}) => ({ busy: false, cursor, draft, viewportHeight: 10, ...overrides });
+  const apply = (result) => {
+    draft = result.draft;
+    cursor = result.cursor;
+    return result;
+  };
 
-  let result = controller.handle("h", {}, context());
-  draft = result.draft;
+  let result = apply(controller.handle("h", {}, context()));
   assert.equal(draft, "h");
-  result = controller.handle("i", {}, context());
-  draft = result.draft;
+  assert.equal(cursor, 1);
+  result = apply(controller.handle("i", {}, context()));
   assert.equal(draft, "hi");
-  result = controller.handle("", { return: true }, context());
-  draft = result.draft;
-  assert.deepEqual(result.effects, [{ type: "submit", input: "hi" }]);
-  assert.equal(draft, "");
+  assert.equal(cursor, 2);
 
-  result = controller.handle("", { upArrow: true }, context());
-  draft = result.draft;
+  result = apply(controller.handle("", { leftArrow: true }, context()));
+  assert.equal(cursor, 1);
+  result = apply(controller.handle("!", {}, context()));
+  assert.equal(draft, "h!i");
+  assert.equal(cursor, 2);
+  result = apply(controller.handle("", { backspace: true }, context()));
   assert.equal(draft, "hi");
-  result = controller.handle("", { downArrow: true }, context());
-  draft = result.draft;
+  assert.equal(cursor, 1);
+  result = apply(controller.handle("", { delete: true }, context()));
+  assert.equal(draft, "h");
+  assert.equal(cursor, 1);
+  result = apply(controller.handle("", { home: true }, context()));
+  assert.equal(cursor, 0);
+  result = apply(controller.handle("s", {}, context()));
+  assert.equal(draft, "sh");
+  result = apply(controller.handle("", { end: true }, context()));
+  assert.equal(cursor, 2);
+  result = apply(controller.handle("i", {}, context()));
+  assert.equal(draft, "shi");
+
+  result = apply(controller.handle("", { return: true }, context()));
+  assert.deepEqual(result.effects, [{ type: "submit", input: "shi" }]);
   assert.equal(draft, "");
+  assert.equal(cursor, 0);
+
+  result = apply(controller.handle("", { upArrow: true }, context()));
+  assert.equal(draft, "shi");
+  assert.equal(cursor, 3);
+  result = apply(controller.handle("", { downArrow: true }, context()));
+  assert.equal(draft, "");
+  assert.equal(cursor, 0);
 });
 
 test("workbench input controller maps navigation and busy abort policy", () => {
   const controller = createWorkbenchInputController();
 
   assert.deepEqual(controller.handle("", { pageUp: true }, { busy: false, draft: "", viewportHeight: 11 }), {
+    cursor: 0,
     draft: "",
     effects: [{ type: "scroll", delta: 5 }],
   });
   assert.deepEqual(controller.handle("", { pageDown: true }, { busy: false, draft: "", viewportHeight: 11 }), {
+    cursor: 0,
     draft: "",
     effects: [{ type: "scroll", delta: -5 }],
   });
-  assert.deepEqual(controller.handle("", { home: true }, { busy: false, draft: "", viewportHeight: 11 }).effects, [{ type: "scroll_top" }]);
-  assert.deepEqual(controller.handle("", { end: true }, { busy: false, draft: "", viewportHeight: 11 }).effects, [{ type: "scroll_bottom" }]);
+  assert.deepEqual(controller.handle("", { home: true }, { busy: false, cursor: 2, draft: "abcd", viewportHeight: 11 }), {
+    cursor: 0,
+    draft: "abcd",
+    effects: [],
+  });
+  assert.deepEqual(controller.handle("", { end: true }, { busy: false, cursor: 2, draft: "abcd", viewportHeight: 11 }), {
+    cursor: 4,
+    draft: "abcd",
+    effects: [],
+  });
+  assert.deepEqual(controller.handle("", { delete: true }, { busy: false, cursor: 4, draft: "abcd", viewportHeight: 11 }), {
+    cursor: 3,
+    draft: "abc",
+    effects: [],
+  });
   assert.deepEqual(controller.handle("c", { ctrl: true }, { busy: false, draft: "", viewportHeight: 11 }).effects, [{ type: "exit" }]);
 
   assert.deepEqual(controller.handle("", { escape: true }, { busy: true, draft: "ignored", viewportHeight: 11 }), {
+    cursor: 7,
     draft: "ignored",
     effects: [{ type: "abort" }],
   });
   assert.deepEqual(controller.handle("", { return: true }, { busy: true, draft: "/abort", viewportHeight: 11 }), {
+    cursor: 0,
     draft: "",
     effects: [{ type: "abort" }],
   });
   assert.deepEqual(controller.handle("", { return: true }, { busy: true, draft: "hello", viewportHeight: 11 }), {
+    cursor: 0,
     draft: "",
     effects: [{ type: "ignored_busy" }],
   });
@@ -1857,6 +1906,28 @@ test("workbench view model renders markdown transcript lines", () => {
   assert.equal(lines[1].bold, true);
   assert.equal(lines[1].color, "cyan");
   assert.equal(lines[3].color, "gray");
+});
+
+test("workbench view model wraps wide final-answer text by display columns", () => {
+  const view = buildTranscriptViewModel({
+    activeAssistantMessageId: null,
+    busy: false,
+    messages: [
+      {
+        id: "assistant-wide",
+        role: "assistant",
+        text: "这是一个很长的中文最终回答，用来确认终端显示宽度会正确换行，而不是被截断。",
+      },
+    ],
+    offset: 0,
+    renderMode: "markdown",
+    spinnerFrame: 0,
+    viewportHeight: 20,
+    width: 20,
+  });
+  const contentLines = view.lines.filter((line) => line.id.startsWith("assistant-wide:line:"));
+  assert.ok(contentLines.length > 2);
+  assert.ok(contentLines.every((line) => line.text.length <= 10));
 });
 
 test("workbench view model slices transcript viewport and renders waiting state", () => {

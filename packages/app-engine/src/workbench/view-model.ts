@@ -129,17 +129,72 @@ function markdownTranscriptLine(line: string, options: { code: boolean; width: n
 function wrapTranscriptText(text: string, width: number): string[] {
   const max = Math.max(12, width);
   if (text.length === 0) return [""];
+  if (displayWidth(text) <= max) return [text];
   const lines: string[] = [];
   let rest = text;
-  while (rest.length > max) {
-    const hard = rest.slice(0, max);
-    const softBreak = Math.max(hard.lastIndexOf(" "), hard.lastIndexOf("\t"));
-    const index = softBreak > Math.floor(max * 0.45) ? softBreak : max;
-    lines.push(rest.slice(0, index).trimEnd());
+  while (displayWidth(rest) > max) {
+    const hard = takeColumns(rest, max);
+    const softBreak = Math.max(hard.text.lastIndexOf(" "), hard.text.lastIndexOf("\t"));
+    const soft = softBreak > 0 ? hard.text.slice(0, softBreak) : "";
+    const useSoftBreak = soft && displayWidth(soft) > Math.floor(max * 0.45);
+    const chunk = useSoftBreak ? soft : hard.text;
+    const index = useSoftBreak ? softBreak : hard.length;
+    lines.push(chunk.trimEnd());
     rest = rest.slice(index).trimStart();
   }
   lines.push(rest);
   return lines;
+}
+
+function takeColumns(text: string, maxColumns: number): { length: number; text: string } {
+  let length = 0;
+  let output = "";
+  let columns = 0;
+  for (const char of Array.from(text)) {
+    const width = charWidth(char);
+    if (output && columns + width > maxColumns) break;
+    output += char;
+    length += char.length;
+    columns += width;
+    if (columns >= maxColumns) break;
+  }
+  return { length, text: output };
+}
+
+function displayWidth(text: string) {
+  let width = 0;
+  for (const char of Array.from(text)) {
+    width += charWidth(char);
+  }
+  return width;
+}
+
+function charWidth(char: string) {
+  if (!char) return 0;
+  const code = char.codePointAt(0) ?? 0;
+  if (code === 0) return 0;
+  if (code < 32 || (code >= 0x7f && code < 0xa0)) return 0;
+  if (/^\p{Mark}$/u.test(char)) return 0;
+  return isWideCodePoint(code) ? 2 : 1;
+}
+
+function isWideCodePoint(code: number) {
+  return (
+    code >= 0x1100 && (
+      code <= 0x115f ||
+      code === 0x2329 ||
+      code === 0x232a ||
+      (code >= 0x2e80 && code <= 0xa4cf && code !== 0x303f) ||
+      (code >= 0xac00 && code <= 0xd7a3) ||
+      (code >= 0xf900 && code <= 0xfaff) ||
+      (code >= 0xfe10 && code <= 0xfe19) ||
+      (code >= 0xfe30 && code <= 0xfe6f) ||
+      (code >= 0xff00 && code <= 0xff60) ||
+      (code >= 0xffe0 && code <= 0xffe6) ||
+      (code >= 0x1f300 && code <= 0x1faff) ||
+      (code >= 0x20000 && code <= 0x3fffd)
+    )
+  );
 }
 
 function roleLabel(role: WorkbenchMessage["role"]) {

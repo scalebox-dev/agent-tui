@@ -146,6 +146,7 @@ function WorkbenchApp({
   const app = useApp();
   const { stdout } = useStdout();
   const [draft, setDraft] = useState("");
+  const [cursor, setCursor] = useState(0);
   const [spinnerFrame, setSpinnerFrame] = useState(0);
   const [transcriptOffset, setTranscriptOffset] = useState(0);
   const agentEngineRef = useRef<AgentEngineApp | null>(null);
@@ -169,6 +170,7 @@ function WorkbenchApp({
   const renderModel = useMemo(
     () => buildWorkbenchRenderModel({
       draft,
+      cursor,
       profileName,
       spinnerFrame,
       state,
@@ -179,7 +181,7 @@ function WorkbenchApp({
       },
       workdirFallback: options.workdir || process.cwd(),
     }),
-    [draft, options.workdir, profileName, spinnerFrame, state, stdout.columns, stdout.rows, transcriptOffset],
+    [cursor, draft, options.workdir, profileName, spinnerFrame, state, stdout.columns, stdout.rows, transcriptOffset],
   );
 
   useEffect(() => {
@@ -234,10 +236,12 @@ function WorkbenchApp({
   useInput((input, key) => {
     const result = inputController.handle(input, key, {
       busy: state.busy,
+      cursor,
       draft,
       viewportHeight: renderModel.viewportHeight,
     });
     if (result.draft !== draft) setDraft(result.draft);
+    if (result.cursor !== cursor) setCursor(result.cursor);
     for (const effect of result.effects) {
       switch (effect.type) {
         case "exit":
