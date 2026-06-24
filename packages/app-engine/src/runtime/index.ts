@@ -2,6 +2,7 @@ import { createLocalRuntime } from "@agent-api/sdk/local";
 import type { LocalRuntime, LocalRuntimeOptions } from "@agent-api/sdk/local";
 import { cp, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { createFileStorage, type AppEngineStorage } from "../storage/index.js";
 
 export const defaultAppName = "agent-tui";
 export const defaultAppAuthor = "AgentsWay";
@@ -13,6 +14,7 @@ export interface AgentAppRuntimeOptions extends Omit<LocalRuntimeOptions, "appNa
   appAuthor?: string;
   appVersion?: string;
   legacyAppName?: string | null;
+  storage?: AppEngineStorage;
 }
 
 export interface AgentAppRuntimeContext {
@@ -22,6 +24,8 @@ export interface AgentAppRuntimeContext {
   legacyAppName?: string | null;
   runtime: LocalRuntime;
   legacyRuntime?: LocalRuntime;
+  storage: AppEngineStorage;
+  storageProvided: boolean;
 }
 
 let migrationPromise: Promise<void> | null = null;
@@ -45,10 +49,14 @@ export function appVersion() {
 }
 
 export async function ensureRuntime() {
-  migrationPromise ??= migrateLegacyRuntime();
-  await migrationPromise;
+  if (!runtimeContext.storageProvided) {
+    migrationPromise ??= migrateLegacyRuntime();
+    await migrationPromise;
+  }
   await runtime.ensure();
-  await splitMonolithicConfig();
+  if (!runtimeContext.storageProvided) {
+    await splitMonolithicConfig();
+  }
   return runtime;
 }
 
@@ -194,13 +202,17 @@ function createRuntimeContext(options: AgentAppRuntimeOptions = {}): AgentAppRun
   const runtimeOptions = { ...options, appName, appAuthor };
   delete (runtimeOptions as Partial<AgentAppRuntimeOptions>).appVersion;
   delete (runtimeOptions as Partial<AgentAppRuntimeOptions>).legacyAppName;
+  delete (runtimeOptions as Partial<AgentAppRuntimeOptions>).storage;
   const legacyAppName = "legacyAppName" in options ? options.legacyAppName : defaultLegacyAppName;
+  const localRuntime = createLocalRuntime(runtimeOptions);
   return {
     appName,
     appAuthor,
     appVersion,
     legacyAppName,
-    runtime: createLocalRuntime(runtimeOptions),
+    runtime: localRuntime,
     legacyRuntime: legacyAppName ? createLocalRuntime({ ...runtimeOptions, appName: legacyAppName }) : undefined,
+    storage: options.storage ?? createFileStorage(localRuntime.config),
+    storageProvided: Boolean(options.storage),
   };
 }

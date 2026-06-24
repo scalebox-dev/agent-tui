@@ -39,11 +39,24 @@ const result = await runAgentTurn({
 
 Host applications should call `configureAgentAppRuntime()` during startup so config, profiles, and runtime files live under the host app's own platform config directory.
 
+Apps that need their own persistence backend can inject storage:
+
+```ts
+import { configureAgentAppRuntime } from "@agent-api/app-engine/core";
+import { createPostgresStorage } from "@agent-api/app-engine/storage";
+
+configureAgentAppRuntime({
+  appName: "my-agent-app",
+  storage: createPostgresStorage(pgClient),
+});
+```
+
 ## Import Layers
 
 - `@agent-api/app-engine/core`: UI-neutral APIs for auth, config, profiles, conversations, updates, local workdir setup, and agent turns.
 - `@agent-api/app-engine/workbench`: optional app/workbench state controllers for apps that want Agent API's conversation workflow.
 - `@agent-api/app-engine/terminal`: optional terminal-facing helpers for transcript wrapping, input viewport rendering, and spinner glyphs.
+- `@agent-api/app-engine/storage`: storage contracts and built-in adapters for memory, file/config-store, SQL, Redis/Valkey-style key-value clients, and keytar-style keychains.
 
 The root `@agent-api/app-engine` entry is intentionally empty. Use an explicit subpath so your application depends on a clear API layer.
 
@@ -52,6 +65,7 @@ The root `@agent-api/app-engine` entry is intentionally empty. Use an explicit s
 - Core APIs own application state and side effects.
 - Workbench APIs own reusable conversation/workbench semantics.
 - Terminal APIs are optional helpers for terminal renderers.
+- Storage APIs are optional adapters. Host apps can use built-ins or provide their own implementation.
 - Renderers own widgets, native input controls, layout, keyboard mapping, and screen drawing.
 
 ## Local Development

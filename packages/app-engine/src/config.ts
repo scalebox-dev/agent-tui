@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { createHash, randomUUID } from "node:crypto";
-import { ensureRuntime, runtime } from "./runtime/index.js";
+import { currentAgentAppRuntime, ensureRuntime } from "./runtime/index.js";
 import type { ShellIsolationMode, ShellIsolationPreferences } from "./workbench/shell-isolation.js";
 
 export const defaultBaseURL = "https://api.agentsway.dev";
@@ -115,7 +115,7 @@ const conversationConfigurationSchema = z.object({
 
 export async function loadConfig(): Promise<CLIConfig> {
   await ensureRuntime();
-  const loaded = await runtime.config.read<unknown>(configFile, emptyConfig());
+  const loaded = await currentAgentAppRuntime().storage.read<unknown>(configFile, emptyConfig());
   const parsed = cliConfigSchema.safeParse(loaded);
   if (!parsed.success) {
     throw new Error(`Invalid CLI config: ${parsed.error.issues.map((issue) => issue.message).join("; ")}`);
@@ -125,7 +125,7 @@ export async function loadConfig(): Promise<CLIConfig> {
 
 export async function saveConfig(config: CLIConfig): Promise<void> {
   await ensureRuntime();
-  await runtime.config.write(configFile, {
+  await currentAgentAppRuntime().storage.write(configFile, {
     activeProfile: config.activeProfile,
     profiles: config.profiles,
   });
@@ -133,7 +133,7 @@ export async function saveConfig(config: CLIConfig): Promise<void> {
 
 export async function loadAppConfiguration(): Promise<AppConfiguration> {
   await ensureRuntime();
-  const loaded = await runtime.config.read<unknown>(appConfigurationFile, emptyAppConfiguration());
+  const loaded = await currentAgentAppRuntime().storage.read<unknown>(appConfigurationFile, emptyAppConfiguration());
   const parsed = appConfigurationSchema.safeParse(loaded);
   if (!parsed.success) {
     throw new Error(`Invalid app configuration: ${parsed.error.issues.map((issue) => issue.message).join("; ")}`);
@@ -143,12 +143,12 @@ export async function loadAppConfiguration(): Promise<AppConfiguration> {
 
 export async function saveAppConfiguration(config: AppConfiguration): Promise<void> {
   await ensureRuntime();
-  await runtime.config.write(appConfigurationFile, config);
+  await currentAgentAppRuntime().storage.write(appConfigurationFile, config);
 }
 
 export async function loadConversationConfiguration(): Promise<ConversationConfiguration> {
   await ensureRuntime();
-  const loaded = await runtime.config.read<unknown>(conversationsFile, emptyConversationConfiguration());
+  const loaded = await currentAgentAppRuntime().storage.read<unknown>(conversationsFile, emptyConversationConfiguration());
   const parsed = conversationConfigurationSchema.safeParse(loaded);
   if (!parsed.success) {
     throw new Error(`Invalid conversation configuration: ${parsed.error.issues.map((issue) => issue.message).join("; ")}`);
@@ -162,7 +162,7 @@ export async function loadConversationConfiguration(): Promise<ConversationConfi
 
 export async function saveConversationConfiguration(config: ConversationConfiguration): Promise<void> {
   await ensureRuntime();
-  await runtime.config.write(conversationsFile, config);
+  await currentAgentAppRuntime().storage.write(conversationsFile, config);
 }
 
 export async function upsertProfile(profile: Omit<Profile, "createdAt" | "updatedAt">): Promise<Profile> {

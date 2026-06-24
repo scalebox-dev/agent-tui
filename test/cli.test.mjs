@@ -11,8 +11,11 @@ import {
   agentTurnEventFromStreamEvent,
   clearPresetToolCatalogCache,
   compareVersions,
+  configureAgentAppRuntime,
   createAgentEngine,
   formatUpdateNotice,
+  loadConfig,
+  loginWithAPIKey,
   localToolExecutionErrorResult,
   normalizeChatOptions,
   resolveAgentRequestTools,
@@ -57,6 +60,14 @@ import {
   pendingLocalLabel,
   spinnerGlyph,
 } from "@agent-api/app-engine/terminal";
+import {
+  createKeychainStorage,
+  createKeyValueStorage,
+  createMemoryStorage,
+  createMySQLStorage,
+  createPostgresStorage,
+  createSQLiteStorage,
+} from "@agent-api/app-engine/storage";
 
 const execFileAsync = promisify(execFile);
 const bin = new URL("../dist/index.js", import.meta.url).pathname;
@@ -182,12 +193,13 @@ test("app engine package is importable through package exports", async () => {
       "import { createAgentEngine } from '@agent-api/app-engine/core';",
       "import { createWorkbenchEngine } from '@agent-api/app-engine/workbench';",
       "import { buildWorkbenchRenderModel } from '@agent-api/app-engine/terminal';",
-      "console.log([typeof createAgentEngine, typeof createWorkbenchEngine, typeof buildWorkbenchRenderModel].join(','));",
+      "import { createMemoryStorage } from '@agent-api/app-engine/storage';",
+      "console.log([typeof createAgentEngine, typeof createWorkbenchEngine, typeof buildWorkbenchRenderModel, typeof createMemoryStorage].join(','));",
     ].join(" "),
   ], { cwd: root });
 
   assert.equal(rootExport.stdout.trim(), "0");
-  assert.equal(subpathExports.stdout.trim(), "function,function,function");
+  assert.equal(subpathExports.stdout.trim(), "function,function,function,function");
 });
 
 test("app engine runtime identity is configurable by host apps", async () => {
@@ -2301,4 +2313,92 @@ test("workbench engine owns pending local approval input policy", () => {
 
   assert.equal(engine.snapshot().pendingLocalTool, null);
   assert.match(engine.snapshot().messages.at(-1).text, /aborted after too many invalid inputs/);
+});
+
+test("app engine runtime accepts injected storage", async () => {
+  const storage = createMemoryStorage();
+  configureAgentAppRuntime({ appName: "storage-test", legacyAppName: null, storage });
+  try {
+    await loginWithAPIKey({ profile: "memory", baseURL: "https://api.test", apiKey: "sk-memory" });
+    const config = await loadConfig();
+    assert.equal(config.activeProfile, "memory");
+    assert.equal(config.profiles.memory.baseURL, "https://api.test");
+    assert.equal(await storage.get("profiles.json", "activeProfile"), "memory");
+  } finally {
+    configureAgentAppRuntime();
+  }
+});
+
+test("storage adapters support memory, sql, key-value, and keychain documents", async () => {
+  const memory = createMemoryStorage();
+  await memory.write("settings.json", { theme: "dark" });
+  await memory.set("settings.json", "density", "compact");
+  assert.deepEqual(await memory.read("settings.json"), { theme: "dark", density: "compact" });
+
+  const sqlRows = new Map();
+  const postgres = createPostgresStorage({
+    async query(sql, params = []) {
+      if (/^SELECT/i.test(sql)) {
+        const value = sqlRows.get(params[0]);
+        return { rows: value ? [{ value }] : [] };
+      }
+      if (/^INSERT/i.test(sql)) {
+        sqlRows.set(params[0], params[1]);
+      }
+      return { rows: [] };
+    },
+  });
+  await postgres.write("settings.json", { theme: "light" });
+  assert.deepEqual(await postgres.read("settings.json"), { theme: "light" });
+
+  const mysqlRows = new Map();
+  const mysql = createMySQLStorage({
+    async execute(sql, params = []) {
+      if (/^SELECT/i.test(sql)) {
+        const value = mysqlRows.get(params[0]);
+        return [value ? [{ value }] : [], []];
+      }
+      if (/^INSERT/i.test(sql)) {
+        mysqlRows.set(params[0], params[1]);
+      }
+      return [[], []];
+    },
+  });
+  await mysql.write("settings.json", { mysql: true });
+  assert.deepEqual(await mysql.read("settings.json"), { mysql: true });
+
+  const sqliteRows = new Map();
+  const sqlite = createSQLiteStorage({
+    async run(sql, params = []) {
+      if (/^INSERT/i.test(sql)) sqliteRows.set(params[0], params[1]);
+    },
+    async get(_sql, params = []) {
+      const value = sqliteRows.get(params[0]);
+      return value ? { value } : undefined;
+    },
+  });
+  await sqlite.write("settings.json", { local: true });
+  assert.deepEqual(await sqlite.read("settings.json"), { local: true });
+
+  const kvRows = new Map();
+  const kv = createKeyValueStorage({
+    client: {
+      async get(key) { return kvRows.get(key); },
+      async set(key, value) { kvRows.set(key, value); },
+      async del(key) { kvRows.delete(key); },
+    },
+  });
+  await kv.write("settings.json", { cache: "redis-compatible" });
+  assert.deepEqual(await kv.read("settings.json"), { cache: "redis-compatible" });
+
+  const secrets = new Map();
+  const keychain = createKeychainStorage({
+    keychain: {
+      async getPassword(service, account) { return secrets.get(`${service}:${account}`) ?? null; },
+      async setPassword(service, account, password) { secrets.set(`${service}:${account}`, password); },
+      async deletePassword(service, account) { return secrets.delete(`${service}:${account}`); },
+    },
+  });
+  await keychain.write("profiles.json", { activeProfile: "secure" });
+  assert.deepEqual(await keychain.read("profiles.json"), { activeProfile: "secure" });
 });

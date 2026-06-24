@@ -1,6 +1,6 @@
 {
   "name": "@agent-api/app-engine",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Renderer-neutral application engine for Agent API apps",
   "license": "MIT",
   "homepage": "https://github.com/scalebox-dev/agent-tui#readme",
@@ -29,6 +29,10 @@
     "./terminal": {
       "types": "./dist/terminal.d.ts",
       "import": "./dist/terminal.js"
+    },
+    "./storage": {
+      "types": "./dist/storage/index.d.ts",
+      "import": "./dist/storage/index.js"
     },
     "./package.json": "./package.json"
   },
