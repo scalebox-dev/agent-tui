@@ -28,6 +28,7 @@ export interface WorkbenchRenderModel {
     renderMode: RenderMode;
     workdir: string;
   };
+  layout: "wide" | "compact";
   input: {
     afterCursor: string;
     beforeCursor: string;
@@ -60,11 +61,16 @@ export interface BuildWorkbenchRenderModelInput {
 }
 
 export function buildWorkbenchRenderModel(input: BuildWorkbenchRenderModelInput): WorkbenchRenderModel {
-  const terminalRows = Math.max(18, input.viewport.rows || 32);
-  const terminalColumns = Math.max(80, input.viewport.columns || 100);
-  const viewportHeight = Math.max(6, terminalRows - 11);
-  const activityHeight = viewportHeight;
-  const transcriptWidth = Math.max(36, Math.floor(terminalColumns * 0.72) - 4);
+  const terminalRows = Math.max(8, input.viewport.rows || 32);
+  const terminalColumns = Math.max(24, input.viewport.columns || 100);
+  const layout = terminalColumns >= 96 ? "wide" : "compact";
+  const reservedRows = layout === "wide" ? 11 : 14;
+  const viewportHeight = Math.max(3, terminalRows - reservedRows);
+  const activityHeight = layout === "wide" ? viewportHeight : Math.min(4, Math.max(2, Math.floor(viewportHeight / 3)));
+  const transcriptHeight = layout === "wide" ? viewportHeight : Math.max(3, viewportHeight - activityHeight);
+  const transcriptWidth = layout === "wide"
+    ? Math.max(28, Math.floor(terminalColumns * 0.72) - 4)
+    : Math.max(20, terminalColumns - 4);
   const transcript = buildTranscriptViewModel({
     activeAssistantMessageId: input.state.activeAssistantMessageId,
     busy: input.state.busy,
@@ -72,13 +78,13 @@ export function buildWorkbenchRenderModel(input: BuildWorkbenchRenderModelInput)
     offset: input.transcriptOffset,
     renderMode: input.state.renderMode,
     spinnerFrame: input.spinnerFrame,
-    viewportHeight,
+    viewportHeight: transcriptHeight,
     width: transcriptWidth,
   });
   const cursor = Math.max(0, Math.min(input.draft.length, input.cursor ?? input.draft.length));
   const fullAccess = input.state.accessMode === "full";
   const label = input.state.busy ? "working" : "you";
-  const inputViewportColumns = Math.max(12, terminalColumns - 10 - label.length - (fullAccess ? 14 : 0));
+  const inputViewportColumns = Math.max(8, terminalColumns - 10 - label.length - (fullAccess ? 14 : 0));
   const inputViewport = inputViewportText(input.draft, cursor, inputViewportColumns);
 
   return {
@@ -104,6 +110,7 @@ export function buildWorkbenchRenderModel(input: BuildWorkbenchRenderModelInput)
       renderMode: input.state.renderMode,
       workdir: input.state.workdir?.root || input.workdirFallback,
     },
+    layout,
     input: {
       afterCursor: inputViewport.afterCursor,
       beforeCursor: inputViewport.beforeCursor,

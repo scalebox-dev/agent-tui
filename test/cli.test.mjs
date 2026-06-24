@@ -1352,9 +1352,31 @@ test("workbench render model exposes renderer-neutral screen state", () => {
   assert.equal(model.input.beforeCursor, "he");
   assert.equal(model.input.cursorText, "l");
   assert.equal(model.input.afterCursor, "lo");
+  assert.equal(model.layout, "wide");
   assert.equal(model.viewportHeight, 19);
   assert.ok(model.transcript.visibleLines.length > 0);
   assert.match(model.footerText, /live/);
+});
+
+test("workbench render model adapts to narrow terminal sizes", () => {
+  const state = createInitialWorkbenchState({});
+  const model = buildWorkbenchRenderModel({
+    cursor: 3,
+    draft: "hello world",
+    profileName: "default",
+    spinnerFrame: 0,
+    state,
+    transcriptOffset: 0,
+    viewport: { rows: 14, columns: 50 },
+    workdirFallback: "/fallback",
+  });
+
+  assert.equal(model.layout, "compact");
+  assert.equal(model.terminalRows, 14);
+  assert.equal(model.terminalColumns, 50);
+  assert.ok(model.viewportHeight <= 6);
+  assert.ok(model.transcriptWidth <= 50);
+  assert.ok(model.input.viewportColumns < 50);
 });
 
 test("workbench render model scrolls long input around the cursor", () => {

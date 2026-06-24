@@ -147,6 +147,7 @@ function WorkbenchApp({
 }) {
   const app = useApp();
   const { stdout } = useStdout();
+  const terminalSize = useTerminalSize(stdout);
   const [draft, setDraft] = useState("");
   const [cursor, setCursor] = useState(0);
   const [spinnerFrame, setSpinnerFrame] = useState(0);
@@ -178,12 +179,12 @@ function WorkbenchApp({
       state,
       transcriptOffset,
       viewport: {
-        rows: stdout.rows || process.stdout.rows,
-        columns: stdout.columns || process.stdout.columns,
+        rows: terminalSize.rows,
+        columns: terminalSize.columns,
       },
       workdirFallback: options.workdir || process.cwd(),
     }),
-    [cursor, draft, options.workdir, profileName, spinnerFrame, state, stdout.columns, stdout.rows, transcriptOffset],
+    [cursor, draft, options.workdir, profileName, spinnerFrame, state, terminalSize.columns, terminalSize.rows, transcriptOffset],
   );
 
   useEffect(() => {
@@ -292,4 +293,32 @@ function WorkbenchApp({
   }, [agentEngine]);
 
   return <InkWorkbenchScreen renderModel={renderModel} spinnerFrame={spinnerFrame} />;
+}
+
+function useTerminalSize(stdout: NodeJS.WriteStream) {
+  const [size, setSize] = useState(() => ({
+    columns: stdout.columns || process.stdout.columns || 100,
+    rows: stdout.rows || process.stdout.rows || 32,
+  }));
+
+  useEffect(() => {
+    const update = () => {
+      setSize((current) => {
+        const next = {
+          columns: stdout.columns || process.stdout.columns || current.columns,
+          rows: stdout.rows || process.stdout.rows || current.rows,
+        };
+        return next.columns === current.columns && next.rows === current.rows ? current : next;
+      });
+    };
+    update();
+    stdout.on("resize", update);
+    if (stdout !== process.stdout) process.stdout.on("resize", update);
+    return () => {
+      stdout.off("resize", update);
+      if (stdout !== process.stdout) process.stdout.off("resize", update);
+    };
+  }, [stdout]);
+
+  return size;
 }

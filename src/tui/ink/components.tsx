@@ -19,6 +19,16 @@ export function InkWorkbenchScreen({
   renderModel: WorkbenchRenderModel;
   spinnerFrame: number;
 }) {
+  const activity = (
+    <Box flexDirection="column" width={renderModel.layout === "wide" ? "28%" : "100%"} height={renderModel.activityHeight} borderStyle="single" borderColor="gray" paddingX={1}>
+      <Text bold wrap="truncate">Activity</Text>
+      {renderModel.visibleActivities.map((activity) => (
+        <Text color={activityColor(activity.level)} key={activity.id} wrap="truncate">
+          {new Date(activity.timestamp).toLocaleTimeString()} {activity.text}
+        </Text>
+      ))}
+    </Box>
+  );
   return (
     <Box flexDirection="column">
       <Header
@@ -35,21 +45,14 @@ export function InkWorkbenchScreen({
         renderMode={renderModel.header.renderMode}
         workdir={renderModel.header.workdir}
       />
-      <Box marginTop={1} height={renderModel.viewportHeight}>
-        <Box flexDirection="column" width="72%" paddingRight={1}>
+      <Box marginTop={1} height={renderModel.viewportHeight} flexDirection={renderModel.layout === "wide" ? "row" : "column"}>
+        <Box flexDirection="column" width={renderModel.layout === "wide" ? "72%" : "100%"} paddingRight={renderModel.layout === "wide" ? 1 : 0}>
           {renderModel.transcript.visibleLines.map((line) => (
             <TranscriptText key={line.id} line={line} />
           ))}
           {renderModel.transcript.visibleLines.length === 0 && <Text color="gray">No transcript lines.</Text>}
         </Box>
-        <Box flexDirection="column" width="28%" height={renderModel.activityHeight} borderStyle="single" borderColor="gray" paddingX={1}>
-          <Text bold wrap="truncate">Activity</Text>
-          {renderModel.visibleActivities.map((activity) => (
-            <Text color={activityColor(activity.level)} key={activity.id} wrap="truncate">
-              {new Date(activity.timestamp).toLocaleTimeString()} {activity.text}
-            </Text>
-          ))}
-        </Box>
+        {activity}
       </Box>
       <Box borderStyle="single" borderColor={renderModel.input.busy ? "yellow" : "green"} paddingX={1}>
         {renderModel.input.fullAccess && (
