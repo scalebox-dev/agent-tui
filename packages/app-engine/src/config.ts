@@ -45,6 +45,7 @@ export interface ConversationState {
 
 export interface WorkbenchPreferences {
   defaultPreset?: string | null;
+  automaticContinuationLimit?: number | null;
   isolation?: ShellIsolationPreferences;
 }
 
@@ -81,6 +82,7 @@ const conversationSchema = z.object({
 
 const workbenchPreferencesSchema = z.object({
   defaultPreset: z.string().nullable().optional(),
+  automaticContinuationLimit: z.number().int().min(0).nullable().optional(),
   isolation: z.object({
     mode: z.enum(["none", "auto", "required"]).optional(),
     executablePath: z.string().nullable().optional(),
@@ -238,6 +240,7 @@ export async function loadWorkbenchPreferences(): Promise<WorkbenchPreferences> 
 
 export async function updateWorkbenchPreferences(patch: {
   defaultPreset?: string | null | undefined;
+  automaticContinuationLimit?: number | null | undefined;
   isolation?: {
     mode?: ShellIsolationMode | null | undefined;
     executablePath?: string | null | undefined;
@@ -261,6 +264,15 @@ export async function updateWorkbenchPreferences(patch: {
       } else {
         delete next.defaultPreset;
       }
+    }
+  }
+  if ("automaticContinuationLimit" in patch) {
+    if (patch.automaticContinuationLimit === undefined) {
+      delete next.automaticContinuationLimit;
+    } else if (patch.automaticContinuationLimit === null) {
+      next.automaticContinuationLimit = null;
+    } else {
+      next.automaticContinuationLimit = Math.floor(patch.automaticContinuationLimit);
     }
   }
   if ("isolation" in patch) {

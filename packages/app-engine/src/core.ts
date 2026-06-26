@@ -7,6 +7,8 @@ export {
   createAgentEngine,
 } from "./engine/agent-engine.js";
 export type {
+  AutomaticContinuationPause,
+  AutomaticContinuationState,
   AgentRunOptions,
   AgentTurnEvent,
   AgentTurnResult,
@@ -26,6 +28,7 @@ export {
   listConversations,
   localToolExecutionErrorResult,
   resolveAgentRequestTools,
+  resumeAgentAfterAutomaticContinuation,
   resumeAgentAfterLocalApproval,
   runAgent,
   runAgentTurn,

@@ -1,4 +1,4 @@
-import type { LocalToolApprovalRequest, WorkdirAccessMode } from "../agent.js";
+import type { AutomaticContinuationPause, LocalToolApprovalRequest, WorkdirAccessMode } from "../agent.js";
 import type { ShellIsolationPreferences } from "../workbench/shell-isolation.js";
 
 export type WorkbenchRole = "user" | "assistant" | "system";
@@ -31,6 +31,11 @@ export interface LocalToolApproval extends LocalToolApprovalRequest {
   createdAt: number;
 }
 
+export interface PendingAutomaticContinuation extends AutomaticContinuationPause {
+  id: string;
+  createdAt: number;
+}
+
 export type RenderMode = "markdown" | "raw";
 
 export interface WorkbenchState {
@@ -41,6 +46,7 @@ export interface WorkbenchState {
   workdir: WorkbenchWorkdirStatus | null;
   activeAssistantMessageId: string | null;
   pendingLocalTool: LocalToolApproval | null;
+  pendingAutomaticContinuation: PendingAutomaticContinuation | null;
   accessMode: WorkdirAccessMode;
   conversationId?: string;
   conversationPreviousResponseId?: string;
@@ -50,6 +56,7 @@ export interface WorkbenchState {
   runModel?: string;
   renderMode: RenderMode;
   defaultPreset?: string | null;
+  automaticContinuationLimit?: number | null;
   shellIsolation?: ShellIsolationPreferences;
 }
 
@@ -73,9 +80,11 @@ export type WorkbenchAction =
   | { type: "assistant.active"; id: string | null }
   | { type: "local_tool.pending.set"; approval: LocalToolApprovalRequest }
   | { type: "local_tool.pending.clear" }
+  | { type: "automatic_continuation.pending.set"; pause: AutomaticContinuationPause }
+  | { type: "automatic_continuation.pending.clear" }
   | { type: "access.set"; mode: WorkdirAccessMode }
   | { type: "conversation.set"; id?: string; name: string; previousResponseId?: string; status?: "fresh" | "continued" | "unknown" }
-  | { type: "settings.set"; settings: Partial<Pick<WorkbenchState, "runPreset" | "runModel" | "renderMode" | "defaultPreset" | "shellIsolation">> };
+  | { type: "settings.set"; settings: Partial<Pick<WorkbenchState, "runPreset" | "runModel" | "renderMode" | "defaultPreset" | "automaticContinuationLimit" | "shellIsolation">> };
 
 export type WorkbenchCommand =
   | { kind: "invalid"; command: string }
@@ -88,7 +97,7 @@ export type WorkbenchCommand =
   | { kind: "delete_profile" }
   | { kind: "switch_profile"; name?: string }
   | { kind: "auth_status" }
-  | { kind: "config"; field?: "preset" | "isolation" | "isolator"; value?: string }
+  | { kind: "config"; field?: "preset" | "continuation-limit" | "isolation" | "isolator"; value?: string }
   | { kind: "render"; mode?: RenderMode }
   | { kind: "transcript" }
   | { kind: "export"; path?: string }
@@ -116,6 +125,7 @@ export function createInitialWorkbenchState(options: {
   model?: string;
   renderMode?: RenderMode;
   defaultPreset?: string | null;
+  automaticContinuationLimit?: number | null;
   shellIsolation?: ShellIsolationPreferences;
 }): WorkbenchState {
   const accessMode = options.accessMode ?? (options.contextEnabled ? "approval" : "off");
@@ -131,6 +141,7 @@ export function createInitialWorkbenchState(options: {
     workdir: null,
     activeAssistantMessageId: null,
     pendingLocalTool: null,
+    pendingAutomaticContinuation: null,
     accessMode,
     conversationId: undefined,
     conversationPreviousResponseId: undefined,
@@ -140,6 +151,7 @@ export function createInitialWorkbenchState(options: {
     runModel: options.model,
     renderMode: options.renderMode ?? "markdown",
     defaultPreset: options.defaultPreset,
+    automaticContinuationLimit: options.automaticContinuationLimit,
     shellIsolation: options.shellIsolation,
   };
 }
@@ -237,6 +249,7 @@ export function workbenchReducer(state: WorkbenchState, action: WorkbenchAction)
       return {
         ...state,
         pendingLocalTool: pending,
+        pendingAutomaticContinuation: null,
         activities: [
           ...state.activities,
           newActivity("warning", `Local approval ready: ${pending.name}${pending.action ? `.${pending.action}` : ""}`),
@@ -247,6 +260,27 @@ export function workbenchReducer(state: WorkbenchState, action: WorkbenchAction)
       return {
         ...state,
         pendingLocalTool: null,
+      };
+    case "automatic_continuation.pending.set": {
+      const pending = {
+        ...action.pause,
+        id: `continuation-${Date.now()}`,
+        createdAt: Date.now(),
+      };
+      return {
+        ...state,
+        pendingLocalTool: null,
+        pendingAutomaticContinuation: pending,
+        activities: [
+          ...state.activities,
+          newActivity("warning", `Automatic continuation paused: ${pending.count}/${pending.limit}`),
+        ].slice(-20),
+      };
+    }
+    case "automatic_continuation.pending.clear":
+      return {
+        ...state,
+        pendingAutomaticContinuation: null,
       };
     case "access.set":
       return setLocalAccess(state, action.mode);
@@ -280,6 +314,7 @@ function setLocalAccess(state: WorkbenchState, mode: WorkdirAccessMode): Workben
     accessMode: mode,
     contextEnabled: mode !== "off",
     pendingLocalTool: mode === "off" ? null : state.pendingLocalTool,
+    pendingAutomaticContinuation: mode === "off" ? null : state.pendingAutomaticContinuation,
     activities: [...state.activities, newActivity(mode === "off" ? "warning" : "success", `Local access: ${mode}`)].slice(-20),
   };
 }
@@ -318,7 +353,13 @@ export function parseWorkbenchCommand(input: string): WorkbenchCommand | null {
     case "settings": {
       const [field, ...valueParts] = rest;
       if (!field) return { kind: "config" };
-      if (field === "preset" || field === "isolation" || field === "isolator") {
+      if (field === "preset" || field === "continuation-limit" || field === "continuation" || field === "automatic-continuation-limit" || field === "isolator") {
+        const normalizedField = field === "continuation" || field === "automatic-continuation-limit"
+          ? "continuation-limit"
+          : field;
+        return { kind: "config", field: normalizedField, value: valueParts.join(" ").trim() || undefined };
+      }
+      if (field === "isolation") {
         return { kind: "config", field, value: valueParts.join(" ").trim() || undefined };
       }
       return { kind: "invalid", command: `${name} ${field}` };
@@ -418,6 +459,7 @@ export function helpText() {
     "/transcript      show a plain-text transcript preview",
     "/export [file]   save the plain-text transcript to a file",
     "/config preset   save default preset; use none/off for no preset, reset for built-in",
+    "/config continuation-limit save automatic continuation checkpoint limit",
     "/config isolation save shell isolation mode: none, auto, or required",
     "/config isolator save agent-isolator path; use none/off to clear",
     "/preset [name]   show or set preset; use none/off to clear",
@@ -430,10 +472,10 @@ export function helpText() {
     "/conversations   list saved local conversation handles",
     "/summary         show local workdir summary previews",
     "/search <query>  search text in the local workdir",
-    "/preview         show pending local action preview",
-    "/apply           apply pending local action",
-    "/apply-all       apply pending action and allow future local actions",
-    "/reject          reject pending local action",
+    "/preview         show pending action or continuation checkpoint",
+    "/apply           apply or continue pending action once",
+    "/apply-all       apply/continue and relax future prompts for this turn",
+    "/reject          reject or stop pending action",
     "/abort           cancel the in-flight agent turn",
     "/context         toggle local context packaging for each agent turn",
     "/clear           clear the visible terminal transcript",

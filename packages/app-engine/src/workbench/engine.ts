@@ -70,7 +70,12 @@ export function createWorkbenchEngine(options: WorkbenchEngineOptions): Workbenc
     for (const listener of listeners) listener();
   };
   const dispatch = (action: WorkbenchAction) => {
-    if (action.type === "local_tool.pending.set" || action.type === "local_tool.pending.clear") {
+    if (
+      action.type === "local_tool.pending.set" ||
+      action.type === "local_tool.pending.clear" ||
+      action.type === "automatic_continuation.pending.set" ||
+      action.type === "automatic_continuation.pending.clear"
+    ) {
       pendingApprovalInvalidInputs = 0;
     }
     const next = workbenchReducer(state, action);
@@ -252,6 +257,20 @@ export function createWorkbenchEngine(options: WorkbenchEngineOptions): Workbenc
           });
           dispatch({ type: "message.add", role: "system", text: formatLocalToolApproval(event) });
           return eventResult();
+        case "automatic_continuation.paused":
+          dispatch({
+            type: "automatic_continuation.pending.set",
+            pause: {
+              reason: event.reason,
+              message: event.message,
+              continuation: event.continuation,
+              count: event.count,
+              limit: event.limit,
+              responseID: event.responseID,
+            },
+          });
+          dispatch({ type: "message.add", role: "system", text: event.message });
+          return eventResult({ type: "flush_text_delta_buffer" });
         case "model.requested":
           dispatch({ type: "activity.add", text: `Model requested: ${modelLabel(event.model, event.provider)}` });
           return eventResult();
@@ -283,6 +302,15 @@ export function createWorkbenchEngine(options: WorkbenchEngineOptions): Workbenc
         handleInvalidPendingApprovalInput();
         return { kind: "handled" };
       }
+      if (state.pendingAutomaticContinuation) {
+        const command = parsePendingApprovalCommand(trimmed);
+        if (command) {
+          pendingApprovalInvalidInputs = 0;
+          return { kind: "command", command };
+        }
+        handleInvalidPendingContinuationInput();
+        return { kind: "handled" };
+      }
       const command = parseWorkbenchCommand(trimmed);
       if (command) return { kind: "command", command };
       return { kind: "prompt", prompt: trimmed };
@@ -310,6 +338,29 @@ export function createWorkbenchEngine(options: WorkbenchEngineOptions): Workbenc
       text: `Local approval is pending. Enter /apply or /yes to execute once, /apply-all or /yes-all to allow future local actions, or /reject or /no to discard. Invalid input ${attempts}/${maxAttempts}.`,
     });
     dispatch({ type: "activity.add", level: "warning", text: "Waiting for local approval command" });
+  }
+
+  function handleInvalidPendingContinuationInput() {
+    pendingApprovalInvalidInputs += 1;
+    const attempts = pendingApprovalInvalidInputs;
+    const maxAttempts = 3;
+    if (attempts >= maxAttempts) {
+      dispatch({
+        type: "message.add",
+        role: "system",
+        text: "Automatic continuation stopped after too many invalid inputs. The job remains paused at the last response.",
+      });
+      dispatch({ type: "activity.add", level: "warning", text: "Automatic continuation stopped" });
+      dispatch({ type: "automatic_continuation.pending.clear" });
+      pendingApprovalInvalidInputs = 0;
+      return;
+    }
+    dispatch({
+      type: "message.add",
+      role: "system",
+      text: `Automatic continuation is paused. Enter /apply or /yes to continue, /apply-all or /yes-all to continue without more automatic continuation checkpoints for this turn, or /reject or /no to stop. Invalid input ${attempts}/${maxAttempts}.`,
+    });
+    dispatch({ type: "activity.add", level: "warning", text: "Waiting for continuation command" });
   }
 }
 

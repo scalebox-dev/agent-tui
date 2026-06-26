@@ -80,6 +80,7 @@ export type {
   ActivityLevel,
   InputHistory,
   LocalToolApproval,
+  PendingAutomaticContinuation,
   RenderMode,
   WorkbenchAction,
   WorkbenchActivity,

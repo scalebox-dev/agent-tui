@@ -47,6 +47,9 @@ export interface AgentRunOptions {
   maxContextBytes?: number;
   accessMode?: WorkdirAccessMode;
   shellIsolation?: ShellIsolationPreferences;
+  automaticContinuationLimit?: number;
+  bypassAutomaticContinuationLimit?: boolean;
+  automaticContinuationCount?: number;
   abortSignal?: AbortSignal;
 }
 
@@ -55,6 +58,23 @@ export type WorkdirAccessMode = "off" | "approval" | "full";
 export interface AgentTurnResult {
   text: string;
   responseID?: string;
+  paused?: boolean;
+  pause?: AutomaticContinuationPause;
+}
+
+export interface AutomaticContinuationPause {
+  reason: "automatic_continuation_limit";
+  message: string;
+  continuation: AutomaticContinuationState;
+  count: number;
+  limit: number;
+  responseID?: string;
+}
+
+export interface AutomaticContinuationState {
+  input: Input;
+  previousResponseID: string;
+  automaticContinuationCount: number;
 }
 
 export interface LocalToolApprovalRequest {
@@ -80,6 +100,7 @@ export type AgentTurnEvent =
   | { type: "tool.completed"; name: string; status?: string }
   | { type: "local_tool.completed"; name: string; action?: string; requiresApproval?: boolean }
   | ({ type: "local_tool.approval_requested" } & LocalToolApprovalRequest)
+  | ({ type: "automatic_continuation.paused" } & AutomaticContinuationPause)
   | { type: "model.requested"; model?: string; provider?: string }
   | { type: "model.completed"; model?: string; provider?: string }
   | { type: "model.failed"; model?: string; provider?: string }
@@ -115,6 +136,8 @@ export async function runAgent(options: AgentRunOptions) {
   });
   if (result.text && options.stream === false) {
     console.log(result.text);
+  } else if (result.paused && result.text) {
+    process.stdout.write(`${result.text}\n`);
   } else if (options.stream !== false) {
     process.stdout.write("\n");
   }
@@ -216,6 +239,43 @@ export async function resumeAgentAfterLocalApproval(
   );
 }
 
+export async function resumeAgentAfterAutomaticContinuation(
+  options: AgentRunOptions,
+  continuation: AutomaticContinuationState,
+  onEvent?: (event: AgentTurnEvent) => void,
+): Promise<AgentTurnResult> {
+  const runtimeProfile = await resolveRuntimeProfile(options.profile);
+  const localWorkdir = await prepareLocalWorkdirTools(options);
+  if (!localWorkdir) {
+    throw new Error("local tools are not available for automatic continuation");
+  }
+  const tools = await resolveAgentRequestTools(
+    runtimeProfile.client,
+    options.preset,
+    localWorkdir.registry.definitions(),
+    { baseURL: runtimeProfile.profile.baseURL },
+  );
+  return await runAgentTurnWithLocalTools(
+    runtimeProfile.client.agent,
+    runtimeProfile.client.responses,
+    {
+      input: continuation.input,
+      instructions: localWorkdir.instructions,
+      tools,
+      preset: options.preset,
+      model: options.model,
+      previous_response_id: continuation.previousResponseID,
+      stream: options.stream ?? true,
+    },
+    {
+      ...options,
+      automaticContinuationCount: continuation.automaticContinuationCount,
+    },
+    localWorkdir.registry,
+    onEvent,
+  );
+}
+
 export async function listAvailablePresets(profileName?: string): Promise<PresetSummary[]> {
   const runtimeProfile = await resolveRuntimeProfile(profileName);
   const presets = await cachedPresetCatalog(
@@ -263,11 +323,41 @@ async function runAgentTurnWithLocalTools(
 ): Promise<AgentTurnResult> {
   let input = initialParams.input;
   let previousResponseID = initialParams.previous_response_id;
-  let finalResponse: AgentResponse | undefined;
-  const maxLocalToolRounds = 8;
+  let automaticContinuationCount = options.automaticContinuationCount ?? 0;
+  const automaticContinuationLimit = normalizeAutomaticContinuationLimit(options.automaticContinuationLimit);
 
-  for (let round = 0; round <= maxLocalToolRounds; round += 1) {
+  for (;;) {
     throwIfAborted(options.abortSignal);
+    const isAutomaticContinuationCall = isAutomaticContinuationInput(input, previousResponseID);
+    if (
+      isAutomaticContinuationCall &&
+      previousResponseID &&
+      !options.bypassAutomaticContinuationLimit &&
+      automaticContinuationCount >= automaticContinuationLimit
+    ) {
+      const continuationResponseID = previousResponseID;
+      const message = automaticContinuationPauseMessage(automaticContinuationCount, automaticContinuationLimit, continuationResponseID);
+      const pause: AutomaticContinuationPause = {
+        reason: "automatic_continuation_limit",
+        message,
+        continuation: {
+          input,
+          previousResponseID: continuationResponseID,
+          automaticContinuationCount,
+        },
+        count: automaticContinuationCount,
+        limit: automaticContinuationLimit,
+        responseID: continuationResponseID,
+      };
+      onEvent?.({ type: "automatic_continuation.paused", ...pause });
+      await updateConversation(options, continuationResponseID);
+      return {
+        text: message,
+        responseID: continuationResponseID,
+        paused: true,
+        pause,
+      };
+    }
     const response = await createAgentResponseWithOptionalStream(agent, {
       input,
       instructions: initialParams.instructions,
@@ -278,7 +368,9 @@ async function runAgentTurnWithLocalTools(
       stream: initialParams.stream,
     }, responses, options.abortSignal, onEvent);
     throwIfAborted(options.abortSignal);
-    finalResponse = response;
+    if (isAutomaticContinuationCall) {
+      automaticContinuationCount += 1;
+    }
     if (initialParams.stream === false) {
       onEvent?.({ type: "response.started", responseID: response.id });
     }
@@ -317,8 +409,25 @@ async function runAgentTurnWithLocalTools(
     input = outputs;
     previousResponseID = response.id;
   }
+}
 
-  throw new Error(`local function loop exceeded ${maxLocalToolRounds} rounds after ${finalResponse?.id || "initial response"}`);
+function normalizeAutomaticContinuationLimit(value: number | undefined) {
+  if (value === undefined) return 8;
+  if (!Number.isFinite(value) || value < 0) return 8;
+  return Math.floor(value);
+}
+
+function automaticContinuationPauseMessage(count: number, limit: number, responseID: string) {
+  return [
+    `Automatic workflow paused after ${count} continuation call${count === 1 ? "" : "s"} (limit: ${limit}).`,
+    `Last response: ${responseID}.`,
+    "Use /apply to continue, /apply-all to continue without more automatic continuation checkpoints for this turn, or /reject to stop here.",
+  ].join("\n");
+}
+
+function isAutomaticContinuationInput(input: Input, previousResponseID: string | undefined) {
+  if (!previousResponseID || !Array.isArray(input)) return false;
+  return input.some((item) => item && typeof item === "object" && "type" in item && item.type === "function_call_output");
 }
 
 async function createAgentResponseWithOptionalStream(

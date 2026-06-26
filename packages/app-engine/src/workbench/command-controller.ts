@@ -132,6 +132,7 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
           accessMode: state.accessMode,
           contextEnabled: state.contextEnabled,
           defaultPreset: state.defaultPreset,
+          automaticContinuationLimit: state.automaticContinuationLimit,
           renderMode: state.renderMode,
           shellIsolation: state.shellIsolation,
         }),
@@ -174,6 +175,27 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
         dispatch({ type: "message.add", role: "system", text: `Could not save default preset: ${userFacingError(error)}` });
         dispatch({ type: "activity.add", level: "error", text: "Default preset save failed" });
       }
+    }
+
+    if (command.field === "continuation-limit") {
+      if (!command.value) {
+        dispatch({
+          type: "message.add",
+          role: "system",
+          text: options.settingsController.automaticContinuationLimitHelp(state.automaticContinuationLimit),
+        });
+        return;
+      }
+      try {
+        const settings = await options.settingsController.saveAutomaticContinuationLimit(command.value);
+        dispatch({ type: "settings.set", settings: { automaticContinuationLimit: settings.automaticContinuationLimit } });
+        dispatch({ type: "message.add", role: "system", text: settings.message });
+        dispatch({ type: "activity.add", level: "success", text: settings.activity });
+      } catch (error) {
+        dispatch({ type: "message.add", role: "system", text: `Could not save automatic continuation limit: ${userFacingError(error)}` });
+        dispatch({ type: "activity.add", level: "error", text: "Automatic continuation limit save failed" });
+      }
+      return;
     }
 
     if (command.field === "isolation") {
@@ -395,11 +417,36 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
       dispatch({ type: "message.add", role: "system", text: options.localController.approvalPreview(state.pendingLocalTool) });
       return;
     }
-    dispatch({ type: "message.add", role: "system", text: "No pending local action." });
+    if (state.pendingAutomaticContinuation) {
+      dispatch({ type: "message.add", role: "system", text: state.pendingAutomaticContinuation.message });
+      return;
+    }
+    dispatch({ type: "message.add", role: "system", text: "No pending action." });
   }
 
   async function applyPendingEdit(allowFutureLocalActions: boolean) {
     const state = options.engine.snapshot();
+    if (state.pendingAutomaticContinuation) {
+      dispatch({
+        type: "activity.add",
+        level: "warning",
+        text: `Continuing automatic workflow: ${state.pendingAutomaticContinuation.count}/${state.pendingAutomaticContinuation.limit}`,
+      });
+      const pending = state.pendingAutomaticContinuation;
+      dispatch({ type: "automatic_continuation.pending.clear" });
+      dispatch({
+        type: "message.add",
+        role: "system",
+        text: allowFutureLocalActions
+          ? "Continuing automatic workflow without more continuation checkpoints for this turn."
+          : "Continuing automatic workflow.",
+      });
+      await options.turnController.continueAfterAutomaticContinuation({
+        continuation: pending.continuation,
+        bypassAutomaticContinuationLimit: allowFutureLocalActions,
+      });
+      return;
+    }
     if (!options.localController.isLoaded()) {
       dispatch({ type: "message.add", role: "system", text: unavailableWorkdirText() });
       return;
@@ -442,11 +489,20 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
       }
       return;
     }
-    dispatch({ type: "message.add", role: "system", text: "No pending local action." });
+    dispatch({ type: "message.add", role: "system", text: "No pending action." });
   }
 
   function rejectPendingEdit() {
     const state = options.engine.snapshot();
+    if (state.pendingAutomaticContinuation) {
+      dispatch({
+        type: "activity.add",
+        text: `Stopped automatic workflow: ${state.pendingAutomaticContinuation.responseID || state.pendingAutomaticContinuation.continuation.previousResponseID}`,
+      });
+      dispatch({ type: "automatic_continuation.pending.clear" });
+      dispatch({ type: "message.add", role: "system", text: "Automatic workflow stopped at the checkpoint." });
+      return;
+    }
     if (state.pendingLocalTool) {
       dispatch({
         type: "activity.add",
@@ -455,7 +511,7 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
       dispatch({ type: "local_tool.pending.clear" });
       return;
     }
-    dispatch({ type: "message.add", role: "system", text: "No pending local action." });
+    dispatch({ type: "message.add", role: "system", text: "No pending action." });
   }
 
   function unavailableWorkdirText() {

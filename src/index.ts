@@ -249,6 +249,7 @@ function agentChatCommand() {
     .option("--context-query <text>", "include local search matches in context")
     .option("--max-context-files <n>", "local context file limit")
     .option("--max-context-bytes <n>", "local context byte limit")
+    .option("--automatic-continuation-limit <n>", "pause automatic agent continuations after this many calls; use unlimited to disable")
     .option("--access <mode>", "local tool access mode: off, approval, or full")
     .option("--restart", "start the conversation from a fresh response")
     .addOption(new Option("--no-stream", "wait for final response instead of streaming"))

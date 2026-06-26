@@ -22,6 +22,7 @@ import {
 
 export interface WorkbenchSettingsSnapshot {
   defaultPreset?: string | null;
+  automaticContinuationLimit?: number | null;
   runPreset?: string;
   shellIsolation?: ShellIsolationPreferences;
   activity?: string;
@@ -36,6 +37,7 @@ export interface WorkbenchSettingsController {
     profileName?: string;
     options: Pick<AgentRunOptions, "modelExplicit" | "preset" | "presetExplicit">;
   }): Promise<WorkbenchSettingsSnapshot & { message: string; activity: string }>;
+  saveAutomaticContinuationLimit(value: string): Promise<WorkbenchSettingsSnapshot & { message: string; activity: string }>;
   saveShellIsolationMode(value: string): Promise<WorkbenchSettingsSnapshot & { message: string; activity: string }>;
   saveIsolatorPath(value: string): Promise<WorkbenchSettingsSnapshot & { message: string; activity: string }>;
   saveIsolatorSource(value: string): Promise<WorkbenchSettingsSnapshot & { message: string; activity: string }>;
@@ -45,6 +47,7 @@ export interface WorkbenchSettingsController {
     accessMode: string;
     contextEnabled: boolean;
     defaultPreset?: string | null;
+    automaticContinuationLimit?: number | null;
     profileName: string;
     runModel?: string;
     runPreset?: string;
@@ -52,6 +55,7 @@ export interface WorkbenchSettingsController {
     shellIsolation?: ShellIsolationPreferences;
   }): string;
   defaultPresetHelp(defaultPreset?: string | null): string;
+  automaticContinuationLimitHelp(automaticContinuationLimit?: number | null): string;
   shellIsolationHelp(shellIsolation?: ShellIsolationPreferences): string;
   isolatorPathHelp(shellIsolation?: ShellIsolationPreferences): string;
   clearPresetToolCatalogCache(baseURL?: string): void;
@@ -87,6 +91,7 @@ export function createWorkbenchSettingsController(options: WorkbenchSettingsCont
       );
       return {
         defaultPreset: preferences.defaultPreset,
+        ...("automaticContinuationLimit" in preferences ? { automaticContinuationLimit: preferences.automaticContinuationLimit } : {}),
         ...(preferences.isolation ? { shellIsolation: preferences.isolation } : {}),
         ...(activity ? { activity } : {}),
         ...(isolatorSetupNotice(preferences.isolation) ? { notice: isolatorSetupNotice(preferences.isolation) } : {}),
@@ -109,6 +114,16 @@ export function createWorkbenchSettingsController(options: WorkbenchSettingsCont
         ...settingsSnapshot(preferences),
         message: `Saved shell isolation mode: ${formatShellIsolation(preferences.isolation)}.`,
         activity: `Shell isolation mode saved: ${preferences.isolation?.mode ?? "auto"}`,
+      };
+    },
+
+    async saveAutomaticContinuationLimit(value) {
+      const normalized = normalizeAutomaticContinuationLimitPreference(value);
+      const preferences = await updateWorkbenchPreferencesImpl({ automaticContinuationLimit: normalized });
+      return {
+        ...settingsSnapshot(preferences),
+        message: `Saved automatic continuation limit: ${formatAutomaticContinuationLimit(preferences.automaticContinuationLimit)}.`,
+        activity: `Automatic continuation limit saved: ${formatAutomaticContinuationLimit(preferences.automaticContinuationLimit)}`,
       };
     },
 
@@ -189,6 +204,7 @@ export function createWorkbenchSettingsController(options: WorkbenchSettingsCont
       const preferences = await updateWorkbenchPreferencesImpl({ defaultPreset: normalized });
       return {
         defaultPreset: preferences.defaultPreset,
+        ...("automaticContinuationLimit" in preferences ? { automaticContinuationLimit: preferences.automaticContinuationLimit } : {}),
         ...(preferences.isolation ? { shellIsolation: preferences.isolation } : {}),
         runPreset: shouldApplyDefaultPreset(input.options)
           ? effectiveDefaultPreset(preferences, input.options.preset)
@@ -224,6 +240,10 @@ export function createWorkbenchSettingsController(options: WorkbenchSettingsCont
 
     defaultPresetHelp(defaultPreset) {
       return `Default preset: ${formatDefaultPreset(defaultPreset)}. Use /config preset <name>, /config preset none, or /config preset reset.`;
+    },
+
+    automaticContinuationLimitHelp(automaticContinuationLimit) {
+      return `Automatic continuation limit: ${formatAutomaticContinuationLimit(automaticContinuationLimit)}. Use /config continuation-limit <n>, /config continuation-limit unlimited, or /config continuation-limit reset.`;
     },
 
     shellIsolationHelp(shellIsolation) {
@@ -267,8 +287,26 @@ export function formatDefaultPreset(value: string | null | undefined) {
 function settingsSnapshot(preferences: WorkbenchPreferences): WorkbenchSettingsSnapshot {
   return {
     ...("defaultPreset" in preferences ? { defaultPreset: preferences.defaultPreset } : {}),
+    ...("automaticContinuationLimit" in preferences ? { automaticContinuationLimit: preferences.automaticContinuationLimit } : {}),
     ...(preferences.isolation ? { shellIsolation: preferences.isolation } : {}),
   };
+}
+
+export function normalizeAutomaticContinuationLimitPreference(value: string): number | null | undefined {
+  const trimmed = value.trim();
+  const lowered = trimmed.toLowerCase();
+  if (!trimmed || lowered === "reset" || lowered === "default" || lowered === "builtin") return undefined;
+  if (["unlimited", "infinite", "off", "none", "disable", "disabled"].includes(lowered)) return null;
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error("Automatic continuation limit must be zero or greater, unlimited, or reset.");
+  }
+  return Math.floor(parsed);
+}
+
+export function formatAutomaticContinuationLimit(value: number | null | undefined) {
+  if (value === undefined) return "built-in (8)";
+  return value === null ? "unlimited" : String(value);
 }
 
 export function normalizeShellIsolationMode(value: string): ShellIsolationMode {
@@ -327,6 +365,7 @@ function shouldApplyDefaultPreset(options: Pick<AgentRunOptions, "modelExplicit"
 
 function runConfigText({
   accessMode,
+  automaticContinuationLimit,
   contextEnabled,
   defaultPreset,
   profileName,
@@ -336,6 +375,7 @@ function runConfigText({
   shellIsolation,
 }: {
   accessMode: string;
+  automaticContinuationLimit?: number | null;
   contextEnabled: boolean;
   defaultPreset?: string | null;
   profileName: string;
@@ -348,6 +388,7 @@ function runConfigText({
     `Profile: ${profileName}`,
     `Preset: ${runPreset || "none"}`,
     `Default preset: ${formatDefaultPreset(defaultPreset)}`,
+    `Automatic continuation limit: ${formatAutomaticContinuationLimit(automaticContinuationLimit)}`,
     `Model: ${runModel || "auto"}`,
     `Render mode: ${renderMode}`,
     `Shell isolation: ${formatShellIsolation(shellIsolation)}`,

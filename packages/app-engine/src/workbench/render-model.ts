@@ -136,6 +136,9 @@ export function pendingLocalLabel(state: WorkbenchState) {
   if (state.pendingLocalTool) {
     return `${state.pendingLocalTool.name}${state.pendingLocalTool.action ? `.${state.pendingLocalTool.action}` : ""}`;
   }
+  if (state.pendingAutomaticContinuation) {
+    return `continuation ${state.pendingAutomaticContinuation.count}/${state.pendingAutomaticContinuation.limit}`;
+  }
   return "none";
 }
 

@@ -1,4 +1,6 @@
 export {
+  type AutomaticContinuationPause,
+  type AutomaticContinuationState,
   type AgentRunOptions,
   type AgentTurnEvent,
   type AgentTurnResult,
@@ -11,6 +13,7 @@ export {
   listAvailablePresets,
   localToolExecutionErrorResult,
   resolveAgentRequestTools,
+  resumeAgentAfterAutomaticContinuation,
   resumeAgentAfterLocalApproval,
   runAgent,
   runAgentTurn,

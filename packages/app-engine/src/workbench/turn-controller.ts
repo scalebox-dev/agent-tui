@@ -2,8 +2,10 @@ import {
   resolveRuntimeProfile,
 } from "../profile.js";
 import {
+  resumeAgentAfterAutomaticContinuation,
   resumeAgentAfterLocalApproval,
   runAgentTurn,
+  type AutomaticContinuationState,
   type AgentRunOptions,
   type AgentTurnEvent,
   type LocalToolApprovalRequest,
@@ -19,6 +21,10 @@ export interface WorkbenchTurnController {
     result: string | Record<string, unknown>;
     accessMode: WorkdirAccessMode;
   }): Promise<void>;
+  continueAfterAutomaticContinuation(input: {
+    continuation: AutomaticContinuationState;
+    bypassAutomaticContinuationLimit: boolean;
+  }): Promise<void>;
   abort(reason: string): Promise<void>;
 }
 
@@ -31,12 +37,14 @@ export interface WorkbenchTurnControllerOptions {
   flushTextDeltaBuffer(): void;
   runAgentTurnImpl?: typeof runAgentTurn;
   resumeAgentAfterLocalApprovalImpl?: typeof resumeAgentAfterLocalApproval;
+  resumeAgentAfterAutomaticContinuationImpl?: typeof resumeAgentAfterAutomaticContinuation;
   resolveRuntimeProfileImpl?: typeof resolveRuntimeProfile;
 }
 
 export function createWorkbenchTurnController(options: WorkbenchTurnControllerOptions): WorkbenchTurnController {
   const runAgentTurnImpl = options.runAgentTurnImpl ?? runAgentTurn;
   const resumeAgentAfterLocalApprovalImpl = options.resumeAgentAfterLocalApprovalImpl ?? resumeAgentAfterLocalApproval;
+  const resumeAgentAfterAutomaticContinuationImpl = options.resumeAgentAfterAutomaticContinuationImpl ?? resumeAgentAfterAutomaticContinuation;
   const resolveRuntimeProfileImpl = options.resolveRuntimeProfileImpl ?? resolveRuntimeProfile;
   let activeAbortController: AbortController | null = null;
   let activeResponseID: string | null = null;
@@ -68,6 +76,7 @@ export function createWorkbenchTurnController(options: WorkbenchTurnControllerOp
             includeLocalContext: state.contextEnabled,
             accessMode: state.accessMode,
             shellIsolation: state.shellIsolation,
+            automaticContinuationLimit: effectiveAutomaticContinuationLimit(state),
             restartConversation: false,
             abortSignal: abortController.signal,
           },
@@ -75,8 +84,10 @@ export function createWorkbenchTurnController(options: WorkbenchTurnControllerOp
         );
         options.dispatch({
           type: "activity.add",
-          level: "success",
-          text: result.responseID ? `Agent turn completed: ${result.responseID}` : "Agent turn completed",
+          level: result.paused ? "warning" : "success",
+          text: result.responseID
+            ? `Agent turn ${result.paused ? "paused" : "completed"}: ${result.responseID}`
+            : `Agent turn ${result.paused ? "paused" : "completed"}`,
         });
       } catch (error) {
         handleTurnError(error);
@@ -108,6 +119,7 @@ export function createWorkbenchTurnController(options: WorkbenchTurnControllerOp
             includeLocalContext: state.contextEnabled,
             accessMode: input.accessMode,
             shellIsolation: state.shellIsolation,
+            automaticContinuationLimit: effectiveAutomaticContinuationLimit(state),
             restartConversation: false,
             abortSignal: abortController.signal,
           },
@@ -117,8 +129,55 @@ export function createWorkbenchTurnController(options: WorkbenchTurnControllerOp
         );
         options.dispatch({
           type: "activity.add",
-          level: "success",
-          text: continuation.responseID ? `Agent turn continued: ${continuation.responseID}` : "Agent turn continued",
+          level: continuation.paused ? "warning" : "success",
+          text: continuation.responseID
+            ? `Agent turn ${continuation.paused ? "paused" : "continued"}: ${continuation.responseID}`
+            : `Agent turn ${continuation.paused ? "paused" : "continued"}`,
+        });
+      } catch (error) {
+        handleTurnError(error);
+      } finally {
+        finishTurn(abortController);
+      }
+    },
+
+    async continueAfterAutomaticContinuation(input) {
+      const state = options.getState();
+      const assistantId = `assistant-${Date.now()}`;
+      const abortController = new AbortController();
+      activeAbortController = abortController;
+      activeResponseID = null;
+      options.dispatch({ type: "busy.set", busy: true });
+      options.dispatch({ type: "message.add", role: "assistant", text: "", id: assistantId });
+      options.dispatch({ type: "assistant.active", id: assistantId });
+      options.dispatch({ type: "activity.add", text: "Continuing automatic workflow" });
+      try {
+        const continuation = await resumeAgentAfterAutomaticContinuationImpl(
+          {
+            ...options.baseOptions,
+            preset: state.runPreset,
+            model: state.runModel,
+            stream: true,
+            file: undefined,
+            stdin: false,
+            conversation: state.currentConversation,
+            includeLocalContext: state.contextEnabled,
+            accessMode: state.accessMode,
+            shellIsolation: state.shellIsolation,
+            automaticContinuationLimit: effectiveAutomaticContinuationLimit(state),
+            restartConversation: false,
+            bypassAutomaticContinuationLimit: input.bypassAutomaticContinuationLimit,
+            abortSignal: abortController.signal,
+          },
+          input.continuation,
+          (event) => handleAgentEvent(event, assistantId),
+        );
+        options.dispatch({
+          type: "activity.add",
+          level: continuation.paused ? "warning" : "success",
+          text: continuation.responseID
+            ? `Automatic workflow ${continuation.paused ? "paused" : "continued"}: ${continuation.responseID}`
+            : `Automatic workflow ${continuation.paused ? "paused" : "continued"}`,
         });
       } catch (error) {
         handleTurnError(error);
@@ -197,6 +256,14 @@ export function createWorkbenchTurnController(options: WorkbenchTurnControllerOp
       level: aborted ? "warning" : "error",
       text: aborted ? "Agent turn aborted" : message,
     });
+  }
+
+  function effectiveAutomaticContinuationLimit(state: WorkbenchState) {
+    if (options.baseOptions.automaticContinuationLimit !== undefined) {
+      return options.baseOptions.automaticContinuationLimit;
+    }
+    if (state.automaticContinuationLimit === null) return Number.MAX_SAFE_INTEGER;
+    return state.automaticContinuationLimit;
   }
 }
 

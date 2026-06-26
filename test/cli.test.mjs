@@ -131,6 +131,7 @@ function stubSettingsController() {
   return {
     async loadInitial() { return {}; },
     async saveDefaultPreset() { return { defaultPreset: "pro-search", runPreset: "pro-search", message: "saved", activity: "saved" }; },
+    async saveAutomaticContinuationLimit() { return { automaticContinuationLimit: 8, message: "saved", activity: "saved" }; },
     async saveShellIsolationMode() { return { shellIsolation: { mode: "auto" }, message: "saved", activity: "saved" }; },
     async saveIsolatorPath() { return { shellIsolation: { executablePath: "/opt/agent-isolator" }, message: "saved", activity: "saved" }; },
     async saveIsolatorSource() { return { shellIsolation: { sourceURL: "https://example.test/agent-isolator" }, message: "saved", activity: "saved" }; },
@@ -138,6 +139,7 @@ function stubSettingsController() {
     async presetListText(input) { return input.prefix; },
     configText() { return "config"; },
     defaultPresetHelp() { return "default preset help"; },
+    automaticContinuationLimitHelp() { return "automatic continuation limit help"; },
     shellIsolationHelp() { return "shell isolation help"; },
     isolatorPathHelp() { return "isolator path help"; },
     clearPresetToolCatalogCache() {},
@@ -353,7 +355,7 @@ test("workbench configuration is stored separately from profiles", async () => {
   await execFileAsync("node", [
     "--input-type=module",
     "-e",
-    "import { updateWorkbenchPreferences } from '@agent-api/app-engine/core'; await updateWorkbenchPreferences({ defaultPreset: 'pro-search', isolation: { mode: 'required', executablePath: '/opt/agent-isolator' } });",
+    "import { updateWorkbenchPreferences } from '@agent-api/app-engine/core'; await updateWorkbenchPreferences({ defaultPreset: 'pro-search', automaticContinuationLimit: 12, isolation: { mode: 'required', executablePath: '/opt/agent-isolator' } });",
   ], { cwd: new URL("..", import.meta.url).pathname, env });
 
   const updatedProfiles = JSON.parse(await readFile(profilesPath, "utf8"));
@@ -363,6 +365,7 @@ test("workbench configuration is stored separately from profiles", async () => {
   assert.equal(updatedProfiles.conversations, undefined);
   assert.deepEqual(appConfig.workbench, {
     defaultPreset: "pro-search",
+    automaticContinuationLimit: 12,
     isolation: { mode: "required", executablePath: "/opt/agent-isolator" },
   });
   assert.deepEqual(conversationConfig.conversations, profiles.conversations);
@@ -682,6 +685,8 @@ test("workbench command parser and reducer handle local workflow state", () => {
   assert.deepEqual(parseWorkbenchCommand("/config"), { kind: "config" });
   assert.deepEqual(parseWorkbenchCommand("/config preset pro-search"), { kind: "config", field: "preset", value: "pro-search" });
   assert.deepEqual(parseWorkbenchCommand("/config preset none"), { kind: "config", field: "preset", value: "none" });
+  assert.deepEqual(parseWorkbenchCommand("/config continuation-limit 12"), { kind: "config", field: "continuation-limit", value: "12" });
+  assert.deepEqual(parseWorkbenchCommand("/config automatic-continuation-limit unlimited"), { kind: "config", field: "continuation-limit", value: "unlimited" });
   assert.deepEqual(parseWorkbenchCommand("/config isolation required"), { kind: "config", field: "isolation", value: "required" });
   assert.deepEqual(parseWorkbenchCommand("/config isolator /opt/agent-isolator"), { kind: "config", field: "isolator", value: "/opt/agent-isolator" });
   assert.deepEqual(parseWorkbenchCommand("/config nope"), { kind: "invalid", command: "config nope" });
@@ -736,12 +741,14 @@ test("workbench command parser and reducer handle local workflow state", () => {
     type: "settings.set",
     settings: {
       defaultPreset: "pro-search",
+      automaticContinuationLimit: 12,
       renderMode: "raw",
       runModel: "provider/model",
       runPreset: "code-agent",
     },
   });
   assert.equal(withSettings.defaultPreset, "pro-search");
+  assert.equal(withSettings.automaticContinuationLimit, 12);
   assert.equal(withSettings.renderMode, "raw");
   assert.equal(withSettings.runModel, "provider/model");
   assert.equal(withSettings.runPreset, "code-agent");
@@ -761,8 +768,27 @@ test("workbench command parser and reducer handle local workflow state", () => {
   assert.equal(pendingLocalTool.pendingLocalTool?.action, "write");
   const clearedLocalTool = workbenchReducer(pendingLocalTool, { type: "local_tool.pending.clear" });
   assert.equal(clearedLocalTool.pendingLocalTool, null);
+  const pendingContinuation = workbenchReducer(clearedLocalTool, {
+    type: "automatic_continuation.pending.set",
+    pause: {
+      reason: "automatic_continuation_limit",
+      message: "Automatic workflow paused.",
+      continuation: {
+        input: [{ type: "function_call_output", call_id: "call_local", output: "ok" }],
+        previousResponseID: "resp_local",
+        automaticContinuationCount: 8,
+      },
+      count: 8,
+      limit: 8,
+      responseID: "resp_local",
+    },
+  });
+  assert.equal(pendingContinuation.pendingAutomaticContinuation?.reason, "automatic_continuation_limit");
+  assert.equal(pendingContinuation.pendingAutomaticContinuation?.count, 8);
+  const clearedContinuation = workbenchReducer(pendingContinuation, { type: "automatic_continuation.pending.clear" });
+  assert.equal(clearedContinuation.pendingAutomaticContinuation, null);
 
-  const withWorkdir = workbenchReducer(clearedLocalTool, {
+  const withWorkdir = workbenchReducer(clearedContinuation, {
     type: "workdir.set",
     workdir: {
       root: "/tmp/example",
@@ -781,6 +807,12 @@ test("chat options default to pro-search unless model or preset is explicit", ()
   assert.equal(defaultOptions.preset, "pro-search");
   assert.equal(defaultOptions.presetExplicit, false);
   assert.equal(defaultOptions.modelExplicit, false);
+  assert.equal(defaultOptions.automaticContinuationLimit, undefined);
+  assert.equal(normalizeChatOptions(["hi"], { automaticContinuationLimit: "12" }).automaticContinuationLimit, 12);
+  assert.equal(
+    normalizeChatOptions(["hi"], { automaticContinuationLimit: "unlimited" }).automaticContinuationLimit,
+    Number.MAX_SAFE_INTEGER,
+  );
 
   const presetOptions = normalizeChatOptions(["hi"], { preset: "code-agent" });
   assert.equal(presetOptions.preset, "code-agent");
@@ -1236,6 +1268,7 @@ test("workbench command controller applies renderer-neutral preset commands", as
     settingsController: {
       async loadInitial() { return {}; },
       async saveDefaultPreset() { throw new Error("not used"); },
+      async saveAutomaticContinuationLimit() { throw new Error("not used"); },
       async saveShellIsolationMode() { throw new Error("not used"); },
       async saveIsolatorPath() { throw new Error("not used"); },
       async saveIsolatorSource() { throw new Error("not used"); },
@@ -1243,6 +1276,7 @@ test("workbench command controller applies renderer-neutral preset commands", as
       async presetListText(input) { return `${input.prefix}\n- analysis`; },
       configText() { return "config"; },
       defaultPresetHelp() { return "default preset help"; },
+      automaticContinuationLimitHelp() { return "automatic continuation limit help"; },
       shellIsolationHelp() { return "shell isolation help"; },
       isolatorPathHelp() { return "isolator path help"; },
       clearPresetToolCatalogCache() {},
@@ -1262,6 +1296,62 @@ test("workbench command controller applies renderer-neutral preset commands", as
   await controller.run({ kind: "preset", value: "missing" });
   assert.equal(engine.snapshot().runPreset, "analysis");
   assert.match(engine.snapshot().messages.at(-1).text, /Unknown preset: missing/);
+});
+
+test("workbench command controller saves automatic continuation limit", async () => {
+  const engine = createWorkbenchEngine({ contextEnabled: false });
+  const controller = createWorkbenchCommandController({
+    authController: stubAuthController(),
+    conversationController: stubConversationController(),
+    engine,
+    localController: stubLocalController(),
+    options: { promptParts: [], profile: "default" },
+    profileName: "default",
+    settingsController: {
+      ...stubSettingsController(),
+      async saveAutomaticContinuationLimit(value) {
+        assert.equal(value, "14");
+        return {
+          automaticContinuationLimit: 14,
+          message: "Saved automatic continuation limit: 14.",
+          activity: "Automatic continuation limit saved: 14",
+        };
+      },
+    },
+    turnController: stubTurnController(),
+    async onDeleteProfile() {},
+    onExit() {},
+    onLogin() {},
+    onLogout() {},
+    onSwitchProfile() {},
+  });
+
+  await controller.run({ kind: "config", field: "continuation-limit", value: "14" });
+
+  assert.equal(engine.snapshot().automaticContinuationLimit, 14);
+  assert.match(engine.snapshot().messages.at(-1).text, /Saved automatic continuation limit: 14/);
+});
+
+test("workbench turn controller applies sticky automatic continuation limit", async () => {
+  const engine = createWorkbenchEngine({ accessMode: "full", contextEnabled: true });
+  engine.dispatch({ type: "settings.set", settings: { automaticContinuationLimit: 13 } });
+  const seenOptions = [];
+  const controller = createWorkbenchTurnController({
+    baseOptions: { promptParts: [], profile: "default" },
+    dispatch: engine.dispatch,
+    engine,
+    flushTextDeltaBuffer() {},
+    getState: engine.snapshot,
+    runRuntimeEffects() {},
+    async runAgentTurnImpl(options) {
+      seenOptions.push(options);
+      return { text: "done", responseID: "resp_done" };
+    },
+  });
+
+  await controller.startPrompt("hello");
+
+  assert.equal(seenOptions[0].automaticContinuationLimit, 13);
 });
 
 test("workbench command controller applies pending local approvals", async () => {
@@ -1473,6 +1563,44 @@ test("workbench settings controller loads and saves default preset settings", as
     ["validate", "dev", "pro-search"],
     ["update", "pro-search"],
   ]);
+});
+
+test("workbench settings controller persists automatic continuation limit", async () => {
+  const patches = [];
+  const controller = createWorkbenchSettingsController({
+    async loadWorkbenchPreferencesImpl() {
+      return { automaticContinuationLimit: 12, isolation: { installSkipped: true } };
+    },
+    async updateWorkbenchPreferencesImpl(patch) {
+      patches.push(patch.automaticContinuationLimit);
+      return "automaticContinuationLimit" in patch && patch.automaticContinuationLimit !== undefined
+        ? { automaticContinuationLimit: patch.automaticContinuationLimit }
+        : {};
+    },
+  });
+
+  assert.deepEqual(await controller.loadInitial({ modelExplicit: false, preset: "pro-search", presetExplicit: false }), {
+    automaticContinuationLimit: 12,
+    defaultPreset: undefined,
+    runPreset: "pro-search",
+    shellIsolation: { installSkipped: true },
+  });
+
+  assert.deepEqual(await controller.saveAutomaticContinuationLimit("16"), {
+    automaticContinuationLimit: 16,
+    message: "Saved automatic continuation limit: 16.",
+    activity: "Automatic continuation limit saved: 16",
+  });
+  assert.deepEqual(await controller.saveAutomaticContinuationLimit("unlimited"), {
+    automaticContinuationLimit: null,
+    message: "Saved automatic continuation limit: unlimited.",
+    activity: "Automatic continuation limit saved: unlimited",
+  });
+  assert.deepEqual(await controller.saveAutomaticContinuationLimit("reset"), {
+    message: "Saved automatic continuation limit: built-in (8).",
+    activity: "Automatic continuation limit saved: built-in (8)",
+  });
+  assert.deepEqual(patches, [16, null, undefined]);
 });
 
 test("workbench settings controller persists shell isolation settings", async () => {
@@ -2300,6 +2428,79 @@ test("workbench turn controller aborts active remote responses", async () => {
   assert.equal(engine.snapshot().messages.some((message) => /Abort requested for response resp_abort/.test(message.text)), true);
 });
 
+test("workbench command controller resumes automatic continuation checkpoints", async () => {
+  const engine = createWorkbenchEngine({ accessMode: "full", contextEnabled: true });
+  let resumedInput;
+  const commandController = createWorkbenchCommandController({
+    authController: stubAuthController(),
+    conversationController: {
+      async startNewConversation() {},
+      async switchConversation() {},
+      async listConversations() { return ""; },
+      async exportTranscript() { return ""; },
+    },
+    engine,
+    localController: {
+      isLoaded() { return true; },
+      async summaryText() { return ""; },
+      async searchText() { return { text: "", count: 0 }; },
+      approvalPreview() { return ""; },
+      async applyApproval() { return {}; },
+    },
+    options: { promptParts: [], profile: "default" },
+    profileName: "default",
+    settingsController: {
+      clearPresetToolCatalogCache() {},
+      configText() { return ""; },
+      defaultPresetHelp() { return ""; },
+      automaticContinuationLimitHelp() { return ""; },
+      async saveDefaultPreset() { return {}; },
+      async saveAutomaticContinuationLimit() { return {}; },
+      shellIsolationHelp() { return ""; },
+      async saveShellIsolationMode() { return {}; },
+      isolatorPathHelp() { return ""; },
+      async saveIsolatorPath() { return {}; },
+      async saveIsolatorSource() { return {}; },
+      async validatePreset() { return true; },
+      async presetListText() { return ""; },
+    },
+    turnController: {
+      async startPrompt() {},
+      async continueAfterLocalApproval() {},
+      async continueAfterAutomaticContinuation(input) {
+        resumedInput = input;
+      },
+      async abort() {},
+    },
+    async onDeleteProfile() {},
+    onExit() {},
+    onLogin() {},
+    onLogout() {},
+    onSwitchProfile() {},
+  });
+  engine.dispatch({
+    type: "automatic_continuation.pending.set",
+    pause: {
+      reason: "automatic_continuation_limit",
+      message: "Automatic workflow paused.",
+      continuation: {
+        input: [{ type: "function_call_output", call_id: "call_local", output: "ok" }],
+        previousResponseID: "resp_local",
+        automaticContinuationCount: 8,
+      },
+      count: 8,
+      limit: 8,
+      responseID: "resp_local",
+    },
+  });
+
+  await commandController.run({ kind: "apply_all" });
+
+  assert.equal(engine.snapshot().pendingAutomaticContinuation, null);
+  assert.equal(resumedInput.bypassAutomaticContinuationLimit, true);
+  assert.equal(resumedInput.continuation.previousResponseID, "resp_local");
+});
+
 test("workbench engine owns pending local approval input policy", () => {
   const engine = createWorkbenchEngine({ contextEnabled: true, accessMode: "approval" });
   engine.dispatch({
@@ -2335,6 +2536,53 @@ test("workbench engine owns pending local approval input policy", () => {
 
   assert.equal(engine.snapshot().pendingLocalTool, null);
   assert.match(engine.snapshot().messages.at(-1).text, /aborted after too many invalid inputs/);
+});
+
+test("workbench engine owns pending automatic continuation input policy", () => {
+  const engine = createWorkbenchEngine({ contextEnabled: true, accessMode: "full" });
+  engine.dispatch({
+    type: "automatic_continuation.pending.set",
+    pause: {
+      reason: "automatic_continuation_limit",
+      message: "Automatic workflow paused.",
+      continuation: {
+        input: [{ type: "function_call_output", call_id: "call_local", output: "ok" }],
+        previousResponseID: "resp_local",
+        automaticContinuationCount: 8,
+      },
+      count: 8,
+      limit: 8,
+      responseID: "resp_local",
+    },
+  });
+
+  assert.deepEqual(engine.submit("continue"), { kind: "handled" });
+  assert.match(engine.snapshot().messages.at(-1).text, /Automatic continuation is paused/);
+  assert.equal(engine.snapshot().pendingAutomaticContinuation?.responseID, "resp_local");
+
+  assert.deepEqual(engine.submit("/apply"), { kind: "command", command: { kind: "apply" } });
+
+  engine.dispatch({
+    type: "automatic_continuation.pending.set",
+    pause: {
+      reason: "automatic_continuation_limit",
+      message: "Automatic workflow paused.",
+      continuation: {
+        input: [{ type: "function_call_output", call_id: "call_local", output: "ok" }],
+        previousResponseID: "resp_local",
+        automaticContinuationCount: 8,
+      },
+      count: 8,
+      limit: 8,
+      responseID: "resp_local",
+    },
+  });
+  engine.submit("bad one");
+  engine.submit("bad two");
+  engine.submit("bad three");
+
+  assert.equal(engine.snapshot().pendingAutomaticContinuation, null);
+  assert.match(engine.snapshot().messages.at(-1).text, /Automatic continuation stopped/);
 });
 
 test("app engine runtime accepts injected storage", async () => {
