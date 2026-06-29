@@ -252,7 +252,7 @@ function agentChatCommand() {
     .option("--local-skill <path...>", "load one or more local skill directories")
     .option("--no-local-skills", "disable automatic local SKILL.md discovery for workdir runs")
     .option("--workspace-skills", "allow model-facing skill discovery to search workspace skills")
-    .option("--memory", "enable memory using API defaults")
+    .option("--memory", "enable memory read/prefetch")
     .option("--memory-read", "enable memory read/prefetch")
     .option("--memory-write", "enable memory writes")
     .option("--memory-tenant-search", "allow memory search across the workspace/user scope")

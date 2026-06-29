@@ -276,12 +276,12 @@ export function createWorkbenchTurnController(options: WorkbenchTurnControllerOp
   }
 
   function memoryOptions(state: WorkbenchState): AgentRunOptions["memory"] {
-    if (!state.memoryEnabled && !state.memoryRead && !state.memoryWrite && !state.memoryTenantSearch) {
+    if (!state.memoryRead && !state.memoryWrite && !state.memoryTenantSearch) {
       return undefined;
     }
+    const read = state.memoryRead || state.memoryTenantSearch;
     return {
-      enabled: true,
-      ...(state.memoryRead ? { read: true } : {}),
+      ...(read ? { read: true } : {}),
       ...(state.memoryWrite ? { write: true } : {}),
       ...(state.memoryTenantSearch ? { tenant_search: true } : {}),
     };

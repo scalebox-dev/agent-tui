@@ -20,7 +20,6 @@ export interface WorkbenchEngineOptions {
   conversation?: string;
   preset?: string;
   model?: string;
-  memoryEnabled?: boolean;
   memoryRead?: boolean;
   memoryWrite?: boolean;
   memoryTenantSearch?: boolean;
@@ -376,51 +375,48 @@ export function createWorkbenchEngine(options: WorkbenchEngineOptions): Workbenc
   }
 
   function handleMemoryCommand(command: Extract<WorkbenchCommand, { kind: "memory" }>) {
-    if (!command.field && command.enabled === undefined) {
+    if (!command.field && command.enabled !== false) {
       dispatch({
         type: "message.add",
         role: "system",
         text: [
-          `Memory: ${state.memoryEnabled ? "on" : "api default"}`,
           `Memory read: ${state.memoryRead ? "on" : "api default"}`,
           `Memory write: ${state.memoryWrite ? "on" : "api default"}`,
           `Memory workspace search: ${state.memoryTenantSearch ? "on" : "api default"}`,
-          "Use /memory on, /memory off, /memory read on, /memory write on, or /memory workspace on.",
+          "Use /memory read on, /memory write on, /memory read workspace on, or /memory off.",
         ].join("\n"),
       });
       return;
     }
     if (!command.field) {
-      const enabled = command.enabled ?? !state.memoryEnabled;
       dispatch({
         type: "settings.set",
-        settings: enabled
-          ? { memoryEnabled: true }
-          : { memoryEnabled: false, memoryRead: false, memoryWrite: false, memoryTenantSearch: false },
+        settings: { memoryRead: false, memoryWrite: false, memoryTenantSearch: false },
       });
-      dispatch({ type: "message.add", role: "system", text: enabled ? "Memory enabled for agent turns." : "Memory options cleared; API defaults apply." });
-      dispatch({ type: "activity.add", level: enabled ? "success" : "warning", text: `Memory: ${enabled ? "on" : "api default"}` });
+      dispatch({ type: "message.add", role: "system", text: "Memory options cleared; API defaults apply." });
+      dispatch({ type: "activity.add", level: "warning", text: "Memory: api default" });
       return;
     }
     const enabled = command.enabled ?? !memoryFieldEnabled(command.field);
     dispatch({
       type: "settings.set",
       settings: {
-        memoryEnabled: true,
-        ...(command.field === "read" ? { memoryRead: enabled } : {}),
+        ...(command.field === "workspace" && enabled ? { memoryRead: true } : {}),
+        ...(command.field === "read" ? { memoryRead: enabled, ...(enabled ? {} : { memoryTenantSearch: false }) } : {}),
         ...(command.field === "write" ? { memoryWrite: enabled } : {}),
         ...(command.field === "workspace" ? { memoryTenantSearch: enabled } : {}),
       },
     });
-    dispatch({ type: "message.add", role: "system", text: `Memory ${command.field} set to ${enabled ? "on" : "api default"}.` });
-    dispatch({ type: "activity.add", level: enabled ? "success" : "warning", text: `Memory ${command.field}: ${enabled ? "on" : "api default"}` });
+    const label = command.field === "workspace" ? "read workspace search" : command.field;
+    dispatch({ type: "message.add", role: "system", text: `Memory ${label} set to ${enabled ? "on" : "api default"}.` });
+    dispatch({ type: "activity.add", level: enabled ? "success" : "warning", text: `Memory ${label}: ${enabled ? "on" : "api default"}` });
   }
 
   function memoryFieldEnabled(field: Extract<WorkbenchCommand, { kind: "memory" }>["field"]) {
     if (field === "read") return state.memoryRead;
     if (field === "write") return state.memoryWrite;
     if (field === "workspace") return state.memoryTenantSearch;
-    return state.memoryEnabled;
+    return state.memoryRead;
   }
 
   function handleSkillsCommand(command: Extract<WorkbenchCommand, { kind: "skills" }>) {

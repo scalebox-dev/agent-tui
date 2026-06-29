@@ -703,10 +703,13 @@ test("workbench command parser and reducer handle local workflow state", () => {
   assert.deepEqual(parseWorkbenchCommand("/preset pro-search"), { kind: "preset", value: "pro-search" });
   assert.deepEqual(parseWorkbenchCommand("/model auto"), { kind: "model", value: "auto" });
   assert.deepEqual(parseWorkbenchCommand("/memory"), { kind: "memory", enabled: undefined });
-  assert.deepEqual(parseWorkbenchCommand("/memory on"), { kind: "memory", enabled: true });
+  assert.deepEqual(parseWorkbenchCommand("/memory on"), { kind: "invalid", command: "memory on" });
+  assert.deepEqual(parseWorkbenchCommand("/memory off"), { kind: "memory", enabled: false });
   assert.deepEqual(parseWorkbenchCommand("/memory read off"), { kind: "memory", field: "read", enabled: false });
+  assert.deepEqual(parseWorkbenchCommand("/memory read workspace"), { kind: "memory", field: "workspace", enabled: true });
+  assert.deepEqual(parseWorkbenchCommand("/memory read workspace off"), { kind: "memory", field: "workspace", enabled: false });
   assert.deepEqual(parseWorkbenchCommand("/memory write on"), { kind: "memory", field: "write", enabled: true });
-  assert.deepEqual(parseWorkbenchCommand("/memory workspace on"), { kind: "memory", field: "workspace", enabled: true });
+  assert.deepEqual(parseWorkbenchCommand("/memory workspace on"), { kind: "invalid", command: "memory workspace" });
   assert.deepEqual(parseWorkbenchCommand("/skills"), { kind: "skills", enabled: undefined });
   assert.deepEqual(parseWorkbenchCommand("/skills local off"), { kind: "skills", field: "local", enabled: false });
   assert.deepEqual(parseWorkbenchCommand("/skills workspace on"), { kind: "skills", field: "workspace", enabled: true });
@@ -755,7 +758,6 @@ test("workbench command parser and reducer handle local workflow state", () => {
       renderMode: "raw",
       runModel: "provider/model",
       runPreset: "code-agent",
-      memoryEnabled: true,
       memoryRead: true,
       localSkillsEnabled: false,
       workspaceSkillsEnabled: true,
@@ -766,7 +768,6 @@ test("workbench command parser and reducer handle local workflow state", () => {
   assert.equal(withSettings.renderMode, "raw");
   assert.equal(withSettings.runModel, "provider/model");
   assert.equal(withSettings.runPreset, "code-agent");
-  assert.equal(withSettings.memoryEnabled, true);
   assert.equal(withSettings.memoryRead, true);
   assert.equal(withSettings.localSkillsEnabled, false);
   assert.equal(withSettings.workspaceSkillsEnabled, true);
@@ -855,17 +856,19 @@ test("chat options expose local skills, memory, and workspace skill scopes", () 
   assert.deepEqual(options.localSkillPaths, ["./skills/release", "./skills/review"]);
   assert.equal(options.discoverLocalSkills, false);
   assert.deepEqual(options.memory, {
-    enabled: true,
     read: true,
     tenant_search: true,
   });
   assert.deepEqual(options.skillTool, { tenant_search: true });
 
   assert.equal(normalizeChatOptions(["hi"], {}).memory, undefined);
-  assert.deepEqual(normalizeChatOptions(["hi"], { memory: true }).memory, { enabled: true });
+  assert.deepEqual(normalizeChatOptions(["hi"], { memory: true }).memory, { read: true });
   assert.deepEqual(normalizeChatOptions(["hi"], { memoryWrite: true }).memory, {
-    enabled: true,
     write: true,
+  });
+  assert.deepEqual(normalizeChatOptions(["hi"], { memoryTenantSearch: true }).memory, {
+    read: true,
+    tenant_search: true,
   });
 });
 
@@ -2275,13 +2278,22 @@ test("workbench engine handles renderer-neutral commands", () => {
   assert.equal(engine.handleCommand({ kind: "model", value: "auto" }).handled, true);
   assert.equal(engine.snapshot().runModel, undefined);
 
-  assert.equal(engine.handleCommand({ kind: "memory", enabled: true }).handled, true);
-  assert.equal(engine.snapshot().memoryEnabled, true);
   assert.equal(engine.handleCommand({ kind: "memory", field: "read", enabled: true }).handled, true);
   assert.equal(engine.snapshot().memoryRead, true);
-  assert.equal(engine.handleCommand({ kind: "memory", enabled: false }).handled, true);
-  assert.equal(engine.snapshot().memoryEnabled, false);
+  assert.equal(engine.handleCommand({ kind: "memory", field: "workspace", enabled: true }).handled, true);
+  assert.equal(engine.snapshot().memoryRead, true);
+  assert.equal(engine.snapshot().memoryTenantSearch, true);
+  assert.equal(engine.handleCommand({ kind: "memory", field: "workspace", enabled: false }).handled, true);
+  assert.equal(engine.snapshot().memoryRead, true);
+  assert.equal(engine.snapshot().memoryTenantSearch, false);
+  assert.equal(engine.handleCommand({ kind: "memory", field: "workspace", enabled: true }).handled, true);
+  assert.equal(engine.handleCommand({ kind: "memory", field: "read", enabled: false }).handled, true);
   assert.equal(engine.snapshot().memoryRead, false);
+  assert.equal(engine.snapshot().memoryTenantSearch, false);
+  assert.equal(engine.handleCommand({ kind: "memory", field: "read", enabled: true }).handled, true);
+  assert.equal(engine.handleCommand({ kind: "memory", enabled: false }).handled, true);
+  assert.equal(engine.snapshot().memoryRead, false);
+  assert.equal(engine.snapshot().memoryTenantSearch, false);
 
   assert.equal(engine.handleCommand({ kind: "skills", field: "local", enabled: false }).handled, true);
   assert.equal(engine.snapshot().localSkillsEnabled, false);
@@ -2441,7 +2453,7 @@ test("workbench turn controller runs prompt turns through engine state", async (
   assert.equal(seenOptions[0].includeLocalContext, true);
   assert.equal(seenOptions[0].accessMode, "approval");
   assert.equal(seenOptions[0].discoverLocalSkills, false);
-  assert.deepEqual(seenOptions[0].memory, { enabled: true, read: true, tenant_search: true });
+  assert.deepEqual(seenOptions[0].memory, { read: true, tenant_search: true });
   assert.deepEqual(seenOptions[0].skillTool, { tenant_search: true });
   assert.equal(engine.snapshot().busy, false);
   assert.equal(engine.snapshot().activeAssistantMessageId, null);

@@ -59,15 +59,15 @@ export function normalizeChatOptions(promptParts: string[], options: ChatOptions
 }
 
 function memoryOptions(options: ChatOptions) {
-	if (!options.memory && !options.memoryRead && !options.memoryWrite && !options.memoryTenantSearch) {
-		return undefined;
-	}
-	return {
-		enabled: true,
-		...(options.memoryRead ? { read: true } : {}),
-		...(options.memoryWrite ? { write: true } : {}),
-		...(options.memoryTenantSearch ? { tenant_search: true } : {}),
-	};
+  const read = Boolean(options.memory || options.memoryRead || options.memoryTenantSearch);
+  if (!read && !options.memoryWrite) {
+    return undefined;
+  }
+  return {
+    ...(read ? { read: true } : {}),
+    ...(options.memoryWrite ? { write: true } : {}),
+    ...(options.memoryTenantSearch ? { tenant_search: true } : {}),
+  };
 }
 
 function optionalNumber(value: string | undefined, label: string) {

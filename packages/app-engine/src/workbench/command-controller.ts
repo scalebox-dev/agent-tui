@@ -134,7 +134,6 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
           defaultPreset: state.defaultPreset,
           automaticContinuationLimit: state.automaticContinuationLimit,
           localSkillsEnabled: state.localSkillsEnabled,
-          memoryEnabled: state.memoryEnabled,
           memoryRead: state.memoryRead,
           memoryTenantSearch: state.memoryTenantSearch,
           memoryWrite: state.memoryWrite,

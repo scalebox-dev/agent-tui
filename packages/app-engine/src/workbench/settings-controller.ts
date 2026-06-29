@@ -49,7 +49,6 @@ export interface WorkbenchSettingsController {
     defaultPreset?: string | null;
     automaticContinuationLimit?: number | null;
     localSkillsEnabled: boolean;
-    memoryEnabled: boolean;
     memoryRead: boolean;
     memoryTenantSearch: boolean;
     memoryWrite: boolean;
@@ -375,7 +374,6 @@ function runConfigText({
   contextEnabled,
   defaultPreset,
   localSkillsEnabled,
-  memoryEnabled,
   memoryRead,
   memoryTenantSearch,
   memoryWrite,
@@ -391,7 +389,6 @@ function runConfigText({
   contextEnabled: boolean;
   defaultPreset?: string | null;
   localSkillsEnabled: boolean;
-  memoryEnabled: boolean;
   memoryRead: boolean;
   memoryTenantSearch: boolean;
   memoryWrite: boolean;
@@ -417,7 +414,6 @@ function runConfigText({
     `Local access: ${accessMode}`,
     `Local skill discovery: ${localSkillsEnabled ? "on" : "off"}`,
     `Workspace skill discovery: ${workspaceSkillsEnabled ? "on" : "off"}`,
-    `Memory: ${memoryEnabled ? "on" : "api default"}`,
     `Memory read: ${memoryRead ? "on" : "api default"}`,
     `Memory write: ${memoryWrite ? "on" : "api default"}`,
     `Memory workspace search: ${memoryTenantSearch ? "on" : "api default"}`,

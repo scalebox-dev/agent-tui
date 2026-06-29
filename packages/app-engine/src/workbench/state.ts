@@ -54,7 +54,6 @@ export interface WorkbenchState {
   currentConversation: string;
   runPreset?: string;
   runModel?: string;
-  memoryEnabled: boolean;
   memoryRead: boolean;
   memoryWrite: boolean;
   memoryTenantSearch: boolean;
@@ -90,7 +89,7 @@ export type WorkbenchAction =
   | { type: "automatic_continuation.pending.clear" }
   | { type: "access.set"; mode: WorkdirAccessMode }
   | { type: "conversation.set"; id?: string; name: string; previousResponseId?: string; status?: "fresh" | "continued" | "unknown" }
-  | { type: "settings.set"; settings: Partial<Pick<WorkbenchState, "runPreset" | "runModel" | "memoryEnabled" | "memoryRead" | "memoryWrite" | "memoryTenantSearch" | "localSkillsEnabled" | "workspaceSkillsEnabled" | "renderMode" | "defaultPreset" | "automaticContinuationLimit" | "shellIsolation">> };
+  | { type: "settings.set"; settings: Partial<Pick<WorkbenchState, "runPreset" | "runModel" | "memoryRead" | "memoryWrite" | "memoryTenantSearch" | "localSkillsEnabled" | "workspaceSkillsEnabled" | "renderMode" | "defaultPreset" | "automaticContinuationLimit" | "shellIsolation">> };
 
 export type WorkbenchCommand =
   | { kind: "invalid"; command: string }
@@ -131,7 +130,6 @@ export function createInitialWorkbenchState(options: {
   conversation?: string;
   preset?: string;
   model?: string;
-  memoryEnabled?: boolean;
   memoryRead?: boolean;
   memoryWrite?: boolean;
   memoryTenantSearch?: boolean;
@@ -163,7 +161,6 @@ export function createInitialWorkbenchState(options: {
     currentConversation: options.conversation || "default",
     runPreset: options.preset,
     runModel: options.model,
-    memoryEnabled: Boolean(options.memoryEnabled),
     memoryRead: Boolean(options.memoryRead),
     memoryWrite: Boolean(options.memoryWrite),
     memoryTenantSearch: Boolean(options.memoryTenantSearch),
@@ -411,14 +408,23 @@ export function parseWorkbenchCommand(input: string): WorkbenchCommand | null {
       return { kind: "model", value: value || undefined };
     }
     case "memory": {
-      const [fieldOrValue, maybeValue] = rest;
+      const [fieldOrValue, maybeValue, maybeToggle] = rest;
+      if (fieldOrValue === "on") {
+        return { kind: "invalid", command: "memory on" };
+      }
+      if (fieldOrValue === "off") {
+        return { kind: "memory", enabled: false };
+      }
+      if (fieldOrValue === "read" && (maybeValue === "workspace" || maybeValue === "tenant" || maybeValue === "tenant-search")) {
+        return { kind: "memory", field: "workspace", enabled: parseOnOff(maybeToggle) ?? true };
+      }
       if (fieldOrValue === "read" || fieldOrValue === "write") {
         return { kind: "memory", field: fieldOrValue, enabled: parseOnOff(maybeValue) };
       }
       if (fieldOrValue === "workspace" || fieldOrValue === "tenant" || fieldOrValue === "tenant-search") {
-        return { kind: "memory", field: "workspace", enabled: parseOnOff(maybeValue) };
+        return { kind: "invalid", command: `memory ${fieldOrValue}` };
       }
-      return { kind: "memory", enabled: parseOnOff(fieldOrValue) };
+      return { kind: "memory", enabled: undefined };
     }
     case "skills": {
       const [fieldOrValue, maybeValue] = rest;
@@ -507,8 +513,9 @@ export function helpText() {
     "/config isolator save agent-isolator path; use none/off to clear",
     "/preset [name]   show or set preset; use none/off to clear",
     "/model [name]    show or set explicit model; use auto/none/off to clear",
-    "/memory [on|off] enable or clear memory options for agent turns",
-    "/memory read|write|workspace [on|off] toggle memory read, write, or workspace search",
+    "/memory          show memory options; /memory off clears memory options",
+    "/memory read|write [on|off] toggle memory read or write",
+    "/memory read workspace [on|off] toggle read-scoped workspace memory search",
     "/skills          show or toggle local/workspace skill discovery",
     "/skills local|workspace [on|off] toggle skill discovery scopes",
     "/access [mode]   show or set local tool access: off, approval, or full",
