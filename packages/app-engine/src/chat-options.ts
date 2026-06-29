@@ -12,6 +12,13 @@ export type ChatOptions = {
   contextQuery?: string;
   maxContextFiles?: string;
   maxContextBytes?: string;
+  localSkill?: string[];
+  localSkills?: boolean;
+  memory?: boolean;
+  memoryRead?: boolean;
+  memoryWrite?: boolean;
+  memoryTenantSearch?: boolean;
+  workspaceSkills?: boolean;
   automaticContinuationLimit?: string;
   access?: string;
   restart?: boolean;
@@ -42,9 +49,25 @@ export function normalizeChatOptions(promptParts: string[], options: ChatOptions
     contextQuery: options.contextQuery,
     maxContextFiles: optionalNumber(options.maxContextFiles, "--max-context-files"),
     maxContextBytes: optionalNumber(options.maxContextBytes, "--max-context-bytes"),
+    localSkillPaths: options.localSkill,
+    discoverLocalSkills: options.localSkills !== false,
+    memory: memoryOptions(options),
+    skillTool: options.workspaceSkills ? { tenant_search: true } : undefined,
     automaticContinuationLimit: optionalLimit(options.automaticContinuationLimit ?? process.env.AGENT_AUTOMATIC_CONTINUATION_LIMIT, "--automatic-continuation-limit"),
     accessMode,
   };
+}
+
+function memoryOptions(options: ChatOptions) {
+	if (!options.memory && !options.memoryRead && !options.memoryWrite && !options.memoryTenantSearch) {
+		return undefined;
+	}
+	return {
+		enabled: true,
+		...(options.memoryRead ? { read: true } : {}),
+		...(options.memoryWrite ? { write: true } : {}),
+		...(options.memoryTenantSearch ? { tenant_search: true } : {}),
+	};
 }
 
 function optionalNumber(value: string | undefined, label: string) {

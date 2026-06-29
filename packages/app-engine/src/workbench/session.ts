@@ -33,8 +33,14 @@ export function createWorkbenchSession(options: WorkbenchSessionOptions): Workbe
     accessMode: options.baseOptions.accessMode,
     conversation: options.baseOptions.conversation,
     contextEnabled: Boolean(options.baseOptions.includeLocalContext || options.baseOptions.workdir),
+    localSkillsEnabled: options.baseOptions.discoverLocalSkills,
+    memoryEnabled: Boolean(options.baseOptions.memory?.enabled),
+    memoryRead: Boolean(options.baseOptions.memory?.read),
+    memoryTenantSearch: Boolean(options.baseOptions.memory?.tenant_search),
+    memoryWrite: Boolean(options.baseOptions.memory?.write),
     model: options.baseOptions.model,
     preset: options.baseOptions.preset,
+    workspaceSkillsEnabled: Boolean(options.baseOptions.skillTool?.tenant_search),
   });
   const local = options.services?.local ?? createWorkbenchLocalController({
     getShellIsolation: () => engine.snapshot().shellIsolation,

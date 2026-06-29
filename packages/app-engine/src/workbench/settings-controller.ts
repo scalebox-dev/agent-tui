@@ -48,11 +48,17 @@ export interface WorkbenchSettingsController {
     contextEnabled: boolean;
     defaultPreset?: string | null;
     automaticContinuationLimit?: number | null;
+    localSkillsEnabled: boolean;
+    memoryEnabled: boolean;
+    memoryRead: boolean;
+    memoryTenantSearch: boolean;
+    memoryWrite: boolean;
     profileName: string;
     runModel?: string;
     runPreset?: string;
     renderMode: RenderMode;
     shellIsolation?: ShellIsolationPreferences;
+    workspaceSkillsEnabled: boolean;
   }): string;
   defaultPresetHelp(defaultPreset?: string | null): string;
   automaticContinuationLimitHelp(automaticContinuationLimit?: number | null): string;
@@ -368,21 +374,33 @@ function runConfigText({
   automaticContinuationLimit,
   contextEnabled,
   defaultPreset,
+  localSkillsEnabled,
+  memoryEnabled,
+  memoryRead,
+  memoryTenantSearch,
+  memoryWrite,
   profileName,
   runModel,
   runPreset,
   renderMode,
   shellIsolation,
+  workspaceSkillsEnabled,
 }: {
   accessMode: string;
   automaticContinuationLimit?: number | null;
   contextEnabled: boolean;
   defaultPreset?: string | null;
+  localSkillsEnabled: boolean;
+  memoryEnabled: boolean;
+  memoryRead: boolean;
+  memoryTenantSearch: boolean;
+  memoryWrite: boolean;
   profileName: string;
   runModel?: string;
   runPreset?: string;
   renderMode: RenderMode;
   shellIsolation?: ShellIsolationPreferences;
+  workspaceSkillsEnabled: boolean;
 }) {
   return [
     `Profile: ${profileName}`,
@@ -397,6 +415,12 @@ function runConfigText({
     `local_workdir tool: ${contextEnabled ? "on" : "off"}`,
     `local_shell tool: ${contextEnabled ? "on" : "off"}`,
     `Local access: ${accessMode}`,
+    `Local skill discovery: ${localSkillsEnabled ? "on" : "off"}`,
+    `Workspace skill discovery: ${workspaceSkillsEnabled ? "on" : "off"}`,
+    `Memory: ${memoryEnabled ? "on" : "api default"}`,
+    `Memory read: ${memoryRead ? "on" : "api default"}`,
+    `Memory write: ${memoryWrite ? "on" : "api default"}`,
+    `Memory workspace search: ${memoryTenantSearch ? "on" : "api default"}`,
   ].join("\n");
 }
 

@@ -20,6 +20,12 @@ export interface WorkbenchEngineOptions {
   conversation?: string;
   preset?: string;
   model?: string;
+  memoryEnabled?: boolean;
+  memoryRead?: boolean;
+  memoryWrite?: boolean;
+  memoryTenantSearch?: boolean;
+  localSkillsEnabled?: boolean;
+  workspaceSkillsEnabled?: boolean;
   renderMode?: RenderMode;
   defaultPreset?: string | null;
 }
@@ -164,6 +170,12 @@ export function createWorkbenchEngine(options: WorkbenchEngineOptions): Workbenc
           }
           dispatch({ type: "settings.set", settings: { runModel: normalizeOptionalSetting(command.value, ["auto", "none", "off", "clear"]) } });
           dispatch({ type: "activity.add", text: `Model: ${normalizeOptionalSetting(command.value, ["auto", "none", "off", "clear"]) || "auto"}` });
+          return handled();
+        case "memory":
+          handleMemoryCommand(command);
+          return handled();
+        case "skills":
+          handleSkillsCommand(command);
           return handled();
         case "workdir":
           if (command.enabled === undefined) {
@@ -361,6 +373,78 @@ export function createWorkbenchEngine(options: WorkbenchEngineOptions): Workbenc
       text: `Automatic continuation is paused. Enter /apply or /yes to continue, /apply-all or /yes-all to continue without more automatic continuation checkpoints for this turn, or /reject or /no to stop. Invalid input ${attempts}/${maxAttempts}.`,
     });
     dispatch({ type: "activity.add", level: "warning", text: "Waiting for continuation command" });
+  }
+
+  function handleMemoryCommand(command: Extract<WorkbenchCommand, { kind: "memory" }>) {
+    if (!command.field && command.enabled === undefined) {
+      dispatch({
+        type: "message.add",
+        role: "system",
+        text: [
+          `Memory: ${state.memoryEnabled ? "on" : "api default"}`,
+          `Memory read: ${state.memoryRead ? "on" : "api default"}`,
+          `Memory write: ${state.memoryWrite ? "on" : "api default"}`,
+          `Memory workspace search: ${state.memoryTenantSearch ? "on" : "api default"}`,
+          "Use /memory on, /memory off, /memory read on, /memory write on, or /memory workspace on.",
+        ].join("\n"),
+      });
+      return;
+    }
+    if (!command.field) {
+      const enabled = command.enabled ?? !state.memoryEnabled;
+      dispatch({
+        type: "settings.set",
+        settings: enabled
+          ? { memoryEnabled: true }
+          : { memoryEnabled: false, memoryRead: false, memoryWrite: false, memoryTenantSearch: false },
+      });
+      dispatch({ type: "message.add", role: "system", text: enabled ? "Memory enabled for agent turns." : "Memory options cleared; API defaults apply." });
+      dispatch({ type: "activity.add", level: enabled ? "success" : "warning", text: `Memory: ${enabled ? "on" : "api default"}` });
+      return;
+    }
+    const enabled = command.enabled ?? !memoryFieldEnabled(command.field);
+    dispatch({
+      type: "settings.set",
+      settings: {
+        memoryEnabled: true,
+        ...(command.field === "read" ? { memoryRead: enabled } : {}),
+        ...(command.field === "write" ? { memoryWrite: enabled } : {}),
+        ...(command.field === "workspace" ? { memoryTenantSearch: enabled } : {}),
+      },
+    });
+    dispatch({ type: "message.add", role: "system", text: `Memory ${command.field} set to ${enabled ? "on" : "api default"}.` });
+    dispatch({ type: "activity.add", level: enabled ? "success" : "warning", text: `Memory ${command.field}: ${enabled ? "on" : "api default"}` });
+  }
+
+  function memoryFieldEnabled(field: Extract<WorkbenchCommand, { kind: "memory" }>["field"]) {
+    if (field === "read") return state.memoryRead;
+    if (field === "write") return state.memoryWrite;
+    if (field === "workspace") return state.memoryTenantSearch;
+    return state.memoryEnabled;
+  }
+
+  function handleSkillsCommand(command: Extract<WorkbenchCommand, { kind: "skills" }>) {
+    if (!command.field && command.enabled === undefined) {
+      dispatch({
+        type: "message.add",
+        role: "system",
+        text: [
+          `Local skill discovery: ${state.localSkillsEnabled ? "on" : "off"}`,
+          `Workspace skill discovery: ${state.workspaceSkillsEnabled ? "on" : "off"}`,
+          "Use /skills local on|off or /skills workspace on|off.",
+        ].join("\n"),
+      });
+      return;
+    }
+    const field = command.field ?? "local";
+    const current = field === "local" ? state.localSkillsEnabled : state.workspaceSkillsEnabled;
+    const enabled = command.enabled ?? !current;
+    dispatch({
+      type: "settings.set",
+      settings: field === "local" ? { localSkillsEnabled: enabled } : { workspaceSkillsEnabled: enabled },
+    });
+    dispatch({ type: "message.add", role: "system", text: `${field === "local" ? "Local" : "Workspace"} skill discovery set to ${enabled ? "on" : "off"}.` });
+    dispatch({ type: "activity.add", level: enabled ? "success" : "warning", text: `${field === "local" ? "Local" : "Workspace"} skills: ${enabled ? "on" : "off"}` });
   }
 }
 

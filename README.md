@@ -1,6 +1,6 @@
 # Agent API CLI
 
-First-class command line interface for Agent API. The CLI shell is built on `@agent-api/app-engine`, which wraps `@agent-api/sdk@^1.3.0` behind a renderer-neutral application core. Commander handles command routing, and Ink renders the current terminal UI.
+First-class command line interface for Agent API. The CLI shell is built on `@agent-api/app-engine`, which wraps `@agent-api/sdk@^1.4.0` behind a renderer-neutral application core. Commander handles command routing, and Ink renders the current terminal UI.
 
 This repository publishes two packages:
 
@@ -89,6 +89,17 @@ agent-tui /absolute/path/to/my-workdir
 
 The workdir argument must point to an existing directory. When provided, the
 workbench automatically turns on local workdir and shell tools in approval mode.
+CLI chat runs can also expose local `SKILL.md` directories and opt into memory:
+
+```bash
+agent-api agent chat "Review this workspace" --workdir . --local-skill ./skills/review
+agent-api agent chat "What did we decide last time?" --memory --memory-read
+```
+
+Local skills are discovered automatically from the workdir when local tools are
+enabled. Use `--no-local-skills` to disable discovery, `--workspace-skills` to
+let model-facing skill discovery search workspace skills, and
+`--memory-tenant-search` to allow workspace-scoped memory search.
 
 The workbench opens with auth as the first gate. If the active profile is valid,
 it enters the conversation UI automatically. If not, it shows an in-terminal
@@ -103,6 +114,8 @@ Inside the workbench, configure the agent run dynamically:
 /switch-profile  switch/sign in with a different profile
 /delete-profile  delete current saved profile and return to auth
 /config          show current run configuration
+/memory          toggle memory options for agent turns
+/skills          toggle local or workspace skill discovery
 /preset <name>   set preset; /preset none clears it
 /model <name>    set explicit model; /model auto clears it
 /access full     allow local workdir actions without approval

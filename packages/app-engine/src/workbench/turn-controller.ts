@@ -75,6 +75,9 @@ export function createWorkbenchTurnController(options: WorkbenchTurnControllerOp
             conversation: state.currentConversation,
             includeLocalContext: state.contextEnabled,
             accessMode: state.accessMode,
+            discoverLocalSkills: state.localSkillsEnabled,
+            memory: memoryOptions(state),
+            skillTool: state.workspaceSkillsEnabled ? { tenant_search: true } : undefined,
             shellIsolation: state.shellIsolation,
             automaticContinuationLimit: effectiveAutomaticContinuationLimit(state),
             restartConversation: false,
@@ -118,6 +121,9 @@ export function createWorkbenchTurnController(options: WorkbenchTurnControllerOp
             conversation: state.currentConversation,
             includeLocalContext: state.contextEnabled,
             accessMode: input.accessMode,
+            discoverLocalSkills: state.localSkillsEnabled,
+            memory: memoryOptions(state),
+            skillTool: state.workspaceSkillsEnabled ? { tenant_search: true } : undefined,
             shellIsolation: state.shellIsolation,
             automaticContinuationLimit: effectiveAutomaticContinuationLimit(state),
             restartConversation: false,
@@ -163,6 +169,9 @@ export function createWorkbenchTurnController(options: WorkbenchTurnControllerOp
             conversation: state.currentConversation,
             includeLocalContext: state.contextEnabled,
             accessMode: state.accessMode,
+            discoverLocalSkills: state.localSkillsEnabled,
+            memory: memoryOptions(state),
+            skillTool: state.workspaceSkillsEnabled ? { tenant_search: true } : undefined,
             shellIsolation: state.shellIsolation,
             automaticContinuationLimit: effectiveAutomaticContinuationLimit(state),
             restartConversation: false,
@@ -264,6 +273,18 @@ export function createWorkbenchTurnController(options: WorkbenchTurnControllerOp
     }
     if (state.automaticContinuationLimit === null) return Number.MAX_SAFE_INTEGER;
     return state.automaticContinuationLimit;
+  }
+
+  function memoryOptions(state: WorkbenchState): AgentRunOptions["memory"] {
+    if (!state.memoryEnabled && !state.memoryRead && !state.memoryWrite && !state.memoryTenantSearch) {
+      return undefined;
+    }
+    return {
+      enabled: true,
+      ...(state.memoryRead ? { read: true } : {}),
+      ...(state.memoryWrite ? { write: true } : {}),
+      ...(state.memoryTenantSearch ? { tenant_search: true } : {}),
+    };
   }
 }
 

@@ -54,6 +54,12 @@ export interface WorkbenchState {
   currentConversation: string;
   runPreset?: string;
   runModel?: string;
+  memoryEnabled: boolean;
+  memoryRead: boolean;
+  memoryWrite: boolean;
+  memoryTenantSearch: boolean;
+  localSkillsEnabled: boolean;
+  workspaceSkillsEnabled: boolean;
   renderMode: RenderMode;
   defaultPreset?: string | null;
   automaticContinuationLimit?: number | null;
@@ -84,7 +90,7 @@ export type WorkbenchAction =
   | { type: "automatic_continuation.pending.clear" }
   | { type: "access.set"; mode: WorkdirAccessMode }
   | { type: "conversation.set"; id?: string; name: string; previousResponseId?: string; status?: "fresh" | "continued" | "unknown" }
-  | { type: "settings.set"; settings: Partial<Pick<WorkbenchState, "runPreset" | "runModel" | "renderMode" | "defaultPreset" | "automaticContinuationLimit" | "shellIsolation">> };
+  | { type: "settings.set"; settings: Partial<Pick<WorkbenchState, "runPreset" | "runModel" | "memoryEnabled" | "memoryRead" | "memoryWrite" | "memoryTenantSearch" | "localSkillsEnabled" | "workspaceSkillsEnabled" | "renderMode" | "defaultPreset" | "automaticContinuationLimit" | "shellIsolation">> };
 
 export type WorkbenchCommand =
   | { kind: "invalid"; command: string }
@@ -98,6 +104,8 @@ export type WorkbenchCommand =
   | { kind: "switch_profile"; name?: string }
   | { kind: "auth_status" }
   | { kind: "config"; field?: "preset" | "continuation-limit" | "isolation" | "isolator"; value?: string }
+  | { kind: "memory"; field?: "read" | "write" | "workspace"; enabled?: boolean }
+  | { kind: "skills"; field?: "local" | "workspace"; enabled?: boolean }
   | { kind: "render"; mode?: RenderMode }
   | { kind: "transcript" }
   | { kind: "export"; path?: string }
@@ -123,6 +131,12 @@ export function createInitialWorkbenchState(options: {
   conversation?: string;
   preset?: string;
   model?: string;
+  memoryEnabled?: boolean;
+  memoryRead?: boolean;
+  memoryWrite?: boolean;
+  memoryTenantSearch?: boolean;
+  localSkillsEnabled?: boolean;
+  workspaceSkillsEnabled?: boolean;
   renderMode?: RenderMode;
   defaultPreset?: string | null;
   automaticContinuationLimit?: number | null;
@@ -149,6 +163,12 @@ export function createInitialWorkbenchState(options: {
     currentConversation: options.conversation || "default",
     runPreset: options.preset,
     runModel: options.model,
+    memoryEnabled: Boolean(options.memoryEnabled),
+    memoryRead: Boolean(options.memoryRead),
+    memoryWrite: Boolean(options.memoryWrite),
+    memoryTenantSearch: Boolean(options.memoryTenantSearch),
+    localSkillsEnabled: options.localSkillsEnabled !== false,
+    workspaceSkillsEnabled: Boolean(options.workspaceSkillsEnabled),
     renderMode: options.renderMode ?? "markdown",
     defaultPreset: options.defaultPreset,
     automaticContinuationLimit: options.automaticContinuationLimit,
@@ -390,6 +410,29 @@ export function parseWorkbenchCommand(input: string): WorkbenchCommand | null {
       const value = rest.join(" ").trim();
       return { kind: "model", value: value || undefined };
     }
+    case "memory": {
+      const [fieldOrValue, maybeValue] = rest;
+      if (fieldOrValue === "read" || fieldOrValue === "write") {
+        return { kind: "memory", field: fieldOrValue, enabled: parseOnOff(maybeValue) };
+      }
+      if (fieldOrValue === "workspace" || fieldOrValue === "tenant" || fieldOrValue === "tenant-search") {
+        return { kind: "memory", field: "workspace", enabled: parseOnOff(maybeValue) };
+      }
+      return { kind: "memory", enabled: parseOnOff(fieldOrValue) };
+    }
+    case "skills": {
+      const [fieldOrValue, maybeValue] = rest;
+      if (fieldOrValue === "local" || fieldOrValue === "workspace") {
+        return { kind: "skills", field: fieldOrValue, enabled: parseOnOff(maybeValue) };
+      }
+      return { kind: "skills", enabled: parseOnOff(fieldOrValue) };
+    }
+    case "local-skills":
+    case "local_skills":
+      return { kind: "skills", field: "local", enabled: parseOnOff(rest[0]) };
+    case "workspace-skills":
+    case "workspace_skills":
+      return { kind: "skills", field: "workspace", enabled: parseOnOff(rest[0]) };
     case "workdir":
     case "local":
       return { kind: "workdir", enabled: parseOnOff(rest[0]) };
@@ -464,6 +507,10 @@ export function helpText() {
     "/config isolator save agent-isolator path; use none/off to clear",
     "/preset [name]   show or set preset; use none/off to clear",
     "/model [name]    show or set explicit model; use auto/none/off to clear",
+    "/memory [on|off] enable or clear memory options for agent turns",
+    "/memory read|write|workspace [on|off] toggle memory read, write, or workspace search",
+    "/skills          show or toggle local/workspace skill discovery",
+    "/skills local|workspace [on|off] toggle skill discovery scopes",
     "/access [mode]   show or set local tool access: off, approval, or full",
     "/workdir       show local workdir status",
     "/workdir on    shortcut for /access approval; /workdir off hides local tools",

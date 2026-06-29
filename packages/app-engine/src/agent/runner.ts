@@ -7,11 +7,15 @@ import {
   type AgentResponse,
   type FunctionCallOutputInput,
   type Input,
+  type LocalSkillDescriptor,
+  type MemoryOptions,
   type PresetToolCatalogClient,
   type RequestOptions,
   type ResponseStreamEvent,
+  type SkillToolOptions,
   type Tool,
 } from "@agent-api/sdk";
+import { localSkillFromDirectory, pendingLocalSkillCalls, runLocalSkillHandlers } from "@agent-api/sdk/node";
 import {
   createLocalShellToolRegistry,
   createLocalWorkdirToolRegistry,
@@ -22,6 +26,7 @@ import {
 } from "@agent-api/sdk/local";
 import { resolvePreviousResponseID, updateConversation } from "../conversation/index.js";
 import { resolveRuntimeProfile } from "../profile.js";
+import { runtime } from "../runtime/index.js";
 import { buildWorkdirContextBlock, openWorkdir } from "../workdir/index.js";
 import { localShellIsolationOptions } from "../workbench/shell-isolation.js";
 import type { ShellIsolationPreferences } from "../workbench/shell-isolation.js";
@@ -45,6 +50,10 @@ export interface AgentRunOptions {
   contextQuery?: string;
   maxContextFiles?: number;
   maxContextBytes?: number;
+  localSkillPaths?: string[];
+  discoverLocalSkills?: boolean;
+  memory?: MemoryOptions;
+  skillTool?: SkillToolOptions;
   accessMode?: WorkdirAccessMode;
   shellIsolation?: ShellIsolationPreferences;
   automaticContinuationLimit?: number;
@@ -145,32 +154,35 @@ export async function runAgent(options: AgentRunOptions) {
 
 export async function runAgentTurn(options: AgentRunOptions, onEvent?: (event: AgentTurnEvent) => void): Promise<AgentTurnResult> {
   const runtimeProfile = await resolveRuntimeProfile(options.profile);
-  const localWorkdir = await prepareLocalWorkdirTools(options);
+  const localContext = await prepareLocalContext(options);
   const input = await buildInput(options);
   const previousResponseId = await resolvePreviousResponseID(options);
   const tools = await resolveAgentRequestTools(
     runtimeProfile.client,
     options.preset,
-    localWorkdir?.registry.definitions(),
+    localContext?.registry.definitions(),
     { baseURL: runtimeProfile.profile.baseURL },
   );
   const params = {
     input,
-    instructions: localWorkdir?.instructions,
+    instructions: localContext?.instructions,
     tools,
     preset: options.preset,
     model: options.model,
     previous_response_id: previousResponseId,
+    local_skills: localContext?.localSkills.length ? localContext.localSkills : undefined,
+    memory: options.memory,
+    skill_tool: options.skillTool,
     stream: options.stream ?? true,
   };
 
-  if (localWorkdir) {
+  if (localContext) {
     return await runAgentTurnWithLocalTools(
       runtimeProfile.client.agent,
       runtimeProfile.client.responses,
       params,
       options,
-      localWorkdir.registry,
+      localContext,
       onEvent,
     );
   }
@@ -211,14 +223,14 @@ export async function resumeAgentAfterLocalApproval(
   onEvent?: (event: AgentTurnEvent) => void,
 ): Promise<AgentTurnResult> {
   const runtimeProfile = await resolveRuntimeProfile(options.profile);
-  const localWorkdir = await prepareLocalWorkdirTools(options);
-  if (!localWorkdir) {
+  const localContext = await prepareLocalContext(options);
+  if (!localContext) {
     throw new Error("local tools are not available for approval continuation");
   }
   const tools = await resolveAgentRequestTools(
     runtimeProfile.client,
     options.preset,
-    localWorkdir.registry.definitions(),
+    localContext.registry.definitions(),
     { baseURL: runtimeProfile.profile.baseURL },
   );
   return await runAgentTurnWithLocalTools(
@@ -226,15 +238,18 @@ export async function resumeAgentAfterLocalApproval(
     runtimeProfile.client.responses,
     {
       input: [functionCallOutputInput(approval.callID, output)],
-      instructions: localWorkdir.instructions,
+      instructions: localContext.instructions,
       tools,
       preset: options.preset,
       model: options.model,
       previous_response_id: approval.responseID,
+      local_skills: localContext.localSkills.length ? localContext.localSkills : undefined,
+      memory: options.memory,
+      skill_tool: options.skillTool,
       stream: options.stream ?? true,
     },
     options,
-    localWorkdir.registry,
+    localContext,
     onEvent,
   );
 }
@@ -245,14 +260,14 @@ export async function resumeAgentAfterAutomaticContinuation(
   onEvent?: (event: AgentTurnEvent) => void,
 ): Promise<AgentTurnResult> {
   const runtimeProfile = await resolveRuntimeProfile(options.profile);
-  const localWorkdir = await prepareLocalWorkdirTools(options);
-  if (!localWorkdir) {
+  const localContext = await prepareLocalContext(options);
+  if (!localContext) {
     throw new Error("local tools are not available for automatic continuation");
   }
   const tools = await resolveAgentRequestTools(
     runtimeProfile.client,
     options.preset,
-    localWorkdir.registry.definitions(),
+    localContext.registry.definitions(),
     { baseURL: runtimeProfile.profile.baseURL },
   );
   return await runAgentTurnWithLocalTools(
@@ -260,18 +275,21 @@ export async function resumeAgentAfterAutomaticContinuation(
     runtimeProfile.client.responses,
     {
       input: continuation.input,
-      instructions: localWorkdir.instructions,
+      instructions: localContext.instructions,
       tools,
       preset: options.preset,
       model: options.model,
       previous_response_id: continuation.previousResponseID,
+      local_skills: localContext.localSkills.length ? localContext.localSkills : undefined,
+      memory: options.memory,
+      skill_tool: options.skillTool,
       stream: options.stream ?? true,
     },
     {
       ...options,
       automaticContinuationCount: continuation.automaticContinuationCount,
     },
-    localWorkdir.registry,
+    localContext,
     onEvent,
   );
 }
@@ -315,10 +333,13 @@ async function runAgentTurnWithLocalTools(
     preset?: string;
     model?: string;
     previous_response_id?: string;
+    local_skills?: LocalSkillDescriptor[];
+    memory?: MemoryOptions;
+    skill_tool?: SkillToolOptions;
     stream: boolean;
   },
   options: AgentRunOptions,
-  registry: LocalToolRegistryBundle,
+  localContext: LocalExecutionContext,
   onEvent?: (event: AgentTurnEvent) => void,
 ): Promise<AgentTurnResult> {
   let input = initialParams.input;
@@ -365,6 +386,9 @@ async function runAgentTurnWithLocalTools(
       preset: initialParams.preset,
       model: initialParams.model,
       previous_response_id: previousResponseID,
+      local_skills: initialParams.local_skills,
+      memory: initialParams.memory,
+      skill_tool: initialParams.skill_tool,
       stream: initialParams.stream,
     }, responses, options.abortSignal, onEvent);
     throwIfAborted(options.abortSignal);
@@ -390,7 +414,9 @@ async function runAgentTurnWithLocalTools(
       return { text: response.output_text || "", responseID: response.id };
     }
 
-    const localResult = await executeLocalFunctionCalls(response, registry, options.abortSignal, onEvent);
+    const localSkillOutputs = await executeLocalSkillCalls(response, localContext.localSkills, options.abortSignal, onEvent);
+    const localSkillCallIDs = new Set(localSkillOutputs.map((output) => output.call_id));
+    const localResult = await executeLocalFunctionCalls(response, localContext.registry, localSkillCallIDs, options.abortSignal, onEvent);
     if (localResult.approvalRequested) {
       const message = localApprovalMessage(localResult.approvalRequested);
       if (initialParams.stream !== false) {
@@ -405,7 +431,7 @@ async function runAgentTurnWithLocalTools(
         responseID: response.id,
       };
     }
-    const outputs = localResult.outputs;
+    const outputs = [...localSkillOutputs, ...localResult.outputs];
     input = outputs;
     previousResponseID = response.id;
   }
@@ -439,6 +465,9 @@ async function createAgentResponseWithOptionalStream(
     preset?: string;
     model?: string;
     previous_response_id?: string;
+    local_skills?: LocalSkillDescriptor[];
+    memory?: MemoryOptions;
+    skill_tool?: SkillToolOptions;
     stream: boolean;
   },
   responses: Awaited<ReturnType<typeof resolveRuntimeProfile>>["client"]["responses"],
@@ -475,7 +504,7 @@ async function createAgentResponseWithOptionalStream(
 
   throwIfAborted(abortSignal);
   if (!finalResponse && responseID) {
-    finalResponse = await responses.retrieve(responseID, requestAbortOptions(abortSignal));
+    finalResponse = await responses.retrieve(responseID, {}, requestAbortOptions(abortSignal));
   }
   if (!finalResponse) {
     throw new Error("agent stream completed without a final response");
@@ -712,6 +741,51 @@ async function prepareLocalWorkdirTools(options: AgentRunOptions): Promise<{
   };
 }
 
+async function prepareLocalContext(options: AgentRunOptions): Promise<LocalExecutionContext | null> {
+  const localWorkdir = await prepareLocalWorkdirTools(options);
+  const localSkills = await prepareLocalSkills(options);
+  if (!localWorkdir && localSkills.length === 0) {
+    return null;
+  }
+  return {
+    registry: localWorkdir?.registry ?? emptyLocalToolRegistry(),
+    instructions: localWorkdir?.instructions,
+    localSkills,
+  };
+}
+
+async function prepareLocalSkills(options: AgentRunOptions): Promise<LocalSkillDescriptor[]> {
+  const explicitPaths = (options.localSkillPaths ?? []).map((item) => item.trim()).filter(Boolean);
+  const shouldDiscover = options.discoverLocalSkills !== false && shouldUseLocalTools(options);
+  if (explicitPaths.length === 0 && !shouldDiscover) {
+    return [];
+  }
+  await runtime.ensure();
+  const skills: LocalSkillDescriptor[] = [];
+  for (const skillPath of explicitPaths) {
+    skills.push(await localSkillFromDirectory(skillPath));
+  }
+  if (shouldDiscover) {
+    skills.push(...await runtime.skills.discover({
+      roots: [options.workdir || process.cwd()],
+      recursive: true,
+      maxDepth: 3,
+    }));
+  }
+  return dedupeLocalSkills(skills);
+}
+
+function dedupeLocalSkills(skills: LocalSkillDescriptor[]): LocalSkillDescriptor[] {
+  const out = new Map<string, LocalSkillDescriptor>();
+  for (const skill of skills) {
+    const key = skill.skill_ref || `${skill.local_skill_id}:${skill.digest || skill.root_hint || ""}`;
+    if (!out.has(key)) {
+      out.set(key, skill);
+    }
+  }
+  return [...out.values()];
+}
+
 function shouldUseLocalTools(options: AgentRunOptions) {
   if (options.accessMode === "off") return false;
   return Boolean(options.includeLocalContext || options.workdir || options.accessMode === "approval" || options.accessMode === "full");
@@ -725,6 +799,22 @@ interface LocalToolRegistryBundle {
   definitions(): Tool[];
   execute(name: string, args: Record<string, unknown>, abortSignal?: AbortSignal): Promise<Record<string, unknown>>;
   has(name: string): boolean;
+}
+
+interface LocalExecutionContext {
+  registry: LocalToolRegistryBundle;
+  instructions?: string;
+  localSkills: LocalSkillDescriptor[];
+}
+
+function emptyLocalToolRegistry(): LocalToolRegistryBundle {
+  return {
+    definitions: () => [],
+    execute: async (name) => {
+      throw new Error(`no local handler registered for function ${name}`);
+    },
+    has: () => false,
+  };
 }
 
 function combineLocalToolRegistries(
@@ -748,6 +838,7 @@ function combineLocalToolRegistries(
 async function executeLocalFunctionCalls(
   response: AgentResponse,
   registry: LocalToolRegistryBundle,
+  skipCallIDs: Set<string>,
   abortSignal?: AbortSignal,
   onEvent?: (event: AgentTurnEvent) => void,
 ): Promise<{
@@ -757,6 +848,9 @@ async function executeLocalFunctionCalls(
   const outputs: FunctionCallOutputInput[] = [];
   for (const call of pendingFunctionCalls(response)) {
     throwIfAborted(abortSignal);
+    if (skipCallIDs.has(call.call_id)) {
+      continue;
+    }
     let args: Record<string, unknown> = {};
     let result: Record<string, unknown>;
     try {
@@ -799,6 +893,28 @@ async function executeLocalFunctionCalls(
     });
   }
   return { outputs };
+}
+
+async function executeLocalSkillCalls(
+  response: AgentResponse,
+  localSkills: LocalSkillDescriptor[],
+  abortSignal?: AbortSignal,
+  onEvent?: (event: AgentTurnEvent) => void,
+): Promise<FunctionCallOutputInput[]> {
+  if (localSkills.length === 0 || pendingLocalSkillCalls(response).length === 0) {
+    return [];
+  }
+  throwIfAborted(abortSignal);
+  const outputs = await runLocalSkillHandlers(response, localSkills);
+  for (const call of pendingLocalSkillCalls(response)) {
+    onEvent?.({
+      type: "local_tool.completed",
+      name: call.name,
+      action: "focus",
+      requiresApproval: false,
+    });
+  }
+  return outputs;
 }
 
 export function localToolExecutionErrorResult(

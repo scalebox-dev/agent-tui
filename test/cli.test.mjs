@@ -702,6 +702,16 @@ test("workbench command parser and reducer handle local workflow state", () => {
   assert.deepEqual(parseWorkbenchCommand("/access approval"), { kind: "access", mode: "approval" });
   assert.deepEqual(parseWorkbenchCommand("/preset pro-search"), { kind: "preset", value: "pro-search" });
   assert.deepEqual(parseWorkbenchCommand("/model auto"), { kind: "model", value: "auto" });
+  assert.deepEqual(parseWorkbenchCommand("/memory"), { kind: "memory", enabled: undefined });
+  assert.deepEqual(parseWorkbenchCommand("/memory on"), { kind: "memory", enabled: true });
+  assert.deepEqual(parseWorkbenchCommand("/memory read off"), { kind: "memory", field: "read", enabled: false });
+  assert.deepEqual(parseWorkbenchCommand("/memory write on"), { kind: "memory", field: "write", enabled: true });
+  assert.deepEqual(parseWorkbenchCommand("/memory workspace on"), { kind: "memory", field: "workspace", enabled: true });
+  assert.deepEqual(parseWorkbenchCommand("/skills"), { kind: "skills", enabled: undefined });
+  assert.deepEqual(parseWorkbenchCommand("/skills local off"), { kind: "skills", field: "local", enabled: false });
+  assert.deepEqual(parseWorkbenchCommand("/skills workspace on"), { kind: "skills", field: "workspace", enabled: true });
+  assert.deepEqual(parseWorkbenchCommand("/local-skills off"), { kind: "skills", field: "local", enabled: false });
+  assert.deepEqual(parseWorkbenchCommand("/workspace-skills on"), { kind: "skills", field: "workspace", enabled: true });
   assert.deepEqual(parseWorkbenchCommand("/workdir"), { kind: "workdir", enabled: undefined });
   assert.deepEqual(parseWorkbenchCommand("/workdir on"), { kind: "workdir", enabled: true });
   assert.deepEqual(parseWorkbenchCommand("/workdir off"), { kind: "workdir", enabled: false });
@@ -745,6 +755,10 @@ test("workbench command parser and reducer handle local workflow state", () => {
       renderMode: "raw",
       runModel: "provider/model",
       runPreset: "code-agent",
+      memoryEnabled: true,
+      memoryRead: true,
+      localSkillsEnabled: false,
+      workspaceSkillsEnabled: true,
     },
   });
   assert.equal(withSettings.defaultPreset, "pro-search");
@@ -752,6 +766,10 @@ test("workbench command parser and reducer handle local workflow state", () => {
   assert.equal(withSettings.renderMode, "raw");
   assert.equal(withSettings.runModel, "provider/model");
   assert.equal(withSettings.runPreset, "code-agent");
+  assert.equal(withSettings.memoryEnabled, true);
+  assert.equal(withSettings.memoryRead, true);
+  assert.equal(withSettings.localSkillsEnabled, false);
+  assert.equal(withSettings.workspaceSkillsEnabled, true);
 
   const pendingLocalTool = workbenchReducer(switchedConversation, {
     type: "local_tool.pending.set",
@@ -822,6 +840,33 @@ test("chat options default to pro-search unless model or preset is explicit", ()
   assert.equal(modelOptions.preset, undefined);
   assert.equal(modelOptions.model, "provider/model");
   assert.equal(modelOptions.modelExplicit, true);
+});
+
+test("chat options expose local skills, memory, and workspace skill scopes", () => {
+  const options = normalizeChatOptions(["hi"], {
+    workdir: ".",
+    localSkill: ["./skills/release", "./skills/review"],
+    localSkills: false,
+    memoryRead: true,
+    memoryTenantSearch: true,
+    workspaceSkills: true,
+  });
+
+  assert.deepEqual(options.localSkillPaths, ["./skills/release", "./skills/review"]);
+  assert.equal(options.discoverLocalSkills, false);
+  assert.deepEqual(options.memory, {
+    enabled: true,
+    read: true,
+    tenant_search: true,
+  });
+  assert.deepEqual(options.skillTool, { tenant_search: true });
+
+  assert.equal(normalizeChatOptions(["hi"], {}).memory, undefined);
+  assert.deepEqual(normalizeChatOptions(["hi"], { memory: true }).memory, { enabled: true });
+  assert.deepEqual(normalizeChatOptions(["hi"], { memoryWrite: true }).memory, {
+    enabled: true,
+    write: true,
+  });
 });
 
 test("agent stream events map into workbench turn events", () => {
@@ -2230,6 +2275,19 @@ test("workbench engine handles renderer-neutral commands", () => {
   assert.equal(engine.handleCommand({ kind: "model", value: "auto" }).handled, true);
   assert.equal(engine.snapshot().runModel, undefined);
 
+  assert.equal(engine.handleCommand({ kind: "memory", enabled: true }).handled, true);
+  assert.equal(engine.snapshot().memoryEnabled, true);
+  assert.equal(engine.handleCommand({ kind: "memory", field: "read", enabled: true }).handled, true);
+  assert.equal(engine.snapshot().memoryRead, true);
+  assert.equal(engine.handleCommand({ kind: "memory", enabled: false }).handled, true);
+  assert.equal(engine.snapshot().memoryEnabled, false);
+  assert.equal(engine.snapshot().memoryRead, false);
+
+  assert.equal(engine.handleCommand({ kind: "skills", field: "local", enabled: false }).handled, true);
+  assert.equal(engine.snapshot().localSkillsEnabled, false);
+  assert.equal(engine.handleCommand({ kind: "skills", field: "workspace", enabled: true }).handled, true);
+  assert.equal(engine.snapshot().workspaceSkillsEnabled, true);
+
   assert.equal(engine.handleCommand({ kind: "access", mode: "full" }).handled, true);
   assert.equal(engine.snapshot().accessMode, "full");
   assert.equal(engine.snapshot().contextEnabled, true);
@@ -2346,8 +2404,12 @@ test("workbench turn controller runs prompt turns through engine state", async (
     accessMode: "approval",
     contextEnabled: true,
     conversation: "demo",
+    localSkillsEnabled: false,
+    memoryRead: true,
+    memoryTenantSearch: true,
     model: "provider/model",
     preset: "pro-search",
+    workspaceSkillsEnabled: true,
   });
   const runtimeEffects = [];
   const seenOptions = [];
@@ -2378,6 +2440,9 @@ test("workbench turn controller runs prompt turns through engine state", async (
   assert.equal(seenOptions[0].conversation, "demo");
   assert.equal(seenOptions[0].includeLocalContext, true);
   assert.equal(seenOptions[0].accessMode, "approval");
+  assert.equal(seenOptions[0].discoverLocalSkills, false);
+  assert.deepEqual(seenOptions[0].memory, { enabled: true, read: true, tenant_search: true });
+  assert.deepEqual(seenOptions[0].skillTool, { tenant_search: true });
   assert.equal(engine.snapshot().busy, false);
   assert.equal(engine.snapshot().activeAssistantMessageId, null);
   assert.match(engine.snapshot().activities.at(-1).text, /Agent turn completed: resp_turn/);

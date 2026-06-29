@@ -133,8 +133,14 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
           contextEnabled: state.contextEnabled,
           defaultPreset: state.defaultPreset,
           automaticContinuationLimit: state.automaticContinuationLimit,
+          localSkillsEnabled: state.localSkillsEnabled,
+          memoryEnabled: state.memoryEnabled,
+          memoryRead: state.memoryRead,
+          memoryTenantSearch: state.memoryTenantSearch,
+          memoryWrite: state.memoryWrite,
           renderMode: state.renderMode,
           shellIsolation: state.shellIsolation,
+          workspaceSkillsEnabled: state.workspaceSkillsEnabled,
         }),
       });
       return;
