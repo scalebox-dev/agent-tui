@@ -1,6 +1,7 @@
 import type { WorkbenchAuthController } from "./auth-controller.js";
 import type { WorkbenchAction, WorkbenchWorkdirStatus } from "./state.js";
 import { checkForUpdate, formatUpdateNotice, type UpdateCheckResult } from "../update.js";
+import { AuthSessionUnavailableError } from "../profile.js";
 
 export type WorkbenchLifecycleEffect =
   | { type: "dispatch"; action: WorkbenchAction }
@@ -59,6 +60,21 @@ export function createWorkbenchLifecycleController(
           { type: "dispatch", action: { type: "activity.add", level: "success", text: "Auth session refreshed" } },
         ];
       } catch (error) {
+        if (error instanceof AuthSessionUnavailableError) {
+          if (authRefreshWarningShown) return [];
+          authRefreshWarningShown = true;
+          return [
+            {
+              type: "dispatch",
+              action: {
+                type: "message.add",
+                role: "system",
+                text: `${formatError(error)}\n\nKeeping the workbench open and will retry session refresh later.`,
+              },
+            },
+            { type: "dispatch", action: { type: "activity.add", level: "warning", text: "Auth refresh temporarily unavailable; will retry" } },
+          ];
+        }
         if (authRefreshWarningShown) return [];
         authRefreshWarningShown = true;
         return [

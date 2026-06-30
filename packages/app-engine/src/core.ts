@@ -61,6 +61,7 @@ export type {
   RuntimeProfile,
 } from "./profile.js";
 export {
+  AuthSessionUnavailableError,
   AuthSessionExpiredError,
   browserAccessTokenExpiresWithin,
   deleteProfile,

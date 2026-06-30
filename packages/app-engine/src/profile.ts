@@ -1,4 +1,12 @@
-import { AgentAPI, browserAuthSessionExpiresWithin, type ApprovedDeviceAuth } from "@agent-api/sdk";
+import {
+  AgentAPI,
+  APIConnectionError,
+  APIError,
+  AuthenticationError,
+  browserAuthSessionExpiresWithin,
+  isRetryableStatus,
+  type ApprovedDeviceAuth,
+} from "@agent-api/sdk";
 import { execFile } from "node:child_process";
 import { platform } from "node:os";
 import { promisify } from "node:util";
@@ -38,6 +46,22 @@ export class AuthSessionExpiredError extends Error {
       `Details: ${message}`,
     ].join("\n"));
     this.name = "AuthSessionExpiredError";
+    this.profile = profile.name;
+    this.baseURL = profile.baseURL;
+  }
+}
+
+export class AuthSessionUnavailableError extends Error {
+  readonly profile: string;
+  readonly baseURL: string;
+
+  constructor(profile: Profile, message = "browser session refresh unavailable") {
+    super([
+      "Browser session could not be refreshed because the API is temporarily unavailable.",
+      "The existing local session will be kept and refresh will be retried later.",
+      `Details: ${message}`,
+    ].join("\n"));
+    this.name = "AuthSessionUnavailableError";
     this.profile = profile.name;
     this.baseURL = profile.baseURL;
   }
@@ -177,6 +201,9 @@ export async function refreshBrowserSession(profile: Profile): Promise<Profile> 
   try {
     session = await client.auth.refreshBrowserSession({ refresh_token: profile.auth.refreshToken });
   } catch (error) {
+    if (isTransientAuthRefreshError(error)) {
+      throw new AuthSessionUnavailableError(profile, error instanceof Error ? error.message : String(error));
+    }
     throw new AuthSessionExpiredError(profile, error instanceof Error ? error.message : String(error));
   }
   return {
@@ -190,6 +217,15 @@ export async function refreshBrowserSession(profile: Profile): Promise<Profile> 
     },
     updatedAt: Math.floor(Date.now() / 1000),
   };
+}
+
+function isTransientAuthRefreshError(error: unknown) {
+  if (error instanceof APIConnectionError) return true;
+  if (error instanceof AuthenticationError) return false;
+  if (error instanceof APIError && error.status !== undefined) {
+    return isRetryableStatus(error.status);
+  }
+  return false;
 }
 
 export async function listProfiles() {
