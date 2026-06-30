@@ -2574,8 +2574,32 @@ test("workbench command controller resumes automatic continuation checkpoints", 
   await commandController.run({ kind: "apply_all" });
 
   assert.equal(engine.snapshot().pendingAutomaticContinuation, null);
+  assert.equal(engine.snapshot().automaticContinuationUnlocked, true);
   assert.equal(resumedInput.bypassAutomaticContinuationLimit, true);
   assert.equal(resumedInput.continuation.previousResponseID, "resp_local");
+});
+
+test("workbench turn controller uses unlocked automatic continuation limit for later turns", async () => {
+  const engine = createWorkbenchEngine({ accessMode: "full", contextEnabled: true });
+  engine.dispatch({ type: "settings.set", settings: { automaticContinuationLimit: 8 } });
+  engine.dispatch({ type: "automatic_continuation.unlock", unlocked: true });
+  const seenOptions = [];
+  const controller = createWorkbenchTurnController({
+    baseOptions: { promptParts: [], profile: "default" },
+    dispatch: engine.dispatch,
+    engine,
+    flushTextDeltaBuffer() {},
+    getState: engine.snapshot,
+    runRuntimeEffects() {},
+    async runAgentTurnImpl(options) {
+      seenOptions.push(options);
+      return { text: "done", responseID: "resp_done" };
+    },
+  });
+
+  await controller.startPrompt("next task");
+
+  assert.equal(seenOptions[0].automaticContinuationLimit, Number.MAX_SAFE_INTEGER);
 });
 
 test("workbench engine owns pending local approval input policy", () => {

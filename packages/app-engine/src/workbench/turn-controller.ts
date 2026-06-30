@@ -268,6 +268,7 @@ export function createWorkbenchTurnController(options: WorkbenchTurnControllerOp
   }
 
   function effectiveAutomaticContinuationLimit(state: WorkbenchState) {
+    if (state.automaticContinuationUnlocked) return Number.MAX_SAFE_INTEGER;
     if (options.baseOptions.automaticContinuationLimit !== undefined) {
       return options.baseOptions.automaticContinuationLimit;
     }

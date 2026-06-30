@@ -379,7 +379,8 @@ async function runAgentTurnWithLocalTools(
         pause,
       };
     }
-    const response = await createAgentResponseWithOptionalStream(agent, {
+    const requestRuntimeProfile = isAutomaticContinuationCall ? await resolveRuntimeProfile(options.profile) : undefined;
+    const response = await createAgentResponseWithOptionalStream(requestRuntimeProfile?.client.agent ?? agent, {
       input,
       instructions: initialParams.instructions,
       tools: initialParams.tools,
@@ -390,7 +391,7 @@ async function runAgentTurnWithLocalTools(
       memory: initialParams.memory,
       skill_tool: initialParams.skill_tool,
       stream: initialParams.stream,
-    }, responses, options.abortSignal, onEvent);
+    }, requestRuntimeProfile?.client.responses ?? responses, options.abortSignal, onEvent);
     throwIfAborted(options.abortSignal);
     if (isAutomaticContinuationCall) {
       automaticContinuationCount += 1;

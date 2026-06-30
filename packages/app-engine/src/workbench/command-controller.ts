@@ -439,6 +439,9 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
       });
       const pending = state.pendingAutomaticContinuation;
       dispatch({ type: "automatic_continuation.pending.clear" });
+      if (allowFutureLocalActions) {
+        dispatch({ type: "automatic_continuation.unlock", unlocked: true });
+      }
       dispatch({
         type: "message.add",
         role: "system",

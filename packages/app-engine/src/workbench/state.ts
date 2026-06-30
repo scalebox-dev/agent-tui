@@ -62,6 +62,7 @@ export interface WorkbenchState {
   renderMode: RenderMode;
   defaultPreset?: string | null;
   automaticContinuationLimit?: number | null;
+  automaticContinuationUnlocked: boolean;
   shellIsolation?: ShellIsolationPreferences;
 }
 
@@ -87,6 +88,7 @@ export type WorkbenchAction =
   | { type: "local_tool.pending.clear" }
   | { type: "automatic_continuation.pending.set"; pause: AutomaticContinuationPause }
   | { type: "automatic_continuation.pending.clear" }
+  | { type: "automatic_continuation.unlock"; unlocked: boolean }
   | { type: "access.set"; mode: WorkdirAccessMode }
   | { type: "conversation.set"; id?: string; name: string; previousResponseId?: string; status?: "fresh" | "continued" | "unknown" }
   | { type: "settings.set"; settings: Partial<Pick<WorkbenchState, "runPreset" | "runModel" | "memoryRead" | "memoryWrite" | "memoryTenantSearch" | "localSkillsEnabled" | "workspaceSkillsEnabled" | "renderMode" | "defaultPreset" | "automaticContinuationLimit" | "shellIsolation">> };
@@ -169,6 +171,7 @@ export function createInitialWorkbenchState(options: {
     renderMode: options.renderMode ?? "markdown",
     defaultPreset: options.defaultPreset,
     automaticContinuationLimit: options.automaticContinuationLimit,
+    automaticContinuationUnlocked: false,
     shellIsolation: options.shellIsolation,
   };
 }
@@ -299,6 +302,15 @@ export function workbenchReducer(state: WorkbenchState, action: WorkbenchAction)
         ...state,
         pendingAutomaticContinuation: null,
       };
+    case "automatic_continuation.unlock":
+      return {
+        ...state,
+        automaticContinuationUnlocked: action.unlocked,
+        activities: [
+          ...state.activities,
+          newActivity(action.unlocked ? "success" : "info", action.unlocked ? "Automatic continuation unlocked" : "Automatic continuation checkpoints restored"),
+        ].slice(-20),
+      };
     case "access.set":
       return setLocalAccess(state, action.mode);
     case "conversation.set":
@@ -308,6 +320,7 @@ export function workbenchReducer(state: WorkbenchState, action: WorkbenchAction)
         currentConversation: action.name,
         conversationPreviousResponseId: action.previousResponseId,
         conversationStatus: action.status ?? (action.previousResponseId ? "continued" : "fresh"),
+        automaticContinuationUnlocked: false,
         activities: [...state.activities, newActivity("info", conversationActivityText(action))].slice(-20),
       };
     case "settings.set":

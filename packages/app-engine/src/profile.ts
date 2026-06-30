@@ -115,10 +115,14 @@ export async function saveBrowserProfile(name: string, baseURL: string, session:
 export async function resolveRuntimeProfile(profileName?: string): Promise<RuntimeProfile> {
   const { profile: fresh } = await refreshActiveProfileIfNeeded(profileName);
   const token = fresh.auth.type === "api_key" ? fresh.auth.apiKey : fresh.auth.accessToken;
+  const apiKeyProvider = async () => {
+    const { profile: latest } = await refreshActiveProfileIfNeeded(profileName);
+    return latest.auth.type === "api_key" ? latest.auth.apiKey : latest.auth.accessToken;
+  };
   return {
     profile: fresh,
     token,
-    client: new AgentAPI({ apiKey: token, baseURL: fresh.baseURL }),
+    client: new AgentAPI({ apiKey: token, apiKeyProvider, baseURL: fresh.baseURL }),
   };
 }
 
