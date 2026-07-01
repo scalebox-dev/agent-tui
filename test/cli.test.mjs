@@ -1795,6 +1795,25 @@ test("workbench render model wraps long input into editor rows", () => {
   assert.ok(model.input.lines.every((line) => line.beforeCursor.length + line.cursorText.length + line.afterCursor.length <= model.input.viewportColumns + 2));
 });
 
+test("workbench render model wraps CJK input by terminal display width", () => {
+  const draft = "这是一个用于测试终端输入换行的中文段落";
+  const model = buildWorkbenchRenderModel({
+    cursor: draft.length,
+    draft,
+    profileName: "default",
+    spinnerFrame: 0,
+    state: createInitialWorkbenchState({}),
+    transcriptOffset: 0,
+    viewport: { rows: 30, columns: 24 },
+    workdirFallback: "/fallback",
+  });
+
+  assert.equal(model.input.viewportColumns, 18);
+  assert.ok(model.input.lines.length > 1);
+  assert.ok(model.input.lines.some((line) => line.beforeCursor.length < draft.length));
+  assert.equal(model.input.lines.at(-1).hasCursor, true);
+});
+
 test("workbench render model bounds multiline editor height around the cursor", () => {
   const state = createInitialWorkbenchState({});
   const draft = Array.from({ length: 10 }, (_, index) => `line-${index}`).join("\n");
@@ -2417,6 +2436,18 @@ test("workbench input controller maps navigation and busy abort policy", () => {
     effects: [{ type: "scroll", delta: -5 }],
     selectionAnchor: null,
   });
+  assert.deepEqual(controller.handle("u", { ctrl: true }, { busy: false, draft: "abcd", viewportHeight: 11 }), {
+    cursor: 4,
+    draft: "abcd",
+    effects: [],
+    selectionAnchor: null,
+  });
+  assert.deepEqual(controller.handle("d", { ctrl: true }, { busy: false, draft: "abcd", viewportHeight: 11 }), {
+    cursor: 4,
+    draft: "abcd",
+    effects: [],
+    selectionAnchor: null,
+  });
   assert.deepEqual(controller.handle("", { home: true }, { busy: false, cursor: 2, draft: "abcd", viewportHeight: 11 }), {
     cursor: 0,
     draft: "abcd",
@@ -2486,6 +2517,15 @@ test("workbench input controller supports visual-row movement and selected delet
   });
   assert.equal(wrapped.cursor, 10);
 
+  const cjkWrapped = controller.handle("", { downArrow: true }, {
+    busy: false,
+    cursor: 2,
+    draft: "一二三四五六七八九十",
+    viewportColumns: 8,
+    viewportHeight: 10,
+  });
+  assert.equal(cjkWrapped.cursor, 6);
+
   const visualHome = controller.handle("", { home: true }, {
     busy: false,
     cursor: 10,
@@ -2522,6 +2562,36 @@ test("workbench input controller supports visual-row movement and selected delet
   });
   assert.equal(shiftedHome.cursor, 8);
   assert.equal(shiftedHome.selectionAnchor, 12);
+
+  const shiftedUp = controller.handle("", { upArrow: true, shift: true }, {
+    busy: false,
+    cursor: 12,
+    draft: "line1\nline2\nline3",
+    viewportColumns: 80,
+    viewportHeight: 10,
+  });
+  assert.equal(shiftedUp.cursor, 6);
+  assert.equal(shiftedUp.selectionAnchor, 12);
+
+  const shiftedDown = controller.handle("", { downArrow: true, shift: true }, {
+    busy: false,
+    cursor: 2,
+    draft: "line1\nline2\nline3",
+    viewportColumns: 80,
+    viewportHeight: 10,
+  });
+  assert.equal(shiftedDown.cursor, 8);
+  assert.equal(shiftedDown.selectionAnchor, 2);
+
+  const metaFallback = controller.handle("", { downArrow: true, meta: true }, {
+    busy: false,
+    cursor: 2,
+    draft: "line1\nline2\nline3",
+    viewportColumns: 80,
+    viewportHeight: 10,
+  });
+  assert.equal(metaFallback.cursor, 8);
+  assert.equal(metaFallback.selectionAnchor, 2);
 
   const selected = controller.handle("", { rightArrow: true, shift: true }, {
     busy: false,

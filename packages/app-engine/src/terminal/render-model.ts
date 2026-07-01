@@ -181,8 +181,8 @@ function buildInputView(draft: string, cursor: number, selectionAnchor: number |
     const suffix = start + height < segments.length && index === visible.length - 1 ? " ⋮" : "";
     return {
       beforeCursor: `${prefix}${hasCursor ? segment.text.slice(0, localCursor) : segment.text}`,
-      cursorText: hasCursor ? segment.text[localCursor] ?? " " : "",
-      afterCursor: `${hasCursor ? segment.text.slice(localCursor + (localCursor < segment.text.length ? 1 : 0)) : ""}${suffix}`,
+      cursorText: hasCursor ? charAt(segment.text, localCursor) || " " : "",
+      afterCursor: `${hasCursor ? segment.text.slice(localCursor + charLengthAt(segment.text, localCursor)) : ""}${suffix}`,
       hasCursor,
       spans: inputLineSpans(segment, {
         cursor: hasCursor ? cursor : null,
@@ -222,11 +222,13 @@ function inputLineSpans(segment: { end: number; start: number; text: string }, o
   if (!segment.text && options.cursor !== null) {
     spans.push({ text: " ", inverse: true });
   } else {
-    for (let index = 0; index < segment.text.length; index += 1) {
+    for (let index = 0; index < segment.text.length;) {
+      const text = charAt(segment.text, index);
       const absolute = segment.start + index;
       const selected = Boolean(options.selection && absolute >= options.selection.start && absolute < options.selection.end);
       const underCursor = options.cursor === absolute;
-      spans.push({ text: segment.text[index] ?? "", inverse: selected || underCursor });
+      spans.push({ text, inverse: selected || underCursor });
+      index += text.length || 1;
     }
     if (options.cursor === segment.end) {
       spans.push({ text: " ", inverse: true });
@@ -234,6 +236,16 @@ function inputLineSpans(segment: { end: number; start: number; text: string }, o
   }
   if (options.suffix) spans.push({ text: options.suffix });
   return coalesceSpans(spans);
+}
+
+function charAt(text: string, index: number) {
+  const codePoint = text.codePointAt(index);
+  return codePoint === undefined ? "" : String.fromCodePoint(codePoint);
+}
+
+function charLengthAt(text: string, index: number) {
+  const char = charAt(text, index);
+  return char.length;
 }
 
 function coalesceSpans(spans: WorkbenchInputSpan[]) {

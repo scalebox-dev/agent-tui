@@ -67,17 +67,17 @@ export function createWorkbenchInputController(): WorkbenchInputController {
       const editor = normalizeTextEditorState({ text: context.draft, cursor, selectionAnchor });
       const layout = { viewportColumns };
       if (key.ctrl && input === "c") return editorResult(editor, { type: "exit" });
-      if (key.pageUp || (key.ctrl && input === "u")) {
+      if (key.pageUp) {
         return editorResult(editor, { type: "scroll", delta: Math.max(1, Math.floor(context.viewportHeight / 2)) });
       }
-      if (key.pageDown || (key.ctrl && input === "d")) {
+      if (key.pageDown) {
         return editorResult(editor, { type: "scroll", delta: -Math.max(1, Math.floor(context.viewportHeight / 2)) });
       }
       if (key.ctrl && key.upArrow) return historyResult(history.previous(context.draft));
       if (key.ctrl && key.downArrow) return historyResult(history.next(context.draft));
       if (key.ctrl && input === "a") return editorResult(selectAllText(editor));
       const movement = movementFromKey(input, key);
-      if (movement) return editorResult(moveTextEditorCursor(editor, movement, layout, Boolean(key.shift)));
+      if (movement) return editorResult(moveTextEditorCursor(editor, movement, layout, isSelectionMovement(key)));
 
       if (context.busy) {
         return handleBusyInput(input, key, editor, history);
@@ -162,6 +162,10 @@ function movementFromKey(input: string, key: WorkbenchInputKey): TextEditorMovem
   if (key.upArrow) return "visualUp";
   if (key.downArrow) return "visualDown";
   return null;
+}
+
+function isSelectionMovement(key: WorkbenchInputKey) {
+  return Boolean(key.shift || key.meta);
 }
 
 function emptyEditor(): TextEditorState {
