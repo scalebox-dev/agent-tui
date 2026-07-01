@@ -479,8 +479,7 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
               ? "Applied local action. Future local actions in this workbench conversation are now allowed."
               : "Applied local action once. Future local actions still require approval.",
             "Continuing agent turn with the local result.",
-            "Result:",
-            JSON.stringify(result, null, 2),
+            formatLocalActionResultForDisplay(result),
           ].join("\n"),
         });
         dispatch({ type: "activity.add", level: "success", text: "Local action applied" });
@@ -529,6 +528,61 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
     }
     return "Workdir is still loading.";
   }
+}
+
+const maxDisplayedLocalResultChars = 2400;
+
+function formatLocalActionResultForDisplay(result: string | Record<string, unknown>) {
+  const rendered = typeof result === "string" ? result : JSON.stringify(result, null, 2);
+  if (rendered.length <= maxDisplayedLocalResultChars) {
+    return ["Result:", rendered].join("\n");
+  }
+  const summary = summarizeLocalActionResult(result);
+  const omitted = rendered.length - maxDisplayedLocalResultChars;
+  return [
+    "Result:",
+    summary ? `${summary}\n` : "",
+    rendered.slice(0, maxDisplayedLocalResultChars).trimEnd(),
+    `[display truncated: omitted ${omitted} chars]`,
+  ].filter(Boolean).join("\n");
+}
+
+function summarizeLocalActionResult(result: string | Record<string, unknown>) {
+  if (typeof result === "string") return "";
+  const lines: string[] = [];
+  const action = stringField(result, "action");
+  const object = stringField(result, "object");
+  if (action || object) lines.push(`Summary: ${[action, object].filter(Boolean).join(" ")}`);
+  const path = stringField(result, "path") || stringField(result, "file");
+  if (path) lines.push(`Path: ${path}`);
+  const files = firstListField(result, ["changed_files", "files", "paths"]);
+  if (files.length > 0) {
+    const shown = files.slice(0, 8).join(", ");
+    lines.push(`Files: ${shown}${files.length > 8 ? `, ... (${files.length} total)` : ""}`);
+  }
+  for (const key of ["applied", "edits", "changes", "matches", "results"]) {
+    const value = result[key];
+    if (Array.isArray(value)) lines.push(`${key}: ${value.length}`);
+  }
+  for (const key of ["changed", "edit_count", "ok", "scan_truncated"]) {
+    const value = result[key];
+    if (value != null && !Array.isArray(value) && typeof value !== "object") lines.push(`${key}: ${String(value)}`);
+  }
+  return lines.join("\n");
+}
+
+function stringField(value: Record<string, unknown>, key: string) {
+  const field = value[key];
+  return typeof field === "string" && field.trim() ? field.trim() : "";
+}
+
+function firstListField(value: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const field = value[key];
+    const values = Array.isArray(field) ? field.map((item) => typeof item === "string" ? item.trim() : "").filter(Boolean) : [];
+    if (values.length > 0) return values;
+  }
+  return [];
 }
 
 export function normalizeOptionalSetting(value: string, clearValues: string[]) {
