@@ -99,6 +99,11 @@ export {
   checkForUpdate,
   compareVersions,
   formatUpdateNotice,
+  installUpdate,
+} from "./update.js";
+export type {
+  UpdateCheckResult,
+  UpdateInstallResult,
 } from "./update.js";
 export type {
   WorkdirContextOptions,

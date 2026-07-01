@@ -64,6 +64,10 @@ Set `AGENT_TUI_UPDATE_CHECK=0` to disable the startup update notice.
 ```bash
 agent-tui
 agent-api
+agent-api run
+agent-api update
+agent-api version
+agent-api help
 agent-api auth login
 agent-api profiles list
 agent-api agent chat
@@ -71,9 +75,13 @@ agent-api workdir status
 agent-api doctor
 ```
 
+No command defaults to the interactive `run` command. If you provide a bare
+first argument, it must be a command name. Local workdirs are explicit: use
+`agent-tui -w <path>`, `agent-tui run <path>`, or `agent-tui run --workdir <path>`.
+
 ## Interactive Workbench
 
-Launch the first-class TUI from your current directory:
+Launch the first-class TUI without an initial local workdir:
 
 ```bash
 agent-tui
@@ -82,12 +90,13 @@ agent-tui
 Open a specific local workdir and expose local tools to the agent:
 
 ```bash
-agent-tui .
-agent-tui ./my-workdir
-agent-tui /absolute/path/to/my-workdir
+agent-tui -w .
+agent-tui run .
+agent-tui run ./my-workdir
+agent-tui --workdir /absolute/path/to/my-workdir
 ```
 
-The workdir argument must point to an existing directory. When provided, the
+The workdir option must point to an existing directory. When provided, the
 workbench automatically turns on local workdir and shell tools in approval mode.
 CLI chat runs can also expose local `SKILL.md` directories and opt into memory:
 
@@ -125,9 +134,8 @@ Inside the workbench, configure the agent run dynamically:
 /switch <name>   switch conversation handle
 ```
 
-The current working directory is loaded as the local workdir. Local workdir
-tools are only exposed to the model when you enable local context with
-`/context` or start with `--workdir`.
+Local workdir tools are only exposed to the model when you start with `-w`,
+`--workdir`, `run [workdir]`, or enable local context with `/context`.
 
 ## Authentication
 

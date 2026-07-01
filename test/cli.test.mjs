@@ -644,17 +644,73 @@ test("workbench auth gate controller reports browser challenge states", async ()
   assert.equal(states[2].message, "Browser auth status: approved");
 });
 
-test("top-level workdir argument must exist before launching TUI", async () => {
+test("run workdir option must exist before launching TUI", async () => {
   const root = await mkdtemp(join(tmpdir(), "agent-api-cli-missing-workdir-"));
   const missing = join(root, "missing");
 
   await assert.rejects(
-    execFileAsync("node", [bin, missing]),
+    execFileAsync("node", [bin, "--workdir", missing]),
     (error) => {
       assert.match(error.stderr, /Workdir does not exist/);
       return true;
     },
   );
+  await assert.rejects(
+    execFileAsync("node", [bin, "run", "--workdir", missing]),
+    (error) => {
+      assert.match(error.stderr, /Workdir does not exist/);
+      return true;
+    },
+  );
+  await assert.rejects(
+    execFileAsync("node", [bin, "run", missing]),
+    (error) => {
+      assert.match(error.stderr, /Workdir does not exist/);
+      return true;
+    },
+  );
+  await assert.rejects(
+    execFileAsync("node", [bin, "run", missing, "--workdir", missing]),
+    (error) => {
+      assert.match(error.stderr, /Use either run \[workdir\] or -w\/--workdir, not both/);
+      return true;
+    },
+  );
+});
+
+test("root command grammar uses explicit run and update commands", async () => {
+  const { stdout } = await execFileAsync("node", [bin, "--help"]);
+  assert.match(stdout, /-w, --workdir <path>\s+shortcut for run with a local workdir/);
+  assert.match(stdout, /--update\s+check for and install a CLI update/);
+  assert.match(stdout, /^\s+run \[workdir\]\s+Open the interactive workbench/m);
+  assert.match(stdout, /^\s+update\s+Check for and install a CLI update/m);
+  assert.match(stdout, /^\s+version\s+Print the CLI version/m);
+  assert.match(stdout, /^\s+help \[command\]\s+Display help for command/m);
+  assert.match(stdout, /No command defaults to "run"\. A bare first argument is always a command\./);
+  assert.match(stdout, /\$ agent-tui run \./);
+
+  await assert.rejects(
+    execFileAsync("node", [bin, "missing-workdir-name"]),
+    (error) => {
+      assert.match(error.stderr, /too many arguments/);
+      return true;
+    },
+  );
+});
+
+test("version command mirrors version option", async () => {
+  const { stdout: commandOut } = await execFileAsync("node", [bin, "version"]);
+  const { stdout: optionOut } = await execFileAsync("node", [bin, "--version"]);
+  assert.equal(commandOut, optionOut);
+});
+
+test("run and update command help describe their shortcuts", async () => {
+  const { stdout: runHelp } = await execFileAsync("node", [bin, "run", "--help"]);
+  assert.match(runHelp, /Usage: agent-api run \[options\] \[workdir\]/);
+  assert.match(runHelp, /\$ agent-tui -w \./);
+
+  const { stdout: updateHelp } = await execFileAsync("node", [bin, "update", "--help"]);
+  assert.match(updateHelp, /Equivalent shortcut: agent-tui --update/);
 });
 
 test("workbench command parser and reducer handle local workflow state", () => {

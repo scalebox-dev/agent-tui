@@ -11,7 +11,10 @@ import {
   conversationSummary,
   deleteConversation,
   deleteProfile,
+  checkForUpdate,
+  formatUpdateNotice,
   getConversation,
+  installUpdate,
   listConversations,
   listProfiles,
   loadConfig,
@@ -42,6 +45,11 @@ type GlobalOptions = {
   profile?: string;
 };
 
+type RootOptions = {
+  update?: boolean;
+  workdir?: string;
+};
+
 const program = new Command();
 
 program
@@ -49,22 +57,64 @@ program
   .alias("agentsway")
   .alias("agent-tui")
   .description("First-class command line interface for Agent API")
-  .argument("[workdir]", "local workdir to open and expose to the agent")
+  .option("-w, --workdir <path>", "shortcut for run with a local workdir")
+  .option("--update", "check for and install a CLI update, then exit")
   .version(cliVersion)
   .showHelpAfterError()
-  .showSuggestionAfterError();
+  .showSuggestionAfterError()
+  .addHelpText("after", `
+Command contract:
+  No command defaults to "run". A bare first argument is always a command.
+  Use "run [workdir]" or "-w, --workdir <path>" to open a local workdir.
 
-program.action(async (workdir?: string) => {
-  const launchWorkdir = workdir ? await validateLaunchWorkdir(workdir) : undefined;
-  if (!process.stdin.isTTY) {
-    program.help();
+Examples:
+  $ agent-tui
+  $ agent-tui -w .
+  $ agent-tui run .
+  $ agent-tui update
+  $ agent-tui agent chat "Summarize this repo" --workdir .
+`);
+
+program.action(async (options: RootOptions) => {
+  if (options.update) {
+    await runTopLevelUpdate({ checkOnly: false });
     return;
   }
-  const options = normalizeChatOptions([], launchWorkdir ? { workdir: launchWorkdir } : {});
-  const app = render(React.createElement(ChatApp, { options }));
-  await app.waitUntilExit();
-  clearTerminalAfterTUI();
+  await runWorkbench(options);
 });
+
+program
+  .command("run")
+  .description("Open the interactive workbench")
+  .argument("[workdir]", "local workdir to open and expose to the agent")
+  .addHelpText("after", `
+Examples:
+  $ agent-tui run
+  $ agent-tui run .
+  $ agent-tui -w .
+`)
+  .action(async function (this: Command, workdir: string | undefined) {
+    const rootOptions = this.parent?.opts<RootOptions>() ?? {};
+    await runWorkbench({ workdir: resolveRunWorkdir(workdir, rootOptions.workdir) });
+  });
+
+program
+  .command("update")
+  .description("Check for and install a CLI update")
+  .addHelpText("after", `
+Checks npm for the latest ${cliName} package and installs it globally when an
+update is available. Equivalent shortcut: agent-tui --update
+`)
+  .action(async () => {
+    await runTopLevelUpdate({ checkOnly: false });
+  });
+
+program
+  .command("version")
+  .description("Print the CLI version")
+  .action(() => {
+    console.log(cliVersion);
+  });
 
 program
   .command("auth")
@@ -117,6 +167,7 @@ program
     }, null, 2));
   });
 
+program.addHelpCommand("help [command]", "Display help for command");
 program.exitOverride();
 
 program.parseAsync(process.argv).catch((error) => {
@@ -128,6 +179,45 @@ program.parseAsync(process.argv).catch((error) => {
 function clearTerminalAfterTUI() {
   if (!process.stdout.isTTY) return;
   process.stdout.write("\x1b[2J\x1b[3J\x1b[H");
+}
+
+async function runWorkbench(options: { workdir?: string }) {
+  const launchWorkdir = options.workdir ? await validateLaunchWorkdir(options.workdir) : undefined;
+  if (!process.stdin.isTTY) {
+    program.help();
+    return;
+  }
+  const chatOptions = normalizeChatOptions([], launchWorkdir ? { workdir: launchWorkdir } : {});
+  const app = render(React.createElement(ChatApp, { options: chatOptions }));
+  await app.waitUntilExit();
+  clearTerminalAfterTUI();
+}
+
+function resolveRunWorkdir(positional?: string, option?: string) {
+  if (positional && option) throw new Error("Use either run [workdir] or -w/--workdir, not both.");
+  return option || positional;
+}
+
+async function runTopLevelUpdate(options: { checkOnly: boolean }) {
+  const result = await checkForUpdate({ timeoutMs: 5_000 });
+  if (!result) {
+    console.error("Could not check for a CLI update right now.");
+    process.exitCode = 1;
+    return;
+  }
+  if (!result.updateAvailable) {
+    console.log(`${result.packageName} is already up to date (${result.current}).`);
+    return;
+  }
+  if (options.checkOnly) {
+    console.log(formatUpdateNotice(result));
+    return;
+  }
+  console.log(formatUpdateNotice(result));
+  console.log("Installing update...");
+  const installed = await installUpdate(result);
+  console.log(`Updated ${result.packageName}: ${result.current} -> ${result.latest}.`);
+  if (installed.output) console.log(installed.output);
 }
 
 function authLoginCommand() {
