@@ -17,10 +17,15 @@ import {
 } from "@agent-api/sdk";
 import { localSkillFromDirectory, pendingLocalSkillCalls, runLocalSkillHandlers } from "@agent-api/sdk/node";
 import {
+  createLocalPauseToolRegistry,
   createLocalShellToolRegistry,
   createLocalWorkdirToolRegistry,
+  localPauseToolInstructions,
   localShellToolInstructions,
   localWorkdirToolInstructions,
+  type LocalPauseHandle,
+  type LocalPauseRequest,
+  type LocalPauseResult,
   type LocalShellToolRegistry,
   type LocalWorkdirToolRegistry,
 } from "@agent-api/sdk/local";
@@ -60,6 +65,7 @@ export interface AgentRunOptions {
   bypassAutomaticContinuationLimit?: boolean;
   automaticContinuationCount?: number;
   abortSignal?: AbortSignal;
+  localPause?: LocalPauseHooks;
 }
 
 export type WorkdirAccessMode = "off" | "approval" | "full";
@@ -93,6 +99,14 @@ export interface LocalToolApprovalRequest {
   preview?: unknown;
   callID: string;
   responseID: string;
+}
+
+export type { LocalPauseHandle, LocalPauseRequest, LocalPauseResult };
+
+export interface LocalPauseHooks {
+  maxDurationMs?: number;
+  onPauseStart?: (handle: LocalPauseHandle) => void;
+  onPauseEnd?: (result: LocalPauseResult) => void;
 }
 
 export type AgentTurnEvent =
@@ -701,7 +715,7 @@ async function buildInput(options: AgentRunOptions) {
     throw new Error("Prompt is required. Pass text, --file, or pipe stdin.");
   }
   if (shouldUseLocalTools(options)) {
-    chunks.push("Local operations are available through the `local_workdir` and `local_shell` function tools. Use `local_workdir` for local file inspection and edits. Use `local_shell` for commands, tests, builds, package managers, and git. Do not encode local edits or commands in the final answer when a tool call is needed.");
+    chunks.push("Local operations are available through the `local_workdir`, `local_shell`, and `local_pause` function tools. Use `local_workdir` for local file inspection and edits. Use `local_shell` for commands, tests, builds, package managers, and git. Use `local_pause` only for bounded waits on external state such as CI, deployment rollout, rate-limit cooldown, or file sync. Do not encode local edits, commands, or waits in the final answer when a tool call is needed.");
     chunks.push(await buildWorkdirContextBlock({
       path: options.workdir || process.cwd(),
       query: options.contextQuery,
@@ -728,8 +742,13 @@ async function prepareLocalWorkdirTools(options: AgentRunOptions): Promise<{
     workdir: service.workdir,
     ...localShellIsolationOptions(options.shellIsolation),
   } as Parameters<typeof createLocalShellToolRegistry>[0]);
+  const pauseRegistry = createLocalPauseToolRegistry({
+    maxDurationMs: options.localPause?.maxDurationMs,
+    onPauseStart: options.localPause?.onPauseStart,
+    onPauseEnd: options.localPause?.onPauseEnd,
+  });
   return {
-    registry: combineLocalToolRegistries(registry, shellRegistry),
+    registry: combineLocalToolRegistries(registry, shellRegistry, pauseRegistry),
     instructions: [
       localWorkdirToolInstructions(),
       localShellToolInstructions({
@@ -737,7 +756,8 @@ async function prepareLocalWorkdirTools(options: AgentRunOptions): Promise<{
         cwd: service.workdir.root,
         ...localShellIsolationOptions(options.shellIsolation),
       } as Parameters<typeof localShellToolInstructions>[0]),
-      "Use local_workdir for selected local workdir operations. Prefer summarize/list/search/grep before read/read_lines. Prefer preview_edits/apply_edits for source edits. Use local_shell for command/process tasks. In approval mode, local actions return requires_approval and must be explained to the user instead of retried blindly.",
+      localPauseToolInstructions({ maxDurationMs: options.localPause?.maxDurationMs }),
+      "Use local_workdir for selected local workdir operations. Prefer summarize/list/search/grep before read/read_lines. Prefer preview_edits/apply_edits for source edits. Use local_shell for command/process tasks. Use local_pause only when there is a concrete external wait. In approval mode, local actions return requires_approval and must be explained to the user instead of retried blindly.",
     ].join("\n\n"),
   };
 }
@@ -797,6 +817,7 @@ function localToolAccessMode(options: AgentRunOptions): "approval" | "full" {
 }
 
 interface LocalToolRegistryBundle {
+  toolName?: string;
   definitions(): Tool[];
   execute(name: string, args: Record<string, unknown>, abortSignal?: AbortSignal): Promise<Record<string, unknown>>;
   has(name: string): boolean;
@@ -818,21 +839,21 @@ function emptyLocalToolRegistry(): LocalToolRegistryBundle {
   };
 }
 
-function combineLocalToolRegistries(
-  workdir: LocalWorkdirToolRegistry,
-  shell: LocalShellToolRegistry,
-): LocalToolRegistryBundle {
+type LocalRegistryLike = Pick<LocalToolRegistryBundle, "definitions" | "toolName"> & {
+  execute(name: string, args: Record<string, unknown>, context?: unknown): Promise<Record<string, unknown>>;
+};
+
+function combineLocalToolRegistries(...registries: LocalRegistryLike[]): LocalToolRegistryBundle {
   return {
     definitions: () => [
-      ...workdir.definitions(),
-      ...shell.definitions(),
+      ...registries.flatMap((registry) => registry.definitions()),
     ],
     execute: async (name, args, abortSignal) => {
-      if (name === workdir.toolName) return await workdir.execute(name, args);
-      if (name === shell.toolName) return await shell.execute(name, args, { signal: abortSignal });
+      const registry = registries.find((item) => item.toolName === name);
+      if (registry) return await registry.execute(name, args, { signal: abortSignal });
       throw new Error(`no local handler registered for function ${name}`);
     },
-    has: (name) => name === workdir.toolName || name === shell.toolName,
+    has: (name) => registries.some((registry) => registry.toolName === name),
   };
 }
 

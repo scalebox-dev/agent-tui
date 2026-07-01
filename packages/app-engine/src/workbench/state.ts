@@ -133,6 +133,7 @@ export type WorkbenchCommand =
   | { kind: "refresh_catalog" }
   | { kind: "update" }
   | { kind: "preview" }
+  | { kind: "resume"; message?: string }
   | { kind: "apply" }
   | { kind: "apply_all" }
   | { kind: "reject" };
@@ -516,6 +517,8 @@ export function parseWorkbenchCommand(input: string): WorkbenchCommand | null {
       return { kind: "search", query: rest.join(" ").trim() };
     case "preview":
       return { kind: "preview" };
+    case "resume":
+      return { kind: "resume", message: rest.join(" ").trim() || undefined };
     case "apply":
       return { kind: "apply" };
     case "apply-all":
@@ -580,6 +583,7 @@ export function helpText() {
     "/summary         show local workdir summary previews",
     "/search <query>  search text in the local workdir",
     "/preview         show pending action or continuation checkpoint",
+    "/resume [msg]    resume a timed local pause without aborting the run",
     "/apply           apply or continue pending action once",
     "/apply-all       apply/continue and relax future prompts for this turn",
     "/reject          reject or stop pending action",

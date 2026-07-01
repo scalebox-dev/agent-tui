@@ -39,8 +39,8 @@ export interface WorkbenchRenderModel {
     label: string;
     lines: WorkbenchInputLine[];
     selectionAnchor: number | null;
+    statusText: string;
     viewportColumns: number;
-    waitingText: string;
   };
   terminalColumns: number;
   terminalRows: number;
@@ -84,11 +84,9 @@ export function buildWorkbenchRenderModel(input: BuildWorkbenchRenderModelInput)
     ? null
     : Math.max(0, Math.min(input.draft.length, input.selectionAnchor));
   const fullAccess = input.state.accessMode === "full";
-  const label = input.state.busy ? "working" : "you";
+  const label = "You";
   const inputViewportColumns = Math.max(8, terminalColumns - 6);
-  const inputView = input.state.busy
-    ? singleLineInputView({ beforeCursor: "", cursorText: " ", afterCursor: "" }, inputViewportColumns)
-    : buildInputView(input.draft, cursor, selectionAnchor, inputViewportColumns, maxInputRows(terminalRows));
+  const inputView = buildInputView(input.draft, cursor, selectionAnchor, inputViewportColumns, maxInputRows(terminalRows));
   const reservedRows = 10 + inputView.height;
   const viewportHeight = Math.max(3, terminalRows - reservedRows);
   const activityHeight = layout === "wide" ? viewportHeight : Math.min(4, Math.max(2, Math.floor(viewportHeight / 3)));
@@ -140,8 +138,8 @@ export function buildWorkbenchRenderModel(input: BuildWorkbenchRenderModelInput)
       label,
       lines: inputView.lines,
       selectionAnchor,
+      statusText: input.state.busy ? `waiting for agent ${elapsedDots(input.spinnerFrame)}` : "",
       viewportColumns: inputViewportColumns,
-      waitingText: `waiting for agent ${elapsedDots(input.spinnerFrame)}`,
     },
     terminalColumns,
     terminalRows,
@@ -167,35 +165,6 @@ export function pendingLocalLabel(state: WorkbenchState) {
 
 export function busySpinner(frame: number) {
   return spinnerGlyph(frame);
-}
-
-function inputViewportText(draft: string, cursor: number, maxColumns: number) {
-  if (draft.length === 0) {
-    return { beforeCursor: "", cursorText: " ", afterCursor: "" };
-  }
-  const fullWidth = Math.max(1, maxColumns - (cursor >= draft.length ? 1 : 0));
-  if (draft.length <= fullWidth) {
-    return {
-      beforeCursor: draft.slice(0, cursor),
-      cursorText: draft[cursor] ?? " ",
-      afterCursor: draft.slice(cursor + (cursor < draft.length ? 1 : 0)),
-    };
-  }
-
-  const windowColumns = Math.max(4, maxColumns - 3);
-  const maxStart = Math.max(0, draft.length - windowColumns);
-  const preferredStart = cursor >= draft.length
-    ? maxStart
-    : Math.max(0, cursor - Math.floor(windowColumns * 0.65));
-  const start = Math.min(preferredStart, maxStart);
-  const end = Math.min(draft.length, start + windowColumns);
-  const visibleCursor = Math.max(start, Math.min(cursor, end));
-  const hasLeft = start > 0;
-  const hasRight = end < draft.length;
-  const beforeCursor = `${hasLeft ? "‹" : ""}${draft.slice(start, visibleCursor)}`;
-  const cursorText = draft[visibleCursor] ?? " ";
-  const afterCursor = `${draft.slice(visibleCursor + (visibleCursor < draft.length ? 1 : 0), end)}${hasRight ? "›" : ""}`;
-  return { beforeCursor, cursorText, afterCursor };
 }
 
 function buildInputView(draft: string, cursor: number, selectionAnchor: number | null, maxColumns: number, maxRows: number) {
@@ -224,14 +193,6 @@ function buildInputView(draft: string, cursor: number, selectionAnchor: number |
     };
   });
   return { height, lines };
-}
-
-function singleLineInputView(line: { afterCursor: string; beforeCursor: string; cursorText: string }, maxColumns: number) {
-  const clipped = inputViewportText(`${line.beforeCursor}${line.cursorText}${line.afterCursor}`, line.beforeCursor.length, maxColumns);
-  return {
-    height: 1,
-    lines: [{ ...clipped, hasCursor: true, spans: [{ text: clipped.beforeCursor }, { text: clipped.cursorText, inverse: true }, { text: clipped.afterCursor }] }],
-  };
 }
 
 function maxInputRows(terminalRows: number) {

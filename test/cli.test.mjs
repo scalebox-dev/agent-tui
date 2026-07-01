@@ -150,7 +150,9 @@ function stubTurnController() {
   return {
     async startPrompt() {},
     async continueAfterLocalApproval() {},
+    async continueAfterAutomaticContinuation() {},
     async abort() {},
+    resumeTimedPause() { return false; },
   };
 }
 
@@ -777,6 +779,8 @@ test("workbench command parser and reducer handle local workflow state", () => {
   assert.deepEqual(parseWorkbenchCommand("/local on"), { kind: "workdir", enabled: true });
   assert.deepEqual(parseWorkbenchCommand("/update"), { kind: "update" });
   assert.deepEqual(parseWorkbenchCommand("/upgrade"), { kind: "update" });
+  assert.deepEqual(parseWorkbenchCommand("/resume"), { kind: "resume", message: undefined });
+  assert.deepEqual(parseWorkbenchCommand("/resume rollout is probably ready"), { kind: "resume", message: "rollout is probably ready" });
   assert.equal(parseWorkbenchCommand("plain prompt"), null);
   assert.deepEqual(parsePendingApprovalCommand("/apply"), { kind: "apply" });
   assert.deepEqual(parsePendingApprovalCommand("/yes"), { kind: "apply" });
@@ -1447,6 +1451,60 @@ test("workbench command controller saves automatic continuation limit", async ()
   assert.match(engine.snapshot().messages.at(-1).text, /Saved automatic continuation limit: 14/);
 });
 
+test("workbench command controller resumes timed local pauses", async () => {
+  const engine = createWorkbenchEngine({ contextEnabled: false });
+  const resumeMessages = [];
+  const controller = createWorkbenchCommandController({
+    authController: stubAuthController(),
+    conversationController: stubConversationController(),
+    engine,
+    localController: stubLocalController(),
+    options: { promptParts: [], profile: "default" },
+    profileName: "default",
+    settingsController: stubSettingsController(),
+    turnController: {
+      ...stubTurnController(),
+      resumeTimedPause(message) {
+        resumeMessages.push(message);
+        return true;
+      },
+    },
+    async onDeleteProfile() {},
+    onExit() {},
+    onLogin() {},
+    onLogout() {},
+    onSwitchProfile() {},
+  });
+
+  await controller.run({ kind: "resume", message: "rollout ready" });
+
+  assert.deepEqual(resumeMessages, ["rollout ready"]);
+  assert.match(engine.snapshot().messages.at(-1).text, /Resuming timed local pause/);
+});
+
+test("workbench command controller reports when no timed local pause is active", async () => {
+  const engine = createWorkbenchEngine({ contextEnabled: false });
+  const controller = createWorkbenchCommandController({
+    authController: stubAuthController(),
+    conversationController: stubConversationController(),
+    engine,
+    localController: stubLocalController(),
+    options: { promptParts: [], profile: "default" },
+    profileName: "default",
+    settingsController: stubSettingsController(),
+    turnController: stubTurnController(),
+    async onDeleteProfile() {},
+    onExit() {},
+    onLogin() {},
+    onLogout() {},
+    onSwitchProfile() {},
+  });
+
+  await controller.run({ kind: "resume" });
+
+  assert.match(engine.snapshot().messages.at(-1).text, /No timed local pause is active/);
+});
+
 test("workbench turn controller applies sticky automatic continuation limit", async () => {
   const engine = createWorkbenchEngine({ accessMode: "full", contextEnabled: true });
   engine.dispatch({ type: "settings.set", settings: { automaticContinuationLimit: 13 } });
@@ -1632,6 +1690,8 @@ test("workbench render model exposes renderer-neutral screen state", () => {
   assert.equal(model.header.pendingLocalLabel, "none");
   assert.equal(model.input.fullAccess, true);
   assert.equal(model.input.draft, "hello");
+  assert.equal(model.input.label, "You");
+  assert.equal(model.input.statusText, "");
   assert.deepEqual(model.input.lines, [{
     beforeCursor: "he",
     cursorText: "l",
@@ -1647,6 +1707,27 @@ test("workbench render model exposes renderer-neutral screen state", () => {
   assert.equal(model.viewportHeight, 19);
   assert.ok(model.transcript.visibleLines.length > 0);
   assert.match(model.footerText, /live/);
+});
+
+test("workbench render model keeps input editable while busy", () => {
+  const state = createInitialWorkbenchState({});
+  const model = buildWorkbenchRenderModel({
+    cursor: 4,
+    draft: "/resume now",
+    profileName: "default",
+    spinnerFrame: 5,
+    state: { ...state, busy: true },
+    transcriptOffset: 0,
+    viewport: { rows: 30, columns: 80 },
+    workdirFallback: "/fallback",
+  });
+
+  assert.equal(model.input.busy, true);
+  assert.equal(model.input.label, "You");
+  assert.match(model.input.statusText, /waiting for agent/);
+  assert.equal(model.input.draft, "/resume now");
+  assert.equal(model.input.lines[0].beforeCursor, "/res");
+  assert.equal(model.input.lines[0].cursorText, "u");
 });
 
 test("workbench render model adapts to narrow terminal sizes", () => {
@@ -2364,6 +2445,12 @@ test("workbench input controller maps navigation and busy abort policy", () => {
     effects: [{ type: "abort" }],
     selectionAnchor: null,
   });
+  assert.deepEqual(controller.handle("", { return: true }, { busy: true, draft: "/resume rollout ready", viewportHeight: 11 }), {
+    cursor: 0,
+    draft: "",
+    effects: [{ type: "submit", input: "/resume rollout ready" }],
+    selectionAnchor: null,
+  });
   assert.deepEqual(controller.handle("", { return: true }, { busy: true, draft: "hello", viewportHeight: 11 }), {
     cursor: 0,
     draft: "",
@@ -2776,6 +2863,54 @@ test("workbench turn controller runs prompt turns through engine state", async (
   assert.equal(runtimeEffects.some((entry) => entry.type === "flush"), true);
 });
 
+test("workbench turn controller resumes active timed local pauses", async () => {
+  const engine = createWorkbenchEngine({ accessMode: "full", contextEnabled: true });
+  let resumeMessage;
+  let continueRun;
+  const runFinished = new Promise((resolve) => {
+    continueRun = resolve;
+  });
+  const controller = createWorkbenchTurnController({
+    baseOptions: { promptParts: [], profile: "default" },
+    dispatch: engine.dispatch,
+    engine,
+    flushTextDeltaBuffer() {},
+    getState: engine.snapshot,
+    runRuntimeEffects() {},
+    async runAgentTurnImpl(options) {
+      options.localPause.onPauseStart({
+        request: { durationMs: 1000, reason: "wait" },
+        resume(message) {
+          resumeMessage = message;
+          options.localPause.onPauseEnd({
+            ok: true,
+            tool: "local_pause",
+            action: "pause",
+            requested_ms: 1000,
+            elapsed_ms: 12,
+            status: "cancelled",
+            reason: "wait",
+            resume_message: message,
+          });
+          continueRun();
+        },
+      });
+      await runFinished;
+      return { text: "done", responseID: "resp_pause" };
+    },
+  });
+
+  const pending = controller.startPrompt("wait for rollout");
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(controller.resumeTimedPause("rollout ready"), true);
+  await pending;
+
+  assert.equal(resumeMessage, "rollout ready");
+  assert.equal(controller.resumeTimedPause("again"), false);
+  assert.match(engine.snapshot().activities.at(-1).text, /Agent turn completed: resp_pause/);
+});
+
 test("workbench turn controller aborts active remote responses", async () => {
   const engine = createWorkbenchEngine({ accessMode: "approval", contextEnabled: true });
   let releaseTurn;
@@ -2862,6 +2997,7 @@ test("workbench command controller resumes automatic continuation checkpoints", 
         resumedInput = input;
       },
       async abort() {},
+      resumeTimedPause() { return false; },
     },
     async onDeleteProfile() {},
     onExit() {},

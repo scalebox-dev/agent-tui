@@ -63,24 +63,21 @@ export function InkWorkbenchScreen({
           )}
           {renderModel.input.fullAccess && <Text> </Text>}
           <Text color={renderModel.input.busy ? "yellow" : "green"}>{renderModel.input.label}</Text>
+          {renderModel.input.statusText && (
+            <Text color="yellow">  {busySpinner(spinnerFrame)} {renderModel.input.statusText}</Text>
+          )}
         </Box>
-        {renderModel.input.busy ? (
-          <Text wrap="truncate">
-            <Text color="yellow">{busySpinner(spinnerFrame)}</Text> {renderModel.input.waitingText}
-          </Text>
-        ) : (
-          <Box flexDirection="column">
-            {renderModel.input.lines.map((line, index) => (
-              <Text key={index} wrap="truncate">
-                {line.spans.map((span, spanIndex) => (
-                  <Text inverse={span.inverse} key={spanIndex}>
-                    {span.text}
-                  </Text>
-                ))}
-              </Text>
-            ))}
-          </Box>
-        )}
+        <Box flexDirection="column">
+          {renderModel.input.lines.map((line, index) => (
+            <Text key={index} wrap="truncate">
+              {line.spans.map((span, spanIndex) => (
+                <Text inverse={span.inverse} key={spanIndex}>
+                  {span.text}
+                </Text>
+              ))}
+            </Text>
+          ))}
+        </Box>
       </Box>
       <Box paddingX={1}>
         <Text color="gray" wrap="truncate">{renderModel.footerText}</Text>

@@ -99,6 +99,7 @@ function handleBusyInput(
     const command = editor.text.trim();
     history.record(command);
     if (command === "/abort" || command === "/cancel") return editorResult(emptyEditor(), { type: "abort" });
+    if (isResumeCommand(command)) return editorResult(emptyEditor(), { type: "submit", input: command });
     if (command) return editorResult(emptyEditor(), { type: "ignored_busy" });
     return editorResult(emptyEditor());
   }
@@ -174,4 +175,8 @@ function movementFromKey(input: string, key: WorkbenchInputKey): TextEditorMovem
 
 function emptyEditor(): TextEditorState {
   return { text: "", cursor: 0, selectionAnchor: null };
+}
+
+function isResumeCommand(command: string) {
+  return command === "/resume" || command.startsWith("/resume ");
 }

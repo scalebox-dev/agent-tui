@@ -8,6 +8,7 @@ import {
   type AutomaticContinuationState,
   type AgentRunOptions,
   type AgentTurnEvent,
+  type LocalPauseHandle,
   type LocalToolApprovalRequest,
   type WorkdirAccessMode,
 } from "../agent.js";
@@ -26,6 +27,7 @@ export interface WorkbenchTurnController {
     bypassAutomaticContinuationLimit: boolean;
   }): Promise<void>;
   abort(reason: string): Promise<void>;
+  resumeTimedPause(message?: string): boolean;
 }
 
 export interface WorkbenchTurnControllerOptions {
@@ -47,6 +49,7 @@ export function createWorkbenchTurnController(options: WorkbenchTurnControllerOp
   const resumeAgentAfterAutomaticContinuationImpl = options.resumeAgentAfterAutomaticContinuationImpl ?? resumeAgentAfterAutomaticContinuation;
   const resolveRuntimeProfileImpl = options.resolveRuntimeProfileImpl ?? resolveRuntimeProfile;
   let activeAbortController: AbortController | null = null;
+  let activeLocalPause: LocalPauseHandle | null = null;
   let activeResponseID: string | null = null;
   const cancelledResponseIDs = new Set<string>();
 
@@ -82,6 +85,7 @@ export function createWorkbenchTurnController(options: WorkbenchTurnControllerOp
             automaticContinuationLimit: effectiveAutomaticContinuationLimit(state),
             restartConversation: false,
             abortSignal: abortController.signal,
+            localPause: localPauseHooks(),
           },
           (event) => handleAgentEvent(event, assistantId),
         );
@@ -128,6 +132,7 @@ export function createWorkbenchTurnController(options: WorkbenchTurnControllerOp
             automaticContinuationLimit: effectiveAutomaticContinuationLimit(state),
             restartConversation: false,
             abortSignal: abortController.signal,
+            localPause: localPauseHooks(),
           },
           input.approval,
           input.result,
@@ -177,6 +182,7 @@ export function createWorkbenchTurnController(options: WorkbenchTurnControllerOp
             restartConversation: false,
             bypassAutomaticContinuationLimit: input.bypassAutomaticContinuationLimit,
             abortSignal: abortController.signal,
+            localPause: localPauseHooks(),
           },
           input.continuation,
           (event) => handleAgentEvent(event, assistantId),
@@ -230,6 +236,12 @@ export function createWorkbenchTurnController(options: WorkbenchTurnControllerOp
         options.dispatch({ type: "activity.add", level: "error", text: "Remote response cancel failed" });
       }
     },
+
+    resumeTimedPause(message) {
+      if (!activeLocalPause) return false;
+      activeLocalPause.resume(message);
+      return true;
+    },
   };
 
   function handleAgentEvent(event: AgentTurnEvent, assistantId: string) {
@@ -247,9 +259,33 @@ export function createWorkbenchTurnController(options: WorkbenchTurnControllerOp
     if (activeAbortController === abortController) {
       activeAbortController = null;
     }
+    activeLocalPause = null;
     activeResponseID = null;
     options.dispatch({ type: "busy.set", busy: false });
     options.dispatch({ type: "assistant.active", id: null });
+  }
+
+  function localPauseHooks(): NonNullable<AgentRunOptions["localPause"]> {
+    return {
+      onPauseStart(handle) {
+        activeLocalPause = handle;
+        options.dispatch({
+          type: "activity.add",
+          level: "warning",
+          text: `Local pause started: ${handle.request.durationMs}ms`,
+        });
+      },
+      onPauseEnd(result) {
+        activeLocalPause = null;
+        options.dispatch({
+          type: "activity.add",
+          level: result.status === "cancelled" ? "warning" : "success",
+          text: result.status === "cancelled"
+            ? `Local pause resumed after ${result.elapsed_ms}ms`
+            : `Local pause completed after ${result.elapsed_ms}ms`,
+        });
+      },
+    };
   }
 
   function handleTurnError(error: unknown) {

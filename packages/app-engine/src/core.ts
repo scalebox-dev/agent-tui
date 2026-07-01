@@ -12,6 +12,10 @@ export type {
   AgentRunOptions,
   AgentTurnEvent,
   AgentTurnResult,
+  LocalPauseHandle,
+  LocalPauseHooks,
+  LocalPauseRequest,
+  LocalPauseResult,
   LocalToolApprovalRequest,
   WorkdirAccessMode,
 } from "./agent.js";

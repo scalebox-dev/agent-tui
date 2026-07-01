@@ -81,6 +81,9 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
         case "preview":
           showEditPreview();
           return;
+        case "resume":
+          resumeTimedPause(command.message);
+          return;
         case "apply":
           await applyPendingEdit(false);
           return;
@@ -441,6 +444,33 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
       return;
     }
     dispatch({ type: "message.add", role: "system", text: "No pending action." });
+  }
+
+  function resumeTimedPause(message?: string) {
+    const state = options.engine.snapshot();
+    if (options.turnController.resumeTimedPause(message)) {
+      dispatch({
+        type: "message.add",
+        role: "system",
+        text: message
+          ? `Resuming timed local pause: ${message}`
+          : "Resuming timed local pause.",
+      });
+      dispatch({ type: "activity.add", level: "success", text: "Timed local pause resumed" });
+      return;
+    }
+    dispatch({
+      type: "message.add",
+      role: "system",
+      text: [
+        "No timed local pause is active.",
+        state.pendingAutomaticContinuation
+          ? "Automatic continuation checkpoints still use /apply or /apply-all."
+          : "",
+        message ? `Resume note recorded locally: ${message}` : "",
+      ].filter(Boolean).join("\n"),
+    });
+    dispatch({ type: "activity.add", level: "warning", text: "No timed local pause to resume" });
   }
 
   async function checkForCliUpdate() {
