@@ -25,6 +25,7 @@ export function ChatApp({ options }: { options: AgentRunOptions }) {
 
 function AuthenticatedChatApp({ options }: { options: AgentRunOptions }) {
   const app = useApp();
+  const { stdout } = useStdout();
   const busyRef = useRef(false);
   const authControllerRef = useRef<WorkbenchAuthController | null>(null);
   const authGateControllerRef = useRef<WorkbenchAuthGateController | null>(null);
@@ -43,6 +44,11 @@ function AuthenticatedChatApp({ options }: { options: AgentRunOptions }) {
     baseURL: process.env.AGENT_API_BASE_URL || defaultBaseURL,
     profile: options.profile || "default",
   }));
+
+  useEffect(() => {
+    hideTerminalCursor(stdout);
+    return () => showTerminalCursor(stdout);
+  }, [stdout]);
 
   useEffect(() => {
     let mounted = true;
@@ -121,6 +127,14 @@ function AuthenticatedChatApp({ options }: { options: AgentRunOptions }) {
   }
 
   return <InkAuthGate cursorVisible={authCursorVisible} state={auth} />;
+}
+
+function hideTerminalCursor(stdout: NodeJS.WriteStream) {
+  if (stdout.isTTY) stdout.write("\x1b[?25l");
+}
+
+function showTerminalCursor(stdout: NodeJS.WriteStream) {
+  if (stdout.isTTY) stdout.write("\x1b[?25h");
 }
 
 function isAuthInputStatus(status: AuthGateState["status"]) {
