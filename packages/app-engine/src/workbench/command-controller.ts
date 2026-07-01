@@ -1,5 +1,6 @@
 import type { AgentRunOptions } from "../agent.js";
 import type { WorkbenchCommand } from "./state.js";
+import { checkForUpdate, formatUpdateNotice, installUpdate, type UpdateCheckResult, type UpdateInstallResult } from "../update.js";
 import type { WorkbenchAuthController } from "./auth-controller.js";
 import type { WorkbenchConversationController } from "./conversation-controller.js";
 import type { WorkbenchEffect, WorkbenchEngine } from "./engine.js";
@@ -22,6 +23,9 @@ export interface WorkbenchCommandControllerOptions {
   profileName: string;
   settingsController: WorkbenchSettingsController;
   turnController: WorkbenchTurnController;
+  checkForUpdateImpl?: typeof checkForUpdate;
+  formatUpdateNoticeImpl?: typeof formatUpdateNotice;
+  installUpdateImpl?: typeof installUpdate;
   onDeleteProfile(): Promise<void>;
   onExit(): void;
   onLogin(): void;
@@ -31,6 +35,9 @@ export interface WorkbenchCommandControllerOptions {
 
 export function createWorkbenchCommandController(options: WorkbenchCommandControllerOptions): WorkbenchCommandController {
   const dispatch = options.engine.dispatch;
+  const checkForUpdateImpl = options.checkForUpdateImpl ?? checkForUpdate;
+  const formatUpdateNoticeImpl = options.formatUpdateNoticeImpl ?? formatUpdateNotice;
+  const installUpdateImpl = options.installUpdateImpl ?? installUpdate;
 
   return {
     async run(command) {
@@ -67,6 +74,9 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
           return;
         case "list_conversations":
           await showConversations();
+          return;
+        case "update":
+          await checkForCliUpdate();
           return;
         case "preview":
           showEditPreview();
@@ -426,11 +436,57 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
       dispatch({ type: "message.add", role: "system", text: state.pendingAutomaticContinuation.message });
       return;
     }
+    if (state.pendingUpdate) {
+      dispatch({ type: "message.add", role: "system", text: updatePreviewText(state.pendingUpdate.result) });
+      return;
+    }
     dispatch({ type: "message.add", role: "system", text: "No pending action." });
+  }
+
+  async function checkForCliUpdate() {
+    dispatch({ type: "activity.add", text: "Checking for CLI update" });
+    try {
+      const result = await checkForUpdateImpl();
+      if (!result) {
+        dispatch({ type: "message.add", role: "system", text: "Could not check for a CLI update right now." });
+        dispatch({ type: "activity.add", level: "warning", text: "Update check unavailable" });
+        return;
+      }
+      if (!result.updateAvailable) {
+        dispatch({ type: "message.add", role: "system", text: `CLI is already up to date: ${result.packageName} ${result.current}.` });
+        dispatch({ type: "activity.add", level: "success", text: "CLI already up to date" });
+        return;
+      }
+      dispatch({ type: "update.pending.set", result });
+      dispatch({ type: "message.add", role: "system", text: updatePreviewText(result) });
+    } catch (error) {
+      dispatch({ type: "message.add", role: "system", text: `Update check failed: ${userFacingError(error)}` });
+      dispatch({ type: "activity.add", level: "error", text: "Update check failed" });
+    }
   }
 
   async function applyPendingEdit(allowFutureLocalActions: boolean) {
     const state = options.engine.snapshot();
+    if (state.pendingUpdate) {
+      const pending = state.pendingUpdate;
+      dispatch({ type: "activity.add", level: "warning", text: `Installing CLI update: ${pending.result.latest}` });
+      dispatch({ type: "message.add", role: "system", text: "Installing CLI update. The workbench will close after the update succeeds." });
+      try {
+        const result = await installUpdateImpl(pending.result);
+        dispatch({ type: "update.pending.clear" });
+        dispatch({
+          type: "message.add",
+          role: "system",
+          text: updateInstallSuccessText(pending.result, result),
+        });
+        dispatch({ type: "activity.add", level: "success", text: `CLI updated to ${pending.result.latest}; closing` });
+        setTimeout(options.onExit, 500);
+      } catch (error) {
+        dispatch({ type: "message.add", role: "system", text: `CLI update failed: ${userFacingError(error)}` });
+        dispatch({ type: "activity.add", level: "error", text: "CLI update failed" });
+      }
+      return;
+    }
     if (state.pendingAutomaticContinuation) {
       dispatch({
         type: "activity.add",
@@ -518,6 +574,15 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
       dispatch({ type: "local_tool.pending.clear" });
       return;
     }
+    if (state.pendingUpdate) {
+      dispatch({
+        type: "activity.add",
+        text: `Canceled CLI update: ${state.pendingUpdate.result.latest}`,
+      });
+      dispatch({ type: "update.pending.clear" });
+      dispatch({ type: "message.add", role: "system", text: "CLI update canceled." });
+      return;
+    }
     dispatch({ type: "message.add", role: "system", text: "No pending action." });
   }
 
@@ -583,6 +648,22 @@ function firstListField(value: Record<string, unknown>, keys: string[]) {
     if (values.length > 0) return values;
   }
   return [];
+}
+
+function updatePreviewText(result: UpdateCheckResult) {
+  return [
+    formatUpdateNotice(result),
+    "",
+    "Use /apply to install the update and close the workbench, or /reject to cancel.",
+  ].join("\n");
+}
+
+function updateInstallSuccessText(update: UpdateCheckResult, result: UpdateInstallResult) {
+  return [
+    `Updated ${update.packageName}: ${update.current} -> ${update.latest}.`,
+    result.command ? `Command: ${result.command}` : "",
+    "Restart the workbench to use the new version.",
+  ].filter(Boolean).join("\n");
 }
 
 export function normalizeOptionalSetting(value: string, clearValues: string[]) {

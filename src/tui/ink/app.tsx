@@ -153,6 +153,7 @@ function WorkbenchApp({
   const terminalSize = useTerminalSize(stdout);
   const [draft, setDraft] = useState("");
   const [cursor, setCursor] = useState(0);
+  const [selectionAnchor, setSelectionAnchor] = useState<number | null>(null);
   const [spinnerFrame, setSpinnerFrame] = useState(0);
   const [transcriptOffset, setTranscriptOffset] = useState(0);
   const agentEngineRef = useRef<AgentEngineApp | null>(null);
@@ -181,6 +182,7 @@ function WorkbenchApp({
       draft,
       cursor,
       profileName,
+      selectionAnchor,
       spinnerFrame,
       state,
       transcriptOffset,
@@ -190,7 +192,7 @@ function WorkbenchApp({
       },
       workdirFallback: options.workdir || process.cwd(),
     }),
-    [cursor, draft, options.workdir, profileName, spinnerFrame, state, terminalSize.columns, terminalSize.rows, transcriptOffset],
+    [cursor, draft, options.workdir, profileName, selectionAnchor, spinnerFrame, state, terminalSize.columns, terminalSize.rows, transcriptOffset],
   );
 
   useEffect(() => {
@@ -247,10 +249,13 @@ function WorkbenchApp({
       busy: state.busy,
       cursor,
       draft,
+      selectionAnchor,
+      viewportColumns: renderModel.input.viewportColumns,
       viewportHeight: renderModel.viewportHeight,
     });
     if (result.draft !== draft) setDraft(result.draft);
     if (result.cursor !== cursor) setCursor(result.cursor);
+    if (result.selectionAnchor !== selectionAnchor) setSelectionAnchor(result.selectionAnchor);
     for (const effect of result.effects) {
       switch (effect.type) {
         case "exit":

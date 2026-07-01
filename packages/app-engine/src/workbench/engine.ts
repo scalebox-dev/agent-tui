@@ -79,7 +79,9 @@ export function createWorkbenchEngine(options: WorkbenchEngineOptions): Workbenc
       action.type === "local_tool.pending.set" ||
       action.type === "local_tool.pending.clear" ||
       action.type === "automatic_continuation.pending.set" ||
-      action.type === "automatic_continuation.pending.clear"
+      action.type === "automatic_continuation.pending.clear" ||
+      action.type === "update.pending.set" ||
+      action.type === "update.pending.clear"
     ) {
       pendingApprovalInvalidInputs = 0;
     }
@@ -322,6 +324,15 @@ export function createWorkbenchEngine(options: WorkbenchEngineOptions): Workbenc
         handleInvalidPendingContinuationInput();
         return { kind: "handled" };
       }
+      if (state.pendingUpdate) {
+        const command = parsePendingApprovalCommand(trimmed);
+        if (command) {
+          pendingApprovalInvalidInputs = 0;
+          return { kind: "command", command };
+        }
+        handleInvalidPendingUpdateInput();
+        return { kind: "handled" };
+      }
       const command = parseWorkbenchCommand(trimmed);
       if (command) return { kind: "command", command };
       return { kind: "prompt", prompt: trimmed };
@@ -372,6 +383,29 @@ export function createWorkbenchEngine(options: WorkbenchEngineOptions): Workbenc
       text: `Automatic continuation is paused. Enter /apply or /yes to continue, /apply-all or /yes-all to continue without more automatic continuation checkpoints for this turn, or /reject or /no to stop. Invalid input ${attempts}/${maxAttempts}.`,
     });
     dispatch({ type: "activity.add", level: "warning", text: "Waiting for continuation command" });
+  }
+
+  function handleInvalidPendingUpdateInput() {
+    pendingApprovalInvalidInputs += 1;
+    const attempts = pendingApprovalInvalidInputs;
+    const maxAttempts = 3;
+    if (attempts >= maxAttempts) {
+      dispatch({
+        type: "message.add",
+        role: "system",
+        text: "CLI update canceled after too many invalid inputs.",
+      });
+      dispatch({ type: "activity.add", level: "warning", text: "CLI update canceled" });
+      dispatch({ type: "update.pending.clear" });
+      pendingApprovalInvalidInputs = 0;
+      return;
+    }
+    dispatch({
+      type: "message.add",
+      role: "system",
+      text: `CLI update is ready. Enter /apply to install and close the workbench, or /reject to cancel. Invalid input ${attempts}/${maxAttempts}.`,
+    });
+    dispatch({ type: "activity.add", level: "warning", text: "Waiting for update confirmation" });
   }
 
   function handleMemoryCommand(command: Extract<WorkbenchCommand, { kind: "memory" }>) {

@@ -719,6 +719,8 @@ test("workbench command parser and reducer handle local workflow state", () => {
   assert.deepEqual(parseWorkbenchCommand("/workdir on"), { kind: "workdir", enabled: true });
   assert.deepEqual(parseWorkbenchCommand("/workdir off"), { kind: "workdir", enabled: false });
   assert.deepEqual(parseWorkbenchCommand("/local on"), { kind: "workdir", enabled: true });
+  assert.deepEqual(parseWorkbenchCommand("/update"), { kind: "update" });
+  assert.deepEqual(parseWorkbenchCommand("/upgrade"), { kind: "update" });
   assert.equal(parseWorkbenchCommand("plain prompt"), null);
   assert.deepEqual(parsePendingApprovalCommand("/apply"), { kind: "apply" });
   assert.deepEqual(parsePendingApprovalCommand("/yes"), { kind: "apply" });
@@ -806,8 +808,21 @@ test("workbench command parser and reducer handle local workflow state", () => {
   assert.equal(pendingContinuation.pendingAutomaticContinuation?.count, 8);
   const clearedContinuation = workbenchReducer(pendingContinuation, { type: "automatic_continuation.pending.clear" });
   assert.equal(clearedContinuation.pendingAutomaticContinuation, null);
+  const pendingUpdate = workbenchReducer(clearedContinuation, {
+    type: "update.pending.set",
+    result: {
+      current: "0.4.10",
+      latest: "0.4.11",
+      packageName: "@agent-api/cli",
+      updateAvailable: true,
+    },
+  });
+  assert.equal(pendingUpdate.pendingUpdate?.result.latest, "0.4.11");
+  assert.equal(pendingUpdate.activities.at(-1).level, "warning");
+  const clearedUpdate = workbenchReducer(pendingUpdate, { type: "update.pending.clear" });
+  assert.equal(clearedUpdate.pendingUpdate, null);
 
-  const withWorkdir = workbenchReducer(clearedContinuation, {
+  const withWorkdir = workbenchReducer(clearedUpdate, {
     type: "workdir.set",
     workdir: {
       root: "/tmp/example",
@@ -1447,6 +1462,84 @@ test("workbench command controller applies pending local approvals", async () =>
   assert.deepEqual(continuations[0].result, { ok: true, command: "pwd" });
 });
 
+test("workbench command controller checks and applies CLI updates", async () => {
+  const installed = [];
+  let exited = false;
+  const engine = createWorkbenchEngine({ contextEnabled: false, accessMode: "off" });
+  const updateResult = {
+    current: "0.4.10",
+    latest: "0.4.11",
+    packageName: "@agent-api/cli",
+    updateAvailable: true,
+  };
+  const controller = createWorkbenchCommandController({
+    authController: stubAuthController(),
+    conversationController: stubConversationController(),
+    engine,
+    localController: stubLocalController(),
+    options: { promptParts: [], profile: "default" },
+    profileName: "default",
+    settingsController: stubSettingsController(),
+    turnController: stubTurnController(),
+    async checkForUpdateImpl() {
+      return updateResult;
+    },
+    async installUpdateImpl(result) {
+      installed.push(result);
+      return { command: "npm install -g @agent-api/cli@latest", output: "updated" };
+    },
+    async onDeleteProfile() {},
+    onExit() { exited = true; },
+    onLogin() {},
+    onLogout() {},
+    onSwitchProfile() {},
+  });
+
+  await controller.run({ kind: "update" });
+
+  assert.equal(engine.snapshot().pendingUpdate?.result.latest, "0.4.11");
+  assert.match(engine.snapshot().messages.at(-1).text, /Use \/apply/);
+
+  await controller.run({ kind: "apply" });
+
+  assert.equal(engine.snapshot().pendingUpdate, null);
+  assert.deepEqual(installed, [updateResult]);
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  assert.equal(exited, true);
+});
+
+test("workbench command controller skips CLI update checkpoint when current", async () => {
+  const engine = createWorkbenchEngine({ contextEnabled: false, accessMode: "off" });
+  const controller = createWorkbenchCommandController({
+    authController: stubAuthController(),
+    conversationController: stubConversationController(),
+    engine,
+    localController: stubLocalController(),
+    options: { promptParts: [], profile: "default" },
+    profileName: "default",
+    settingsController: stubSettingsController(),
+    turnController: stubTurnController(),
+    async checkForUpdateImpl() {
+      return {
+        current: "0.4.10",
+        latest: "0.4.10",
+        packageName: "@agent-api/cli",
+        updateAvailable: false,
+      };
+    },
+    async onDeleteProfile() {},
+    onExit() {},
+    onLogin() {},
+    onLogout() {},
+    onSwitchProfile() {},
+  });
+
+  await controller.run({ kind: "update" });
+
+  assert.equal(engine.snapshot().pendingUpdate, null);
+  assert.match(engine.snapshot().messages.at(-1).text, /already up to date/);
+});
+
 test("workbench render model exposes renderer-neutral screen state", () => {
   const state = createInitialWorkbenchState({
     accessMode: "full",
@@ -1488,6 +1581,11 @@ test("workbench render model exposes renderer-neutral screen state", () => {
     cursorText: "l",
     afterCursor: "lo",
     hasCursor: true,
+    spans: [
+      { text: "he" },
+      { text: "l", inverse: true },
+      { text: "lo" },
+    ],
   }]);
   assert.equal(model.layout, "wide");
   assert.equal(model.viewportHeight, 19);
@@ -1553,8 +1651,8 @@ test("workbench render model bounds multiline editor height around the cursor", 
     workdirFallback: "/fallback",
   });
 
-  assert.equal(model.input.height, 6);
-  assert.equal(model.input.lines.length, 6);
+  assert.equal(model.input.height, 5);
+  assert.equal(model.input.lines.length, 5);
   assert.match(model.input.lines[0].beforeCursor, /^⋮ /);
   assert.ok(model.input.lines.some((line) => line.hasCursor));
 });
@@ -2145,36 +2243,43 @@ test("workbench input controller maps navigation and busy abort policy", () => {
     cursor: 0,
     draft: "",
     effects: [{ type: "scroll", delta: 5 }],
+    selectionAnchor: null,
   });
   assert.deepEqual(controller.handle("", { pageDown: true }, { busy: false, draft: "", viewportHeight: 11 }), {
     cursor: 0,
     draft: "",
     effects: [{ type: "scroll", delta: -5 }],
+    selectionAnchor: null,
   });
   assert.deepEqual(controller.handle("", { home: true }, { busy: false, cursor: 2, draft: "abcd", viewportHeight: 11 }), {
     cursor: 0,
     draft: "abcd",
     effects: [],
+    selectionAnchor: null,
   });
   assert.deepEqual(controller.handle("", { end: true }, { busy: false, cursor: 2, draft: "abcd", viewportHeight: 11 }), {
     cursor: 4,
     draft: "abcd",
     effects: [],
+    selectionAnchor: null,
   });
   assert.deepEqual(controller.handle("", { upArrow: true }, { busy: false, cursor: 2, draft: "abcd", viewportHeight: 11 }), {
     cursor: 2,
     draft: "abcd",
     effects: [],
+    selectionAnchor: null,
   });
   assert.deepEqual(controller.handle("", { downArrow: true }, { busy: false, cursor: 2, draft: "abcd", viewportHeight: 11 }), {
     cursor: 2,
     draft: "abcd",
     effects: [],
+    selectionAnchor: null,
   });
   assert.deepEqual(controller.handle("", { delete: true }, { busy: false, cursor: 4, draft: "abcd", viewportHeight: 11 }), {
     cursor: 3,
     draft: "abc",
     effects: [],
+    selectionAnchor: null,
   });
   assert.deepEqual(controller.handle("c", { ctrl: true }, { busy: false, draft: "", viewportHeight: 11 }).effects, [{ type: "exit" }]);
 
@@ -2182,17 +2287,52 @@ test("workbench input controller maps navigation and busy abort policy", () => {
     cursor: 7,
     draft: "ignored",
     effects: [{ type: "abort" }],
+    selectionAnchor: null,
   });
   assert.deepEqual(controller.handle("", { return: true }, { busy: true, draft: "/abort", viewportHeight: 11 }), {
     cursor: 0,
     draft: "",
     effects: [{ type: "abort" }],
+    selectionAnchor: null,
   });
   assert.deepEqual(controller.handle("", { return: true }, { busy: true, draft: "hello", viewportHeight: 11 }), {
     cursor: 0,
     draft: "",
     effects: [{ type: "ignored_busy" }],
+    selectionAnchor: null,
   });
+});
+
+test("workbench input controller supports visual-row movement and selected deletion", () => {
+  const controller = createWorkbenchInputController();
+  const wrapped = controller.handle("", { downArrow: true }, {
+    busy: false,
+    cursor: 2,
+    draft: "abcdefghijklmnop",
+    viewportColumns: 8,
+    viewportHeight: 10,
+  });
+  assert.equal(wrapped.cursor, 10);
+
+  const selected = controller.handle("", { rightArrow: true, shift: true }, {
+    busy: false,
+    cursor: 2,
+    draft: "abcd",
+    viewportHeight: 10,
+  });
+  assert.equal(selected.cursor, 3);
+  assert.equal(selected.selectionAnchor, 2);
+
+  const deleted = controller.handle("", { backspace: true }, {
+    busy: false,
+    cursor: selected.cursor,
+    draft: "abcd",
+    selectionAnchor: selected.selectionAnchor,
+    viewportHeight: 10,
+  });
+  assert.equal(deleted.draft, "abd");
+  assert.equal(deleted.cursor, 2);
+  assert.equal(deleted.selectionAnchor, null);
 });
 
 test("workbench transcript formatter produces readable plain text", () => {
@@ -2732,6 +2872,41 @@ test("workbench engine owns pending automatic continuation input policy", () => 
 
   assert.equal(engine.snapshot().pendingAutomaticContinuation, null);
   assert.match(engine.snapshot().messages.at(-1).text, /Automatic continuation stopped/);
+});
+
+test("workbench engine owns pending CLI update input policy", () => {
+  const engine = createWorkbenchEngine({ contextEnabled: false, accessMode: "off" });
+  engine.dispatch({
+    type: "update.pending.set",
+    result: {
+      current: "0.4.10",
+      latest: "0.4.11",
+      packageName: "@agent-api/cli",
+      updateAvailable: true,
+    },
+  });
+
+  assert.deepEqual(engine.submit("install it"), { kind: "handled" });
+  assert.match(engine.snapshot().messages.at(-1).text, /CLI update is ready/);
+  assert.equal(engine.snapshot().pendingUpdate?.result.latest, "0.4.11");
+
+  assert.deepEqual(engine.submit("/apply"), { kind: "command", command: { kind: "apply" } });
+
+  engine.dispatch({
+    type: "update.pending.set",
+    result: {
+      current: "0.4.10",
+      latest: "0.4.11",
+      packageName: "@agent-api/cli",
+      updateAvailable: true,
+    },
+  });
+  engine.submit("bad one");
+  engine.submit("bad two");
+  engine.submit("bad three");
+
+  assert.equal(engine.snapshot().pendingUpdate, null);
+  assert.match(engine.snapshot().messages.at(-1).text, /update canceled/);
 });
 
 test("app engine runtime accepts injected storage", async () => {

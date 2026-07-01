@@ -45,7 +45,7 @@ export function InkWorkbenchScreen({
         renderMode={renderModel.header.renderMode}
         workdir={renderModel.header.workdir}
       />
-      <Box marginTop={1} height={renderModel.viewportHeight} flexDirection={renderModel.layout === "wide" ? "row" : "column"}>
+      <Box height={renderModel.viewportHeight} flexDirection={renderModel.layout === "wide" ? "row" : "column"}>
         <Box flexDirection="column" width={renderModel.layout === "wide" ? "72%" : "100%"} paddingRight={renderModel.layout === "wide" ? 1 : 0}>
           {renderModel.transcript.visibleLines.map((line) => (
             <TranscriptText key={line.id} line={line} />
@@ -71,10 +71,12 @@ export function InkWorkbenchScreen({
         ) : (
           <Box flexDirection="column">
             {renderModel.input.lines.map((line, index) => (
-              <Text key={index}>
-                {line.beforeCursor || (line.hasCursor ? "" : " ")}
-                {line.hasCursor && <Cursor text={line.cursorText} visible />}
-                {line.afterCursor}
+              <Text key={index} wrap="truncate">
+                {line.spans.map((span, spanIndex) => (
+                  <Text inverse={span.inverse} key={spanIndex}>
+                    {span.text}
+                  </Text>
+                ))}
               </Text>
             ))}
           </Box>

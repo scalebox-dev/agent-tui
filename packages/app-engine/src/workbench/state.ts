@@ -1,4 +1,5 @@
 import type { AutomaticContinuationPause, LocalToolApprovalRequest, WorkdirAccessMode } from "../agent.js";
+import type { UpdateCheckResult } from "../update.js";
 import type { ShellIsolationPreferences } from "../workbench/shell-isolation.js";
 
 export type WorkbenchRole = "user" | "assistant" | "system";
@@ -36,6 +37,12 @@ export interface PendingAutomaticContinuation extends AutomaticContinuationPause
   createdAt: number;
 }
 
+export interface PendingUpdate {
+  id: string;
+  createdAt: number;
+  result: UpdateCheckResult;
+}
+
 export type RenderMode = "markdown" | "raw";
 
 export interface WorkbenchState {
@@ -47,6 +54,7 @@ export interface WorkbenchState {
   activeAssistantMessageId: string | null;
   pendingLocalTool: LocalToolApproval | null;
   pendingAutomaticContinuation: PendingAutomaticContinuation | null;
+  pendingUpdate: PendingUpdate | null;
   accessMode: WorkdirAccessMode;
   conversationId?: string;
   conversationPreviousResponseId?: string;
@@ -89,6 +97,8 @@ export type WorkbenchAction =
   | { type: "automatic_continuation.pending.set"; pause: AutomaticContinuationPause }
   | { type: "automatic_continuation.pending.clear" }
   | { type: "automatic_continuation.unlock"; unlocked: boolean }
+  | { type: "update.pending.set"; result: UpdateCheckResult }
+  | { type: "update.pending.clear" }
   | { type: "access.set"; mode: WorkdirAccessMode }
   | { type: "conversation.set"; id?: string; name: string; previousResponseId?: string; status?: "fresh" | "continued" | "unknown" }
   | { type: "settings.set"; settings: Partial<Pick<WorkbenchState, "runPreset" | "runModel" | "memoryRead" | "memoryWrite" | "memoryTenantSearch" | "localSkillsEnabled" | "workspaceSkillsEnabled" | "renderMode" | "defaultPreset" | "automaticContinuationLimit" | "shellIsolation">> };
@@ -121,6 +131,7 @@ export type WorkbenchCommand =
   | { kind: "switch_conversation"; name: string }
   | { kind: "list_conversations" }
   | { kind: "refresh_catalog" }
+  | { kind: "update" }
   | { kind: "preview" }
   | { kind: "apply" }
   | { kind: "apply_all" }
@@ -156,6 +167,7 @@ export function createInitialWorkbenchState(options: {
     activeAssistantMessageId: null,
     pendingLocalTool: null,
     pendingAutomaticContinuation: null,
+    pendingUpdate: null,
     accessMode,
     conversationId: undefined,
     conversationPreviousResponseId: undefined,
@@ -270,6 +282,7 @@ export function workbenchReducer(state: WorkbenchState, action: WorkbenchAction)
         ...state,
         pendingLocalTool: pending,
         pendingAutomaticContinuation: null,
+        pendingUpdate: null,
         activities: [
           ...state.activities,
           newActivity("warning", `Local approval ready: ${pending.name}${pending.action ? `.${pending.action}` : ""}`),
@@ -290,6 +303,7 @@ export function workbenchReducer(state: WorkbenchState, action: WorkbenchAction)
       return {
         ...state,
         pendingLocalTool: null,
+        pendingUpdate: null,
         pendingAutomaticContinuation: pending,
         activities: [
           ...state.activities,
@@ -301,6 +315,28 @@ export function workbenchReducer(state: WorkbenchState, action: WorkbenchAction)
       return {
         ...state,
         pendingAutomaticContinuation: null,
+      };
+    case "update.pending.set": {
+      const pending = {
+        result: action.result,
+        id: `update-${Date.now()}`,
+        createdAt: Date.now(),
+      };
+      return {
+        ...state,
+        pendingLocalTool: null,
+        pendingAutomaticContinuation: null,
+        pendingUpdate: pending,
+        activities: [
+          ...state.activities,
+          newActivity("warning", `Update ready: ${pending.result.current} -> ${pending.result.latest}`),
+        ].slice(-20),
+      };
+    }
+    case "update.pending.clear":
+      return {
+        ...state,
+        pendingUpdate: null,
       };
     case "automatic_continuation.unlock":
       return {
@@ -472,6 +508,9 @@ export function parseWorkbenchCommand(input: string): WorkbenchCommand | null {
     case "reload":
     case "refresh-catalog":
       return { kind: "refresh_catalog" };
+    case "update":
+    case "upgrade":
+      return { kind: "update" };
     case "search":
     case "grep":
       return { kind: "search", query: rest.join(" ").trim() };
@@ -537,6 +576,7 @@ export function helpText() {
     "/new [name]      start a fresh conversation in this workbench",
     "/switch <name>   switch to an existing/new conversation handle",
     "/conversations   list saved local conversation handles",
+    "/update          check for a CLI update; /apply installs when available",
     "/summary         show local workdir summary previews",
     "/search <query>  search text in the local workdir",
     "/preview         show pending action or continuation checkpoint",

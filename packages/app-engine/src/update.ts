@@ -1,4 +1,5 @@
 import { appVersion } from "./runtime/index.js";
+import { spawn } from "node:child_process";
 
 export interface UpdateCheckResult {
   current: string;
@@ -13,6 +14,11 @@ export interface UpdateCheckOptions {
   registryURL?: string;
   signal?: AbortSignal;
   timeoutMs?: number;
+}
+
+export interface UpdateInstallResult {
+  command: string;
+  output: string;
 }
 
 const defaultPackageName = "@agent-api/cli";
@@ -52,6 +58,16 @@ export function formatUpdateNotice(result: UpdateCheckResult): string {
   return `Update available: ${result.packageName} ${result.current} -> ${result.latest}. Run: npm install -g ${result.packageName}@latest`;
 }
 
+export async function installUpdate(result: UpdateCheckResult): Promise<UpdateInstallResult> {
+  const executable = process.platform === "win32" ? "npm.cmd" : "npm";
+  const args = ["install", "-g", `${result.packageName}@latest`];
+  const output = await runCommand(executable, args);
+  return {
+    command: `${executable} ${args.join(" ")}`,
+    output,
+  };
+}
+
 export function compareVersions(a: string, b: string): number {
   const left = parseVersion(a);
   const right = parseVersion(b);
@@ -86,4 +102,28 @@ function combineSignals(...signals: Array<AbortSignal | undefined>): AbortSignal
     signal.addEventListener("abort", abort, { once: true });
   }
   return controller.signal;
+}
+
+function runCommand(command: string, args: string[]) {
+  return new Promise<string>((resolve, reject) => {
+    const child = spawn(command, args, {
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let output = "";
+    child.stdout?.on("data", (chunk) => {
+      output += String(chunk);
+    });
+    child.stderr?.on("data", (chunk) => {
+      output += String(chunk);
+    });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) {
+        resolve(output.trim());
+        return;
+      }
+      reject(new Error(`${command} ${args.join(" ")} failed with exit code ${code}${output ? `\n${output.trim()}` : ""}`));
+    });
+  });
 }

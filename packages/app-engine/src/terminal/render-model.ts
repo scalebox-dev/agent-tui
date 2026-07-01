@@ -5,6 +5,7 @@ import {
   spinnerGlyph,
   type TranscriptViewModel,
 } from "./view-model.js";
+import { inputLineSegments } from "./text-layout.js";
 
 export interface WorkbenchRendererViewport {
   rows: number;
@@ -37,6 +38,7 @@ export interface WorkbenchRenderModel {
     height: number;
     label: string;
     lines: WorkbenchInputLine[];
+    selectionAnchor: number | null;
     viewportColumns: number;
     waitingText: string;
   };
@@ -53,12 +55,19 @@ export interface WorkbenchInputLine {
   beforeCursor: string;
   cursorText: string;
   hasCursor: boolean;
+  spans: WorkbenchInputSpan[];
+}
+
+export interface WorkbenchInputSpan {
+  inverse?: boolean;
+  text: string;
 }
 
 export interface BuildWorkbenchRenderModelInput {
   cursor?: number;
   draft: string;
   profileName: string;
+  selectionAnchor?: number | null;
   spinnerFrame: number;
   state: WorkbenchState;
   transcriptOffset: number;
@@ -71,13 +80,16 @@ export function buildWorkbenchRenderModel(input: BuildWorkbenchRenderModelInput)
   const terminalColumns = Math.max(24, input.viewport.columns || 100);
   const layout = terminalColumns >= 96 ? "wide" : "compact";
   const cursor = Math.max(0, Math.min(input.draft.length, input.cursor ?? input.draft.length));
+  const selectionAnchor = input.selectionAnchor == null
+    ? null
+    : Math.max(0, Math.min(input.draft.length, input.selectionAnchor));
   const fullAccess = input.state.accessMode === "full";
   const label = input.state.busy ? "working" : "you";
-  const inputViewportColumns = Math.max(8, terminalColumns - 10 - label.length - (fullAccess ? 14 : 0));
+  const inputViewportColumns = Math.max(8, terminalColumns - 6);
   const inputView = input.state.busy
     ? singleLineInputView({ beforeCursor: "", cursorText: " ", afterCursor: "" }, inputViewportColumns)
-    : buildInputView(input.draft, cursor, inputViewportColumns, maxInputRows(terminalRows));
-  const reservedRows = (layout === "wide" ? 11 : 14) + Math.max(0, inputView.height - 1);
+    : buildInputView(input.draft, cursor, selectionAnchor, inputViewportColumns, maxInputRows(terminalRows));
+  const reservedRows = 10 + inputView.height;
   const viewportHeight = Math.max(3, terminalRows - reservedRows);
   const activityHeight = layout === "wide" ? viewportHeight : Math.min(4, Math.max(2, Math.floor(viewportHeight / 3)));
   const transcriptHeight = layout === "wide" ? viewportHeight : Math.max(3, viewportHeight - activityHeight);
@@ -127,6 +139,7 @@ export function buildWorkbenchRenderModel(input: BuildWorkbenchRenderModelInput)
       height: inputView.height,
       label,
       lines: inputView.lines,
+      selectionAnchor,
       viewportColumns: inputViewportColumns,
       waitingText: `waiting for agent ${elapsedDots(input.spinnerFrame)}`,
     },
@@ -145,6 +158,9 @@ export function pendingLocalLabel(state: WorkbenchState) {
   }
   if (state.pendingAutomaticContinuation) {
     return `continuation ${state.pendingAutomaticContinuation.count}/${state.pendingAutomaticContinuation.limit}`;
+  }
+  if (state.pendingUpdate) {
+    return `update ${state.pendingUpdate.result.current}->${state.pendingUpdate.result.latest}`;
   }
   return "none";
 }
@@ -182,59 +198,92 @@ function inputViewportText(draft: string, cursor: number, maxColumns: number) {
   return { beforeCursor, cursorText, afterCursor };
 }
 
-function buildInputView(draft: string, cursor: number, maxColumns: number, maxRows: number) {
+function buildInputView(draft: string, cursor: number, selectionAnchor: number | null, maxColumns: number, maxRows: number) {
   const segments = inputLineSegments(draft, maxColumns);
   const cursorSegmentIndex = Math.max(0, segments.findIndex((segment) => cursor >= segment.start && cursor <= segment.end));
   const height = Math.min(maxRows, Math.max(1, segments.length));
   const start = clamp(cursorSegmentIndex - Math.floor(height / 2), 0, Math.max(0, segments.length - height));
   const visible = segments.slice(start, start + height);
+  const selection = selectedRange(cursor, selectionAnchor);
   const lines = visible.map((segment, index): WorkbenchInputLine => {
     const hasCursor = cursor >= segment.start && cursor <= segment.end;
     const localCursor = hasCursor ? Math.max(0, Math.min(cursor - segment.start, segment.text.length)) : 0;
+    const prefix = start > 0 && index === 0 ? "⋮ " : "";
+    const suffix = start + height < segments.length && index === visible.length - 1 ? " ⋮" : "";
     return {
-      beforeCursor: `${start > 0 && index === 0 ? "⋮ " : ""}${hasCursor ? segment.text.slice(0, localCursor) : segment.text}`,
+      beforeCursor: `${prefix}${hasCursor ? segment.text.slice(0, localCursor) : segment.text}`,
       cursorText: hasCursor ? segment.text[localCursor] ?? " " : "",
-      afterCursor: `${hasCursor ? segment.text.slice(localCursor + (localCursor < segment.text.length ? 1 : 0)) : ""}${start + height < segments.length && index === visible.length - 1 ? " ⋮" : ""}`,
+      afterCursor: `${hasCursor ? segment.text.slice(localCursor + (localCursor < segment.text.length ? 1 : 0)) : ""}${suffix}`,
       hasCursor,
+      spans: inputLineSpans(segment, {
+        cursor: hasCursor ? cursor : null,
+        prefix,
+        selection,
+        suffix,
+      }),
     };
   });
   return { height, lines };
 }
 
-function singleLineInputView(line: Omit<WorkbenchInputLine, "hasCursor">, maxColumns: number) {
+function singleLineInputView(line: { afterCursor: string; beforeCursor: string; cursorText: string }, maxColumns: number) {
   const clipped = inputViewportText(`${line.beforeCursor}${line.cursorText}${line.afterCursor}`, line.beforeCursor.length, maxColumns);
   return {
     height: 1,
-    lines: [{ ...clipped, hasCursor: true }],
+    lines: [{ ...clipped, hasCursor: true, spans: [{ text: clipped.beforeCursor }, { text: clipped.cursorText, inverse: true }, { text: clipped.afterCursor }] }],
   };
 }
 
-function inputLineSegments(draft: string, maxColumns: number) {
-  if (!draft) return [{ text: "", start: 0, end: 0 }];
-  const width = Math.max(8, maxColumns);
-  const segments: Array<{ text: string; start: number; end: number }> = [];
-  let offset = 0;
-  const hardLines = draft.split("\n");
-  for (let lineIndex = 0; lineIndex < hardLines.length; lineIndex += 1) {
-    const line = hardLines[lineIndex] ?? "";
-    if (!line) {
-      segments.push({ text: "", start: offset, end: offset });
-    } else {
-      for (let start = 0; start < line.length; start += width) {
-        const text = line.slice(start, start + width);
-        segments.push({ text, start: offset + start, end: offset + start + text.length });
-      }
-    }
-    offset += line.length;
-    if (lineIndex < hardLines.length - 1) offset += 1;
-  }
-  return segments;
-}
-
 function maxInputRows(terminalRows: number) {
-  return Math.max(1, Math.min(6, Math.floor(terminalRows / 5)));
+  return Math.max(1, Math.min(6, Math.floor(terminalRows / 6)));
 }
 
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
+}
+
+function selectedRange(cursor: number, selectionAnchor: number | null) {
+  if (selectionAnchor === null || selectionAnchor === cursor) return null;
+  return {
+    start: Math.min(cursor, selectionAnchor),
+    end: Math.max(cursor, selectionAnchor),
+  };
+}
+
+function inputLineSpans(segment: { end: number; start: number; text: string }, options: {
+  cursor: number | null;
+  prefix: string;
+  selection: { end: number; start: number } | null;
+  suffix: string;
+}): WorkbenchInputSpan[] {
+  const spans: WorkbenchInputSpan[] = [];
+  if (options.prefix) spans.push({ text: options.prefix });
+  if (!segment.text && options.cursor !== null) {
+    spans.push({ text: " ", inverse: true });
+  }
+  for (let index = 0; index < segment.text.length; index += 1) {
+    const absolute = segment.start + index;
+    const selected = Boolean(options.selection && absolute >= options.selection.start && absolute < options.selection.end);
+    const underCursor = options.cursor === absolute;
+    spans.push({ text: segment.text[index] ?? "", inverse: selected || underCursor });
+  }
+  if (options.cursor === segment.end) {
+    spans.push({ text: " ", inverse: true });
+  }
+  if (options.suffix) spans.push({ text: options.suffix });
+  return coalesceSpans(spans);
+}
+
+function coalesceSpans(spans: WorkbenchInputSpan[]) {
+  const merged: WorkbenchInputSpan[] = [];
+  for (const span of spans) {
+    if (!span.text) continue;
+    const last = merged.at(-1);
+    if (last && Boolean(last.inverse) === Boolean(span.inverse)) {
+      last.text += span.text;
+    } else {
+      merged.push(span.inverse ? { text: span.text, inverse: true } : { text: span.text });
+    }
+  }
+  return merged.length > 0 ? merged : [{ text: " " }];
 }

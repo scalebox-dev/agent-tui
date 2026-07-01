@@ -63,6 +63,7 @@ program.action(async (workdir?: string) => {
   const options = normalizeChatOptions([], launchWorkdir ? { workdir: launchWorkdir } : {});
   const app = render(React.createElement(ChatApp, { options }));
   await app.waitUntilExit();
+  clearTerminalAfterTUI();
 });
 
 program
@@ -123,6 +124,11 @@ program.parseAsync(process.argv).catch((error) => {
   console.error(error instanceof Error ? error.message : String(error));
   process.exitCode = 1;
 });
+
+function clearTerminalAfterTUI() {
+  if (!process.stdout.isTTY) return;
+  process.stdout.write("\x1b[2J\x1b[3J\x1b[H");
+}
 
 function authLoginCommand() {
   return new Command("login")
