@@ -56,12 +56,16 @@ export function createWorkbenchInputController(): WorkbenchInputController {
       if (key.pageDown || (key.ctrl && input === "d")) {
         return result(context.draft, cursor, { type: "scroll", delta: -Math.max(1, Math.floor(context.viewportHeight / 2)) });
       }
-      if (key.home || (key.ctrl && input === "a")) return result(context.draft, 0);
-      if (key.end || (key.ctrl && input === "e")) return result(context.draft, context.draft.length);
+      if (key.ctrl && key.upArrow) return historyResult(history.previous(context.draft));
+      if (key.ctrl && key.downArrow) return historyResult(history.next(context.draft));
+      if (key.ctrl && input === "a") return result(context.draft, 0);
+      if (key.ctrl && input === "e") return result(context.draft, context.draft.length);
+      if (key.home) return result(context.draft, lineStart(context.draft, cursor));
+      if (key.end) return result(context.draft, lineEnd(context.draft, cursor));
       if (key.leftArrow) return result(context.draft, Math.max(0, cursor - 1));
       if (key.rightArrow) return result(context.draft, Math.min(context.draft.length, cursor + 1));
-      if (key.upArrow) return historyResult(history.previous(context.draft));
-      if (key.downArrow) return historyResult(history.next(context.draft));
+      if (key.upArrow) return result(context.draft, moveCursorVertical(context.draft, cursor, -1));
+      if (key.downArrow) return result(context.draft, moveCursorVertical(context.draft, cursor, 1));
 
       if (context.busy) {
         return handleBusyInput(input, key, context.draft, cursor, history);
@@ -109,6 +113,10 @@ function handleReadyInput(
   history: ReturnType<typeof createInputHistory>,
 ): WorkbenchInputResult {
   if (key.return) {
+    if (key.meta) {
+      history.reset();
+      return insertAtCursor(draft, cursor, "\n");
+    }
     const prompt = draft.trim();
     if (!prompt) return result(draft, cursor);
     history.record(prompt);
@@ -154,4 +162,29 @@ function deleteAtCursor(draft: string, cursor: number): WorkbenchInputResult {
 
 function clampCursor(cursor: number, draft: string) {
   return Math.max(0, Math.min(draft.length, cursor));
+}
+
+function lineStart(draft: string, cursor: number) {
+  return draft.lastIndexOf("\n", Math.max(0, cursor - 1)) + 1;
+}
+
+function lineEnd(draft: string, cursor: number) {
+  const end = draft.indexOf("\n", cursor);
+  return end === -1 ? draft.length : end;
+}
+
+function moveCursorVertical(draft: string, cursor: number, delta: -1 | 1) {
+  const currentStart = lineStart(draft, cursor);
+  const currentEnd = lineEnd(draft, cursor);
+  const column = cursor - currentStart;
+  if (delta < 0) {
+    if (currentStart === 0) return cursor;
+    const previousEnd = currentStart - 1;
+    const previousStart = lineStart(draft, previousEnd);
+    return Math.min(previousStart + column, previousEnd);
+  }
+  if (currentEnd >= draft.length) return cursor;
+  const nextStart = currentEnd + 1;
+  const nextEnd = lineEnd(draft, nextStart);
+  return Math.min(nextStart + column, nextEnd);
 }

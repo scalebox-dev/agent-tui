@@ -54,24 +54,30 @@ export function InkWorkbenchScreen({
         </Box>
         {activity}
       </Box>
-      <Box borderStyle="single" borderColor={renderModel.input.busy ? "yellow" : "green"} paddingX={1}>
-        {renderModel.input.fullAccess && (
-          <Text color="red" bold inverse>
-            FULL ACCESS
-          </Text>
-        )}
-        {renderModel.input.fullAccess && <Text> </Text>}
-        <Text color={renderModel.input.busy ? "yellow" : "green"}>{renderModel.input.label} </Text>
+      <Box borderStyle="single" borderColor={renderModel.input.busy ? "yellow" : "green"} paddingX={1} flexDirection="column">
+        <Box>
+          {renderModel.input.fullAccess && (
+            <Text color="red" bold inverse>
+              FULL ACCESS
+            </Text>
+          )}
+          {renderModel.input.fullAccess && <Text> </Text>}
+          <Text color={renderModel.input.busy ? "yellow" : "green"}>{renderModel.input.label}</Text>
+        </Box>
         {renderModel.input.busy ? (
           <Text wrap="truncate">
             <Text color="yellow">{busySpinner(spinnerFrame)}</Text> {renderModel.input.waitingText}
           </Text>
         ) : (
-          <Text wrap="truncate">
-            {renderModel.input.beforeCursor}
-            <Cursor text={renderModel.input.cursorText} visible />
-            {renderModel.input.afterCursor}
-          </Text>
+          <Box flexDirection="column">
+            {renderModel.input.lines.map((line, index) => (
+              <Text key={index}>
+                {line.beforeCursor || (line.hasCursor ? "" : " ")}
+                {line.hasCursor && <Cursor text={line.cursorText} visible />}
+                {line.afterCursor}
+              </Text>
+            ))}
+          </Box>
         )}
       </Box>
       <Box paddingX={1}>

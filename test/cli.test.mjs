@@ -1483,9 +1483,12 @@ test("workbench render model exposes renderer-neutral screen state", () => {
   assert.equal(model.header.pendingLocalLabel, "none");
   assert.equal(model.input.fullAccess, true);
   assert.equal(model.input.draft, "hello");
-  assert.equal(model.input.beforeCursor, "he");
-  assert.equal(model.input.cursorText, "l");
-  assert.equal(model.input.afterCursor, "lo");
+  assert.deepEqual(model.input.lines, [{
+    beforeCursor: "he",
+    cursorText: "l",
+    afterCursor: "lo",
+    hasCursor: true,
+  }]);
   assert.equal(model.layout, "wide");
   assert.equal(model.viewportHeight, 19);
   assert.ok(model.transcript.visibleLines.length > 0);
@@ -1513,7 +1516,7 @@ test("workbench render model adapts to narrow terminal sizes", () => {
   assert.ok(model.input.viewportColumns < 50);
 });
 
-test("workbench render model scrolls long input around the cursor", () => {
+test("workbench render model wraps long input into editor rows", () => {
   const state = createInitialWorkbenchState({});
   const draft = `${"x".repeat(90)}END`;
   const model = buildWorkbenchRenderModel({
@@ -1528,11 +1531,32 @@ test("workbench render model scrolls long input around the cursor", () => {
   });
 
   assert.equal(model.input.draft, draft);
-  assert.equal(model.input.cursorText, " ");
-  assert.match(model.input.beforeCursor, /^‹/);
-  assert.match(model.input.beforeCursor, /END$/);
-  assert.equal(model.input.afterCursor, "");
-  assert.ok(model.input.beforeCursor.length + model.input.cursorText.length <= model.input.viewportColumns);
+  assert.ok(model.input.lines.length > 1);
+  assert.ok(model.input.lines.length <= model.input.height);
+  assert.equal(model.input.lines.at(-1).hasCursor, true);
+  assert.equal(model.input.lines.at(-1).cursorText, " ");
+  assert.match(model.input.lines.at(-1).beforeCursor, /END$/);
+  assert.ok(model.input.lines.every((line) => line.beforeCursor.length + line.cursorText.length + line.afterCursor.length <= model.input.viewportColumns + 2));
+});
+
+test("workbench render model bounds multiline editor height around the cursor", () => {
+  const state = createInitialWorkbenchState({});
+  const draft = Array.from({ length: 10 }, (_, index) => `line-${index}`).join("\n");
+  const model = buildWorkbenchRenderModel({
+    cursor: draft.indexOf("line-7"),
+    draft,
+    profileName: "default",
+    spinnerFrame: 0,
+    state,
+    transcriptOffset: 0,
+    viewport: { rows: 30, columns: 80 },
+    workdirFallback: "/fallback",
+  });
+
+  assert.equal(model.input.height, 6);
+  assert.equal(model.input.lines.length, 6);
+  assert.match(model.input.lines[0].beforeCursor, /^⋮ /);
+  assert.ok(model.input.lines.some((line) => line.hasCursor));
 });
 
 test("pending local label is stable for renderer headers", () => {
@@ -2083,15 +2107,33 @@ test("workbench input controller edits, submits, and recalls drafts", () => {
   result = apply(controller.handle("i", {}, context()));
   assert.equal(draft, "shi");
 
+  result = apply(controller.handle("", { meta: true, return: true }, context()));
+  assert.equal(draft, "shi\n");
+  assert.equal(cursor, 4);
+  result = apply(controller.handle("there", {}, context()));
+  assert.equal(draft, "shi\nthere");
+  assert.equal(cursor, 9);
+  result = apply(controller.handle("", { upArrow: true }, context()));
+  assert.equal(cursor, 3);
+  result = apply(controller.handle("", { downArrow: true }, context()));
+  assert.equal(cursor, 7);
+  result = apply(controller.handle("", { home: true }, context()));
+  assert.equal(cursor, 4);
+  result = apply(controller.handle("", { end: true }, context()));
+  assert.equal(cursor, 9);
+
   result = apply(controller.handle("", { return: true }, context()));
-  assert.deepEqual(result.effects, [{ type: "submit", input: "shi" }]);
+  assert.deepEqual(result.effects, [{ type: "submit", input: "shi\nthere" }]);
   assert.equal(draft, "");
   assert.equal(cursor, 0);
 
   result = apply(controller.handle("", { upArrow: true }, context()));
-  assert.equal(draft, "shi");
-  assert.equal(cursor, 3);
-  result = apply(controller.handle("", { downArrow: true }, context()));
+  assert.equal(draft, "");
+  assert.equal(cursor, 0);
+  result = apply(controller.handle("", { ctrl: true, upArrow: true }, context()));
+  assert.equal(draft, "shi\nthere");
+  assert.equal(cursor, 9);
+  result = apply(controller.handle("", { ctrl: true, downArrow: true }, context()));
   assert.equal(draft, "");
   assert.equal(cursor, 0);
 });
@@ -2116,6 +2158,16 @@ test("workbench input controller maps navigation and busy abort policy", () => {
   });
   assert.deepEqual(controller.handle("", { end: true }, { busy: false, cursor: 2, draft: "abcd", viewportHeight: 11 }), {
     cursor: 4,
+    draft: "abcd",
+    effects: [],
+  });
+  assert.deepEqual(controller.handle("", { upArrow: true }, { busy: false, cursor: 2, draft: "abcd", viewportHeight: 11 }), {
+    cursor: 2,
+    draft: "abcd",
+    effects: [],
+  });
+  assert.deepEqual(controller.handle("", { downArrow: true }, { busy: false, cursor: 2, draft: "abcd", viewportHeight: 11 }), {
+    cursor: 2,
     draft: "abcd",
     effects: [],
   });
