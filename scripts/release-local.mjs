@@ -10,6 +10,7 @@ import { spawn } from "node:child_process";
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const require = createRequire(import.meta.url);
 const packageJSON = require(join(root, "package.json"));
+const appEnginePackageJSON = require(join(root, "packages/app-engine/package.json"));
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
 const artifactsDir = join(root, "artifacts");
 const dryRun = process.argv.includes("--dry-run");
@@ -40,12 +41,12 @@ console.log(`  ${cliTarball}`);
 
 if (dryRun) {
   console.log("");
-  console.log("Dry run enabled. Publish in dependency order with:");
-  console.log(`  npm publish ${appEngineTarball} --access public`);
-  console.log(`  npm publish ${cliTarball} --access public`);
+  console.log("Dry run enabled. Publish plan:");
+  await printPublishPlan(appEnginePackageJSON, appEngineTarball);
+  await printPublishPlan(packageJSON, cliTarball);
 } else {
-  await run(npm, ["publish", appEngineTarball, "--access", "public", ...otp ? [`--otp=${otp}`] : []]);
-  await run(npm, ["publish", cliTarball, "--access", "public", ...otp ? [`--otp=${otp}`] : []]);
+  await publishIfMissing(appEnginePackageJSON, appEngineTarball);
+  await publishIfMissing(packageJSON, cliTarball);
 }
 
 async function pack(args) {
@@ -53,6 +54,36 @@ async function pack(args) {
   const tarballName = stdout.trim().split(/\r?\n/).at(-1);
   if (!tarballName) throw new Error(`${args.join(" ")} did not report a tarball name`);
   return resolve(artifactsDir, tarballName);
+}
+
+async function printPublishPlan(pkg, tarball) {
+  const spec = packageSpec(pkg);
+  if (await packageVersionExists(spec)) {
+    console.log(`  skip ${spec} (already published)`);
+    return;
+  }
+  console.log(`  npm publish ${tarball} --access public`);
+}
+
+async function publishIfMissing(pkg, tarball) {
+  const spec = packageSpec(pkg);
+  if (await packageVersionExists(spec)) {
+    console.log(`Skipping ${spec}; version already exists on npm.`);
+    return;
+  }
+  await run(npm, ["publish", tarball, "--access", "public", ...otp ? [`--otp=${otp}`] : []]);
+}
+
+async function packageVersionExists(spec) {
+  const result = await run(npm, ["view", spec, "version"], { allowFailure: true, quiet: true });
+  if (result.code === 0 && result.stdout.trim()) return true;
+  const notFound = /E404|404 Not Found|No match found/i.test(result.stderr) || /E404|404 Not Found|No match found/i.test(result.stdout);
+  if (notFound) return false;
+  throw new Error(`npm view ${spec} version failed with exit code ${result.code}`);
+}
+
+function packageSpec(pkg) {
+  return `${pkg.name}@${pkg.version}`;
 }
 
 function installedBin(prefix, bin) {
@@ -71,27 +102,32 @@ function optionValue(name) {
 
 function run(command, args, options = {}) {
   return new Promise((resolvePromise, reject) => {
+    const captureOutput = options.capture || options.quiet;
     const child = spawn(command, args, {
       cwd: root,
       shell: false,
-      stdio: options.capture ? ["ignore", "pipe", "pipe"] : "inherit",
+      stdio: captureOutput ? ["ignore", "pipe", "pipe"] : "inherit",
     });
     let stdoutBuffer = "";
     let stderrBuffer = "";
-    if (options.capture) {
+    if (captureOutput) {
       child.stdout?.on("data", (chunk) => {
         stdoutBuffer += String(chunk);
-        process.stdout.write(chunk);
+        if (!options.quiet) process.stdout.write(chunk);
       });
       child.stderr?.on("data", (chunk) => {
         stderrBuffer += String(chunk);
-        process.stderr.write(chunk);
+        if (!options.quiet) process.stderr.write(chunk);
       });
     }
     child.on("error", reject);
     child.on("exit", (code, signal) => {
       if (code === 0) {
-        resolvePromise({ stdout: stdoutBuffer, stderr: stderrBuffer });
+        resolvePromise({ code, stdout: stdoutBuffer, stderr: stderrBuffer });
+        return;
+      }
+      if (options.allowFailure) {
+        resolvePromise({ code: code ?? 1, stdout: stdoutBuffer, stderr: stderrBuffer });
         return;
       }
       reject(new Error(`${command} ${args.join(" ")} failed${signal ? ` with signal ${signal}` : ` with exit code ${code}`}`));
