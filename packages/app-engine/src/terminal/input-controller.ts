@@ -1,5 +1,14 @@
 import { createInputHistory } from "../workbench/state.js";
-import { moveCursorVisualRow } from "./text-layout.js";
+import {
+  deleteTextAtCursor,
+  deleteTextBeforeCursor,
+  insertText,
+  moveTextEditorCursor,
+  normalizeTextEditorState,
+  selectAllText,
+  type TextEditorMovement,
+  type TextEditorState,
+} from "./text-editor.js";
 
 export interface WorkbenchInputKey {
   backspace?: boolean;
@@ -56,28 +65,25 @@ export function createWorkbenchInputController(): WorkbenchInputController {
       const cursor = clampCursor(context.cursor ?? context.draft.length, context.draft);
       const selectionAnchor = context.selectionAnchor ?? null;
       const viewportColumns = context.viewportColumns ?? 80;
-      if (key.ctrl && input === "c") return result(context.draft, cursor, null, { type: "exit" });
+      const editor = normalizeTextEditorState({ text: context.draft, cursor, selectionAnchor });
+      const layout = { viewportColumns };
+      if (key.ctrl && input === "c") return editorResult(editor, { type: "exit" });
       if (key.pageUp || (key.ctrl && input === "u")) {
-        return result(context.draft, cursor, null, { type: "scroll", delta: Math.max(1, Math.floor(context.viewportHeight / 2)) });
+        return editorResult(editor, { type: "scroll", delta: Math.max(1, Math.floor(context.viewportHeight / 2)) });
       }
       if (key.pageDown || (key.ctrl && input === "d")) {
-        return result(context.draft, cursor, null, { type: "scroll", delta: -Math.max(1, Math.floor(context.viewportHeight / 2)) });
+        return editorResult(editor, { type: "scroll", delta: -Math.max(1, Math.floor(context.viewportHeight / 2)) });
       }
       if (key.ctrl && key.upArrow) return historyResult(history.previous(context.draft));
       if (key.ctrl && key.downArrow) return historyResult(history.next(context.draft));
-      if (key.ctrl && input === "a") return navigationResult(context.draft, cursor, 0, key, selectionAnchor);
-      if (key.ctrl && input === "e") return navigationResult(context.draft, cursor, context.draft.length, key, selectionAnchor);
-      if (key.home) return navigationResult(context.draft, cursor, lineStart(context.draft, cursor), key, selectionAnchor);
-      if (key.end) return navigationResult(context.draft, cursor, lineEnd(context.draft, cursor), key, selectionAnchor);
-      if (key.leftArrow) return navigationResult(context.draft, cursor, Math.max(0, cursor - 1), key, selectionAnchor);
-      if (key.rightArrow) return navigationResult(context.draft, cursor, Math.min(context.draft.length, cursor + 1), key, selectionAnchor);
-      if (key.upArrow) return navigationResult(context.draft, cursor, moveCursorVisualRow(context.draft, cursor, viewportColumns, -1), key, selectionAnchor);
-      if (key.downArrow) return navigationResult(context.draft, cursor, moveCursorVisualRow(context.draft, cursor, viewportColumns, 1), key, selectionAnchor);
+      if (key.ctrl && input === "a") return editorResult(selectAllText(editor));
+      const movement = movementFromKey(input, key);
+      if (movement) return editorResult(moveTextEditorCursor(editor, movement, layout, Boolean(key.shift)));
 
       if (context.busy) {
-        return handleBusyInput(input, key, context.draft, cursor, selectionAnchor, history);
+        return handleBusyInput(input, key, editor, history);
       }
-      return handleReadyInput(input, key, context.draft, cursor, selectionAnchor, history);
+      return handleReadyInput(input, key, editor, history);
     },
   };
 }
@@ -85,123 +91,87 @@ export function createWorkbenchInputController(): WorkbenchInputController {
 function handleBusyInput(
   input: string,
   key: WorkbenchInputKey,
-  draft: string,
-  cursor: number,
-  selectionAnchor: number | null,
+  editor: TextEditorState,
   history: ReturnType<typeof createInputHistory>,
 ): WorkbenchInputResult {
-  if (key.escape) return result(draft, cursor, null, { type: "abort" });
+  if (key.escape) return editorResult(editor, { type: "abort" });
   if (key.return) {
-    const command = draft.trim();
+    const command = editor.text.trim();
     history.record(command);
-    if (command === "/abort" || command === "/cancel") return result("", 0, null, { type: "abort" });
-    if (command) return result("", 0, null, { type: "ignored_busy" });
-    return result("", 0, null);
+    if (command === "/abort" || command === "/cancel") return editorResult(emptyEditor(), { type: "abort" });
+    if (command) return editorResult(emptyEditor(), { type: "ignored_busy" });
+    return editorResult(emptyEditor());
   }
   if (key.backspace) {
     history.reset();
-    return deleteBeforeCursor(draft, cursor, selectionAnchor);
+    return editorResult(deleteTextBeforeCursor(editor));
   }
   if (key.delete) {
     history.reset();
-    return cursor >= draft.length ? deleteBeforeCursor(draft, cursor, selectionAnchor) : deleteAtCursor(draft, cursor, selectionAnchor);
+    return editorResult(deleteTextAtCursor(editor));
   }
   if (input && !key.ctrl && !key.meta) {
     history.reset();
-    return insertAtCursor(draft, cursor, input, selectionAnchor);
+    return editorResult(insertText(editor, input));
   }
-  return result(draft, cursor, selectionAnchor);
+  return editorResult(editor);
 }
 
 function handleReadyInput(
   input: string,
   key: WorkbenchInputKey,
-  draft: string,
-  cursor: number,
-  selectionAnchor: number | null,
+  editor: TextEditorState,
   history: ReturnType<typeof createInputHistory>,
 ): WorkbenchInputResult {
   if (key.return) {
     if (key.meta) {
       history.reset();
-      return insertAtCursor(draft, cursor, "\n", selectionAnchor);
+      return editorResult(insertText(editor, "\n"));
     }
-    const prompt = draft.trim();
-    if (!prompt) return result(draft, cursor, selectionAnchor);
+    const prompt = editor.text.trim();
+    if (!prompt) return editorResult(editor);
     history.record(prompt);
-    return result("", 0, null, { type: "submit", input: prompt });
+    return editorResult(emptyEditor(), { type: "submit", input: prompt });
   }
   if (key.backspace) {
     history.reset();
-    return deleteBeforeCursor(draft, cursor, selectionAnchor);
+    return editorResult(deleteTextBeforeCursor(editor));
   }
   if (key.delete) {
     history.reset();
-    return cursor >= draft.length ? deleteBeforeCursor(draft, cursor, selectionAnchor) : deleteAtCursor(draft, cursor, selectionAnchor);
+    return editorResult(deleteTextAtCursor(editor));
   }
   if (input && !key.ctrl && !key.meta) {
     history.reset();
-    return insertAtCursor(draft, cursor, input, selectionAnchor);
+    return editorResult(insertText(editor, input));
   }
-  return result(draft, cursor, selectionAnchor);
+  return editorResult(editor);
 }
 
-function result(draft: string, cursor: number, selectionAnchor: number | null, ...effects: WorkbenchInputEffect[]): WorkbenchInputResult {
-  const nextCursor = clampCursor(cursor, draft);
-  const nextAnchor = selectionAnchor === null || selectionAnchor === nextCursor ? null : clampCursor(selectionAnchor, draft);
-  return { cursor: nextCursor, draft, effects, selectionAnchor: nextAnchor };
+function editorResult(editor: TextEditorState, ...effects: WorkbenchInputEffect[]): WorkbenchInputResult {
+  const state = normalizeTextEditorState(editor);
+  return { cursor: state.cursor, draft: state.text, effects, selectionAnchor: state.selectionAnchor };
 }
 
 function historyResult(draft: string): WorkbenchInputResult {
-  return result(draft, draft.length, null);
-}
-
-function navigationResult(draft: string, cursor: number, nextCursor: number, key: WorkbenchInputKey, selectionAnchor: number | null) {
-  const nextAnchor = key.shift ? selectionAnchor ?? cursor : null;
-  return result(draft, nextCursor, nextAnchor);
-}
-
-function insertAtCursor(draft: string, cursor: number, input: string, selectionAnchor: number | null): WorkbenchInputResult {
-  const selected = selectedRange(cursor, selectionAnchor);
-  if (selected) {
-    const next = `${draft.slice(0, selected.start)}${input}${draft.slice(selected.end)}`;
-    return result(next, selected.start + input.length, null);
-  }
-  const next = `${draft.slice(0, cursor)}${input}${draft.slice(cursor)}`;
-  return result(next, cursor + input.length, null);
-}
-
-function deleteBeforeCursor(draft: string, cursor: number, selectionAnchor: number | null): WorkbenchInputResult {
-  const selected = selectedRange(cursor, selectionAnchor);
-  if (selected) return result(`${draft.slice(0, selected.start)}${draft.slice(selected.end)}`, selected.start, null);
-  if (cursor <= 0) return result(draft, 0, null);
-  return result(`${draft.slice(0, cursor - 1)}${draft.slice(cursor)}`, cursor - 1, null);
-}
-
-function deleteAtCursor(draft: string, cursor: number, selectionAnchor: number | null): WorkbenchInputResult {
-  const selected = selectedRange(cursor, selectionAnchor);
-  if (selected) return result(`${draft.slice(0, selected.start)}${draft.slice(selected.end)}`, selected.start, null);
-  if (cursor >= draft.length) return result(draft, cursor, null);
-  return result(`${draft.slice(0, cursor)}${draft.slice(cursor + 1)}`, cursor, null);
+  return editorResult({ text: draft, cursor: draft.length, selectionAnchor: null });
 }
 
 function clampCursor(cursor: number, draft: string) {
   return Math.max(0, Math.min(draft.length, cursor));
 }
 
-function lineStart(draft: string, cursor: number) {
-  return draft.lastIndexOf("\n", Math.max(0, cursor - 1)) + 1;
+function movementFromKey(input: string, key: WorkbenchInputKey): TextEditorMovement | null {
+  if (key.ctrl && input === "e") return "documentEnd";
+  if (key.home) return "visualLineStart";
+  if (key.end) return "visualLineEnd";
+  if (key.leftArrow) return "left";
+  if (key.rightArrow) return "right";
+  if (key.upArrow) return "visualUp";
+  if (key.downArrow) return "visualDown";
+  return null;
 }
 
-function lineEnd(draft: string, cursor: number) {
-  const end = draft.indexOf("\n", cursor);
-  return end === -1 ? draft.length : end;
-}
-
-function selectedRange(cursor: number, selectionAnchor: number | null) {
-  if (selectionAnchor === null || selectionAnchor === cursor) return null;
-  return {
-    start: Math.min(cursor, selectionAnchor),
-    end: Math.max(cursor, selectionAnchor),
-  };
+function emptyEditor(): TextEditorState {
+  return { text: "", cursor: 0, selectionAnchor: null };
 }

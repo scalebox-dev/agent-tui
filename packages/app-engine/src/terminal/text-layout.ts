@@ -6,7 +6,7 @@ export interface TextSegment {
 
 export function inputLineSegments(draft: string, maxColumns: number): TextSegment[] {
   if (!draft) return [{ text: "", start: 0, end: 0 }];
-  const width = Math.max(8, maxColumns);
+  const width = editorColumns(maxColumns);
   const segments: TextSegment[] = [];
   let offset = 0;
   const hardLines = draft.split("\n");
@@ -28,11 +28,37 @@ export function inputLineSegments(draft: string, maxColumns: number): TextSegmen
 
 export function moveCursorVisualRow(draft: string, cursor: number, viewportColumns: number, delta: -1 | 1) {
   const segments = inputLineSegments(draft, viewportColumns);
-  const index = Math.max(0, segments.findIndex((segment) => cursor >= segment.start && cursor <= segment.end));
+  const index = findCursorSegmentIndex(segments, cursor);
   const current = segments[index];
   if (!current) return cursor;
   const next = segments[index + delta];
   if (!next) return cursor;
   const column = cursor - current.start;
   return Math.min(next.start + column, next.end);
+}
+
+export function moveCursorVisualLineBoundary(draft: string, cursor: number, viewportColumns: number, boundary: "start" | "end") {
+  const segments = inputLineSegments(draft, viewportColumns);
+  const current = segments[findCursorSegmentIndex(segments, cursor)];
+  if (!current) return cursor;
+  return boundary === "start" ? current.start : current.end;
+}
+
+export function findCursorSegmentIndex(segments: readonly TextSegment[], cursor: number) {
+  if (segments.length === 0) return 0;
+  for (let index = 0; index < segments.length; index += 1) {
+    const segment = segments[index];
+    if (!segment) continue;
+    if (cursor < segment.end) return index;
+    if (cursor === segment.end) {
+      const next = segments[index + 1];
+      if (next && next.start === cursor) return index + 1;
+      return index;
+    }
+  }
+  return segments.length - 1;
+}
+
+function editorColumns(maxColumns: number) {
+  return Math.max(8, Math.floor(maxColumns));
 }

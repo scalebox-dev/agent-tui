@@ -2276,8 +2276,8 @@ test("workbench input controller maps navigation and busy abort policy", () => {
     selectionAnchor: null,
   });
   assert.deepEqual(controller.handle("", { delete: true }, { busy: false, cursor: 4, draft: "abcd", viewportHeight: 11 }), {
-    cursor: 3,
-    draft: "abc",
+    cursor: 4,
+    draft: "abcd",
     effects: [],
     selectionAnchor: null,
   });
@@ -2314,6 +2314,43 @@ test("workbench input controller supports visual-row movement and selected delet
   });
   assert.equal(wrapped.cursor, 10);
 
+  const visualHome = controller.handle("", { home: true }, {
+    busy: false,
+    cursor: 10,
+    draft: "abcdefghijklmnop",
+    viewportColumns: 8,
+    viewportHeight: 10,
+  });
+  assert.equal(visualHome.cursor, 8);
+
+  const visualEnd = controller.handle("", { end: true }, {
+    busy: false,
+    cursor: 10,
+    draft: "abcdefghijklmnop",
+    viewportColumns: 8,
+    viewportHeight: 10,
+  });
+  assert.equal(visualEnd.cursor, 16);
+
+  const boundaryHome = controller.handle("", { home: true }, {
+    busy: false,
+    cursor: 8,
+    draft: "abcdefghijklmnop",
+    viewportColumns: 8,
+    viewportHeight: 10,
+  });
+  assert.equal(boundaryHome.cursor, 8);
+
+  const shiftedHome = controller.handle("", { home: true, shift: true }, {
+    busy: false,
+    cursor: 12,
+    draft: "abcdefghijklmnop",
+    viewportColumns: 8,
+    viewportHeight: 10,
+  });
+  assert.equal(shiftedHome.cursor, 8);
+  assert.equal(shiftedHome.selectionAnchor, 12);
+
   const selected = controller.handle("", { rightArrow: true, shift: true }, {
     busy: false,
     cursor: 2,
@@ -2333,6 +2370,26 @@ test("workbench input controller supports visual-row movement and selected delet
   assert.equal(deleted.draft, "abd");
   assert.equal(deleted.cursor, 2);
   assert.equal(deleted.selectionAnchor, null);
+
+  const allSelected = controller.handle("a", { ctrl: true }, {
+    busy: false,
+    cursor: 2,
+    draft: "clear me",
+    viewportHeight: 10,
+  });
+  assert.equal(allSelected.cursor, 8);
+  assert.equal(allSelected.selectionAnchor, 0);
+
+  const cleared = controller.handle("", { backspace: true }, {
+    busy: false,
+    cursor: allSelected.cursor,
+    draft: allSelected.draft,
+    selectionAnchor: allSelected.selectionAnchor,
+    viewportHeight: 10,
+  });
+  assert.equal(cleared.draft, "");
+  assert.equal(cleared.cursor, 0);
+  assert.equal(cleared.selectionAnchor, null);
 });
 
 test("workbench transcript formatter produces readable plain text", () => {

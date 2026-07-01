@@ -5,7 +5,7 @@ import {
   spinnerGlyph,
   type TranscriptViewModel,
 } from "./view-model.js";
-import { inputLineSegments } from "./text-layout.js";
+import { findCursorSegmentIndex, inputLineSegments } from "./text-layout.js";
 
 export interface WorkbenchRendererViewport {
   rows: number;
@@ -200,7 +200,7 @@ function inputViewportText(draft: string, cursor: number, maxColumns: number) {
 
 function buildInputView(draft: string, cursor: number, selectionAnchor: number | null, maxColumns: number, maxRows: number) {
   const segments = inputLineSegments(draft, maxColumns);
-  const cursorSegmentIndex = Math.max(0, segments.findIndex((segment) => cursor >= segment.start && cursor <= segment.end));
+  const cursorSegmentIndex = findCursorSegmentIndex(segments, cursor);
   const height = Math.min(maxRows, Math.max(1, segments.length));
   const start = clamp(cursorSegmentIndex - Math.floor(height / 2), 0, Math.max(0, segments.length - height));
   const visible = segments.slice(start, start + height);
