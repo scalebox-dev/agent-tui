@@ -2292,6 +2292,19 @@ test("workbench input controller edits, submits, and recalls drafts", () => {
   assert.equal(cursor, 0);
 });
 
+test("workbench input controller normalizes pasted carriage returns", () => {
+  const controller = createWorkbenchInputController();
+  const result = controller.handle("Detected At: 2026-07-01\r\nAccount detected\rTail", {}, {
+    busy: false,
+    draft: "",
+    viewportHeight: 10,
+  });
+
+  assert.equal(result.draft, "Detected At: 2026-07-01\nAccount detected\nTail");
+  assert.equal(result.cursor, result.draft.length);
+  assert.equal(result.selectionAnchor, null);
+});
+
 test("workbench input controller maps navigation and busy abort policy", () => {
   const controller = createWorkbenchInputController();
 

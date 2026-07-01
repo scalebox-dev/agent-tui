@@ -53,13 +53,14 @@ export function selectAllText(state: TextEditorState): TextEditorState {
 
 export function insertText(state: TextEditorState, input: string): TextEditorState {
   const current = normalizeTextEditorState(state);
+  const normalizedInput = normalizeInsertedText(input);
   const selected = selectedRange(current);
   if (selected) {
-    const text = `${current.text.slice(0, selected.start)}${input}${current.text.slice(selected.end)}`;
-    return normalizeTextEditorState({ text, cursor: selected.start + input.length, selectionAnchor: null });
+    const text = `${current.text.slice(0, selected.start)}${normalizedInput}${current.text.slice(selected.end)}`;
+    return normalizeTextEditorState({ text, cursor: selected.start + normalizedInput.length, selectionAnchor: null });
   }
-  const text = `${current.text.slice(0, current.cursor)}${input}${current.text.slice(current.cursor)}`;
-  return normalizeTextEditorState({ text, cursor: current.cursor + input.length, selectionAnchor: null });
+  const text = `${current.text.slice(0, current.cursor)}${normalizedInput}${current.text.slice(current.cursor)}`;
+  return normalizeTextEditorState({ text, cursor: current.cursor + normalizedInput.length, selectionAnchor: null });
 }
 
 export function deleteTextBeforeCursor(state: TextEditorState): TextEditorState {
@@ -127,4 +128,8 @@ function selectedRange(state: TextEditorState) {
 
 function clampCursor(cursor: number, text: string) {
   return Math.max(0, Math.min(text.length, cursor));
+}
+
+function normalizeInsertedText(input: string) {
+  return input.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 }
