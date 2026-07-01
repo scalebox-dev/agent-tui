@@ -13,7 +13,10 @@ import {
   type WorkbenchAuthController,
   type WorkbenchAuthGateController,
 } from "@agent-api/app-engine/workbench";
-import { buildWorkbenchRenderModel } from "@agent-api/app-engine/terminal";
+import {
+  buildWorkbenchRenderModel,
+  createWorkbenchInputController,
+} from "@agent-api/app-engine/terminal";
 import { InkAuthGate, InkWorkbenchScreen } from "./components.js";
 
 export function ChatApp({ options }: { options: AgentRunOptions }) {
@@ -166,8 +169,11 @@ function WorkbenchApp({
     });
   }
   const agentEngine = agentEngineRef.current;
-  const session = agentEngine.session;
-  const inputController = session.input;
+  const inputControllerRef = useRef<ReturnType<typeof createWorkbenchInputController> | null>(null);
+  if (!inputControllerRef.current) {
+    inputControllerRef.current = createWorkbenchInputController();
+  }
+  const inputController = inputControllerRef.current;
   const state = useSyncExternalStore(agentEngine.subscribe, agentEngine.snapshot, agentEngine.snapshot);
   const dispatch = agentEngine.dispatch;
   const renderModel = useMemo(

@@ -1248,7 +1248,6 @@ test("workbench lifecycle update notice helper ignores unavailable updates", () 
 
 test("workbench session constructs shared engine and controllers", () => {
   const injectedConversation = stubConversationController();
-  const injectedInput = createWorkbenchInputController();
   const injectedLocal = stubLocalController();
   const injectedSettings = stubSettingsController();
   const session = createWorkbenchSession({
@@ -1268,7 +1267,6 @@ test("workbench session constructs shared engine and controllers", () => {
     },
     services: {
       conversation: injectedConversation,
-      input: injectedInput,
       local: injectedLocal,
       settings: injectedSettings,
     },
@@ -1278,10 +1276,8 @@ test("workbench session constructs shared engine and controllers", () => {
   assert.equal(sessionState(session).contextEnabled, true);
   session.engine.dispatch({ type: "message.add", role: "user", text: "hello" });
   assert.equal(sessionState(session).messages.at(-1).text, "hello");
-  assert.equal(typeof session.input.handle, "function");
   assert.equal(typeof session.lifecycle.initialPrompt, "function");
   assert.equal(session.conversation, injectedConversation);
-  assert.equal(session.input, injectedInput);
   assert.equal(session.local, injectedLocal);
   assert.equal(session.settings, injectedSettings);
   assert.equal(typeof session.runtime.runEffects, "function");

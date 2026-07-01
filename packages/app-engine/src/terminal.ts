@@ -1,20 +1,20 @@
-export type { WorkbenchInputController } from "./workbench/input-controller.js";
-export { createWorkbenchInputController } from "./workbench/input-controller.js";
-export type { WorkbenchRenderModel } from "./workbench/render-model.js";
+export type { WorkbenchInputController } from "./terminal/input-controller.js";
+export { createWorkbenchInputController } from "./terminal/input-controller.js";
+export type { WorkbenchRenderModel } from "./terminal/render-model.js";
 export {
   buildWorkbenchRenderModel,
   busySpinner,
   pendingLocalLabel,
-} from "./workbench/render-model.js";
+} from "./terminal/render-model.js";
 export type {
   TranscriptLine,
   TranscriptSpan,
   TranscriptViewModel,
-} from "./workbench/view-model.js";
+} from "./terminal/view-model.js";
 export {
+  activityColor,
   buildTranscriptLines,
   buildTranscriptViewModel,
   elapsedDots,
   spinnerGlyph,
-} from "./workbench/view-model.js";
-export { activityColor } from "./workbench/state.js";
+} from "./terminal/view-model.js";

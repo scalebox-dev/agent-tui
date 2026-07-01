@@ -4,7 +4,6 @@ import type { WorkbenchState } from "./state.js";
 import type { WorkbenchAuthController } from "./auth-controller.js";
 import { createWorkbenchConversationController, type WorkbenchConversationController } from "./conversation-controller.js";
 import { createWorkbenchEngine, type WorkbenchEngine } from "./engine.js";
-import { createWorkbenchInputController, type WorkbenchInputController } from "./input-controller.js";
 import { createWorkbenchLifecycleController, type WorkbenchLifecycleController } from "./lifecycle-controller.js";
 import { createWorkbenchLocalController, type WorkbenchLocalController } from "./local-controller.js";
 import { createWorkbenchRuntimeController, type WorkbenchRuntimeController } from "./runtime-controller.js";
@@ -14,7 +13,6 @@ import { createWorkbenchTurnController, type WorkbenchTurnController } from "./t
 export interface WorkbenchSession {
   conversation: WorkbenchConversationController;
   engine: WorkbenchEngine;
-  input: WorkbenchInputController;
   lifecycle: WorkbenchLifecycleController;
   local: WorkbenchLocalController;
   runtime: WorkbenchRuntimeController;
@@ -57,7 +55,6 @@ export function createWorkbenchSession(options: WorkbenchSessionOptions): Workbe
   return {
     conversation: options.services?.conversation ?? createWorkbenchConversationController(),
     engine,
-    input: options.services?.input ?? createWorkbenchInputController(),
     lifecycle: options.services?.lifecycle ?? createWorkbenchLifecycleController({ authController: options.authController }),
     local,
     runtime,

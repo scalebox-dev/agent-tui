@@ -1,4 +1,4 @@
-import type { RenderMode, WorkbenchMessage } from "./state.js";
+import type { ActivityLevel, RenderMode, WorkbenchMessage } from "../workbench/state.js";
 
 export type TranscriptLine = {
   id: string;
@@ -94,6 +94,13 @@ export function spinnerGlyph(frame: number) {
 
 export function elapsedDots(frame: number) {
   return ".".repeat((Math.floor(frame / 4) % 3) + 1);
+}
+
+export function activityColor(level: ActivityLevel) {
+  if (level === "success") return "green";
+  if (level === "warning") return "yellow";
+  if (level === "error") return "red";
+  return "gray";
 }
 
 function rawTranscriptLines(text: string, width: number): Omit<TranscriptLine, "id">[] {

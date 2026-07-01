@@ -596,13 +596,6 @@ export function formatBytes(bytes: number) {
   return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
 }
 
-export function activityColor(level: ActivityLevel) {
-  if (level === "success") return "green";
-  if (level === "warning") return "yellow";
-  if (level === "error") return "red";
-  return "gray";
-}
-
 function newMessage(role: WorkbenchRole, text: string, id = randomId()): WorkbenchMessage {
   return { id, role, text };
 }

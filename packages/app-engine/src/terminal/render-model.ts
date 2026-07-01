@@ -1,4 +1,4 @@
-import type { RenderMode, WorkbenchState } from "./state.js";
+import type { RenderMode, WorkbenchState } from "../workbench/state.js";
 import {
   buildTranscriptViewModel,
   elapsedDots,
