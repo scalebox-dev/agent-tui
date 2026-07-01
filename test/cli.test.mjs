@@ -1814,6 +1814,26 @@ test("workbench render model wraps CJK input by terminal display width", () => {
   assert.equal(model.input.lines.at(-1).hasCursor, true);
 });
 
+test("workbench render model normalizes tabs in mixed-width input rows", () => {
+  const draft = "- 政策会进行变化。按照 Tiering 来进行 - 2025 年，大方向：- Industry Play：叠：一个 Industry 有 3~5 家 Partner 作为 Shortlist\t\t今年增加一个教育行业，做行业方案落地";
+  const model = buildWorkbenchRenderModel({
+    cursor: draft.length,
+    draft,
+    profileName: "default",
+    spinnerFrame: 0,
+    state: createInitialWorkbenchState({}),
+    transcriptOffset: 0,
+    viewport: { rows: 30, columns: 80 },
+    workdirFallback: "/fallback",
+  });
+
+  assert.ok(model.input.lines.length > 1);
+  assert.ok(model.input.lines.every((line) => !line.beforeCursor.includes("\t")));
+  assert.ok(model.input.lines.every((line) => !line.cursorText.includes("\t")));
+  assert.ok(model.input.lines.every((line) => !line.afterCursor.includes("\t")));
+  assert.ok(model.input.lines.every((line) => line.spans.every((span) => !span.text.includes("\t"))));
+});
+
 test("workbench render model bounds multiline editor height around the cursor", () => {
   const state = createInitialWorkbenchState({});
   const draft = Array.from({ length: 10 }, (_, index) => `line-${index}`).join("\n");

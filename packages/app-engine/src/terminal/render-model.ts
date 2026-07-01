@@ -180,9 +180,9 @@ function buildInputView(draft: string, cursor: number, selectionAnchor: number |
     const prefix = start > 0 && index === 0 ? "⋮ " : "";
     const suffix = start + height < segments.length && index === visible.length - 1 ? " ⋮" : "";
     return {
-      beforeCursor: `${prefix}${hasCursor ? segment.text.slice(0, localCursor) : segment.text}`,
-      cursorText: hasCursor ? charAt(segment.text, localCursor) || " " : "",
-      afterCursor: `${hasCursor ? segment.text.slice(localCursor + charLengthAt(segment.text, localCursor)) : ""}${suffix}`,
+      beforeCursor: `${prefix}${displayText(hasCursor ? segment.text.slice(0, localCursor) : segment.text)}`,
+      cursorText: hasCursor ? displayChar(charAt(segment.text, localCursor)) || " " : "",
+      afterCursor: `${hasCursor ? displayText(segment.text.slice(localCursor + charLengthAt(segment.text, localCursor))) : ""}${suffix}`,
       hasCursor,
       spans: inputLineSpans(segment, {
         cursor: hasCursor ? cursor : null,
@@ -227,7 +227,7 @@ function inputLineSpans(segment: { end: number; start: number; text: string }, o
       const absolute = segment.start + index;
       const selected = Boolean(options.selection && absolute >= options.selection.start && absolute < options.selection.end);
       const underCursor = options.cursor === absolute;
-      spans.push({ text, inverse: selected || underCursor });
+      spans.push({ text: displayChar(text), inverse: selected || underCursor });
       index += text.length || 1;
     }
     if (options.cursor === segment.end) {
@@ -246,6 +246,23 @@ function charAt(text: string, index: number) {
 function charLengthAt(text: string, index: number) {
   const char = charAt(text, index);
   return char.length;
+}
+
+function displayText(text: string) {
+  let result = "";
+  for (let index = 0; index < text.length;) {
+    const char = charAt(text, index);
+    result += displayChar(char);
+    index += char.length || 1;
+  }
+  return result;
+}
+
+function displayChar(char: string) {
+  if (char === "\t") return "    ";
+  const codePoint = char.codePointAt(0) ?? 0;
+  if (codePoint < 32 || (codePoint >= 0x7f && codePoint < 0xa0)) return "";
+  return char;
 }
 
 function coalesceSpans(spans: WorkbenchInputSpan[]) {

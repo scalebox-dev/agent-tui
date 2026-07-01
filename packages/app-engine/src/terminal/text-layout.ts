@@ -110,6 +110,7 @@ function indexAtDisplayColumn(text: string, targetColumn: number) {
 function displayWidth(char: string) {
   const codePoint = char.codePointAt(0) ?? 0;
   if (codePoint === 0) return 0;
+  if (char === "\t") return 4;
   if (codePoint < 32 || (codePoint >= 0x7f && codePoint < 0xa0)) return 0;
   return isWideCodePoint(codePoint) ? 2 : 1;
 }
