@@ -221,15 +221,16 @@ function inputLineSpans(segment: { end: number; start: number; text: string }, o
   if (options.prefix) spans.push({ text: options.prefix });
   if (!segment.text && options.cursor !== null) {
     spans.push({ text: " ", inverse: true });
-  }
-  for (let index = 0; index < segment.text.length; index += 1) {
-    const absolute = segment.start + index;
-    const selected = Boolean(options.selection && absolute >= options.selection.start && absolute < options.selection.end);
-    const underCursor = options.cursor === absolute;
-    spans.push({ text: segment.text[index] ?? "", inverse: selected || underCursor });
-  }
-  if (options.cursor === segment.end) {
-    spans.push({ text: " ", inverse: true });
+  } else {
+    for (let index = 0; index < segment.text.length; index += 1) {
+      const absolute = segment.start + index;
+      const selected = Boolean(options.selection && absolute >= options.selection.start && absolute < options.selection.end);
+      const underCursor = options.cursor === absolute;
+      spans.push({ text: segment.text[index] ?? "", inverse: selected || underCursor });
+    }
+    if (options.cursor === segment.end) {
+      spans.push({ text: " ", inverse: true });
+    }
   }
   if (options.suffix) spans.push({ text: options.suffix });
   return coalesceSpans(spans);

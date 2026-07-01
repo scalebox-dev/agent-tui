@@ -1730,6 +1730,27 @@ test("workbench render model keeps input editable while busy", () => {
   assert.equal(model.input.lines[0].cursorText, "u");
 });
 
+test("workbench render model renders a single empty editor cursor", () => {
+  const model = buildWorkbenchRenderModel({
+    cursor: 0,
+    draft: "",
+    profileName: "default",
+    spinnerFrame: 0,
+    state: createInitialWorkbenchState({}),
+    transcriptOffset: 0,
+    viewport: { rows: 30, columns: 80 },
+    workdirFallback: "/fallback",
+  });
+
+  assert.deepEqual(model.input.lines, [{
+    afterCursor: "",
+    beforeCursor: "",
+    cursorText: " ",
+    hasCursor: true,
+    spans: [{ text: " ", inverse: true }],
+  }]);
+});
+
 test("workbench render model adapts to narrow terminal sizes", () => {
   const state = createInitialWorkbenchState({});
   const model = buildWorkbenchRenderModel({
@@ -2330,17 +2351,12 @@ test("workbench input controller edits, submits, and recalls drafts", () => {
   result = apply(controller.handle("", { backspace: true }, context()));
   assert.equal(draft, "hi");
   assert.equal(cursor, 1);
-  result = apply(controller.handle("", { delete: true }, context()));
-  assert.equal(draft, "h");
-  assert.equal(cursor, 1);
   result = apply(controller.handle("", { home: true }, context()));
   assert.equal(cursor, 0);
   result = apply(controller.handle("s", {}, context()));
-  assert.equal(draft, "sh");
-  result = apply(controller.handle("", { end: true }, context()));
-  assert.equal(cursor, 2);
-  result = apply(controller.handle("i", {}, context()));
   assert.equal(draft, "shi");
+  result = apply(controller.handle("", { end: true }, context()));
+  assert.equal(cursor, 3);
 
   result = apply(controller.handle("", { meta: true, return: true }, context()));
   assert.equal(draft, "shi\n");
@@ -2426,8 +2442,8 @@ test("workbench input controller maps navigation and busy abort policy", () => {
     selectionAnchor: null,
   });
   assert.deepEqual(controller.handle("", { delete: true }, { busy: false, cursor: 4, draft: "abcd", viewportHeight: 11 }), {
-    cursor: 4,
-    draft: "abcd",
+    cursor: 3,
+    draft: "abc",
     effects: [],
     selectionAnchor: null,
   });
@@ -2546,6 +2562,15 @@ test("workbench input controller supports visual-row movement and selected delet
   assert.equal(cleared.draft, "");
   assert.equal(cleared.cursor, 0);
   assert.equal(cleared.selectionAnchor, null);
+
+  const ctrlHDeleted = controller.handle("h", { ctrl: true }, {
+    busy: false,
+    cursor: 2,
+    draft: "abcd",
+    viewportHeight: 10,
+  });
+  assert.equal(ctrlHDeleted.draft, "acd");
+  assert.equal(ctrlHDeleted.cursor, 1);
 });
 
 test("workbench transcript formatter produces readable plain text", () => {

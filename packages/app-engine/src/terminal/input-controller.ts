@@ -1,6 +1,5 @@
 import { createInputHistory } from "../workbench/state.js";
 import {
-  deleteTextAtCursor,
   deleteTextBeforeCursor,
   insertText,
   moveTextEditorCursor,
@@ -103,13 +102,9 @@ function handleBusyInput(
     if (command) return editorResult(emptyEditor(), { type: "ignored_busy" });
     return editorResult(emptyEditor());
   }
-  if (key.backspace) {
+  if (isBackwardDelete(input, key)) {
     history.reset();
     return editorResult(deleteTextBeforeCursor(editor));
-  }
-  if (key.delete) {
-    history.reset();
-    return editorResult(deleteTextAtCursor(editor));
   }
   if (input && !key.ctrl && !key.meta) {
     history.reset();
@@ -134,13 +129,9 @@ function handleReadyInput(
     history.record(prompt);
     return editorResult(emptyEditor(), { type: "submit", input: prompt });
   }
-  if (key.backspace) {
+  if (isBackwardDelete(input, key)) {
     history.reset();
     return editorResult(deleteTextBeforeCursor(editor));
-  }
-  if (key.delete) {
-    history.reset();
-    return editorResult(deleteTextAtCursor(editor));
   }
   if (input && !key.ctrl && !key.meta) {
     history.reset();
@@ -179,4 +170,8 @@ function emptyEditor(): TextEditorState {
 
 function isResumeCommand(command: string) {
   return command === "/resume" || command.startsWith("/resume ");
+}
+
+function isBackwardDelete(input: string, key: WorkbenchInputKey) {
+  return Boolean(key.backspace || key.delete || (key.ctrl && input === "h"));
 }
