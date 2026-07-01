@@ -2717,6 +2717,30 @@ test("workbench view model wraps wide final-answer text by display columns", () 
   assert.ok(contentLines.every((line) => line.text.length <= 10));
 });
 
+test("workbench view model normalizes tabs in mixed-width transcript rows", () => {
+  const view = buildTranscriptViewModel({
+    activeAssistantMessageId: null,
+    busy: false,
+    messages: [
+      {
+        id: "assistant-mixed",
+        role: "assistant",
+        text: "- 政策会进行变化。按照 Tiering 来进行 - 2025 年，大方向：- Industry Play：叠：一个 Industry 有 3~5 家 Partner 作为 Shortlist\t\t今年增加一个教育行业，做行业方案落地",
+      },
+    ],
+    offset: 0,
+    renderMode: "markdown",
+    spinnerFrame: 0,
+    viewportHeight: 20,
+    width: 40,
+  });
+
+  const contentLines = view.lines.filter((line) => line.id.startsWith("assistant-mixed:line:"));
+  assert.ok(contentLines.length > 1);
+  assert.ok(contentLines.every((line) => !line.text.includes("\t")));
+  assert.ok(contentLines.every((line) => (line.spans ?? []).every((span) => !span.text.includes("\t"))));
+});
+
 test("workbench view model slices transcript viewport and renders waiting state", () => {
   const view = buildTranscriptViewModel({
     activeAssistantMessageId: "assistant",

@@ -105,14 +105,15 @@ export function activityColor(level: ActivityLevel) {
 
 function rawTranscriptLines(text: string, width: number): Omit<TranscriptLine, "id">[] {
   const source = text ? text.split(/\r?\n/) : [""];
-  return source.flatMap((line) => wrapTranscriptText(line, width).map((text) => ({ text })));
+  return source.flatMap((line) => wrapTranscriptText(normalizeTerminalText(line), width).map((text) => ({ text })));
 }
 
 function markdownTranscriptLines(text: string, width: number): Omit<TranscriptLine, "id">[] {
   const source = text ? text.split(/\r?\n/) : [""];
   const lines: Omit<TranscriptLine, "id">[] = [];
   let inCode = false;
-  for (const sourceLine of source) {
+  for (const rawSourceLine of source) {
+    const sourceLine = normalizeTerminalText(rawSourceLine);
     if (/^\s*```/.test(sourceLine)) {
       inCode = !inCode;
       lines.push(...wrapTranscriptText(sourceLine, width).map((line) => ({ text: line, color: "gray" })));
@@ -256,9 +257,24 @@ function charWidth(char: string) {
   if (!char) return 0;
   const code = char.codePointAt(0) ?? 0;
   if (code === 0) return 0;
+  if (char === "\t") return 4;
   if (code < 32 || (code >= 0x7f && code < 0xa0)) return 0;
   if (/^\p{Mark}$/u.test(char)) return 0;
   return isWideCodePoint(code) ? 2 : 1;
+}
+
+function normalizeTerminalText(text: string) {
+  let output = "";
+  for (const char of Array.from(text)) {
+    if (char === "\t") {
+      output += "    ";
+      continue;
+    }
+    const code = char.codePointAt(0) ?? 0;
+    if (code < 32 || (code >= 0x7f && code < 0xa0)) continue;
+    output += char;
+  }
+  return output;
 }
 
 function isWideCodePoint(code: number) {
