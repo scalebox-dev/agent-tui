@@ -195,5 +195,5 @@ function isCopyCommand(command: string) {
 }
 
 function isBackwardDelete(input: string, key: WorkbenchInputKey) {
-  return Boolean(key.backspace || (key.ctrl && input === "h"));
+  return Boolean(key.backspace || input === "\x7f" || input === "\b" || input === "\x08" || (key.ctrl && input === "h"));
 }

@@ -37,7 +37,7 @@ import {
   writeClipboard,
   type ClipboardCapabilities,
 } from "../clipboard.js";
-import { disableMouseReporting, enableMouseReporting, parseMouseEvent } from "../mouse.js";
+import { disableMouseReporting, parseMouseEvent } from "../mouse.js";
 
 export function ChatApp({ options }: { options: AgentRunOptions }) {
   return <AuthenticatedChatApp options={options} />;
@@ -67,7 +67,7 @@ function AuthenticatedChatApp({ options }: { options: AgentRunOptions }) {
 
   useEffect(() => {
     hideTerminalCursor(stdout);
-    enableTerminalMouse(stdout);
+    disableTerminalMouse(stdout);
     return () => {
       disableTerminalMouse(stdout);
       showTerminalCursor(stdout);
@@ -160,10 +160,6 @@ function hideTerminalCursor(stdout: NodeJS.WriteStream) {
 
 function showTerminalCursor(stdout: NodeJS.WriteStream) {
   if (stdout.isTTY) stdout.write("\x1b[?25h");
-}
-
-function enableTerminalMouse(stdout: NodeJS.WriteStream) {
-  if (stdout.isTTY) stdout.write(enableMouseReporting);
 }
 
 function disableTerminalMouse(stdout: NodeJS.WriteStream) {
