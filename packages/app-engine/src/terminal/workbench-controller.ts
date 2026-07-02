@@ -553,40 +553,40 @@ function handleMouseEvent(
     return handleRightClick(state, target);
   }
   if (event.button !== "left") return stateResult(state);
-  if (event.kind === "motion") return stateResult(extendMouseDrag(state, renderModel, target));
+  if (event.kind === "motion") return stateResult(state);
   switch (target.panel) {
     case "header":
-      return stateResult(startHeaderMouseDrag(setHeaderCursor(
+      return stateResult(setHeaderCursor(
         { ...state, focusedPanel: "header", headerSelectionAnchor: null },
         renderModel,
         target.line,
         target.column,
         false,
-      )));
+      ));
     case "activity":
-      return stateResult(startActivityMouseDrag(setActivityCursor(
+      return stateResult(setActivityCursor(
         { ...state, focusedPanel: "activity", activitySelectionAnchor: null },
         renderModel,
         target.line,
         target.column,
         false,
-      )));
+      ));
     case "input":
       return stateResult({
         ...state,
         cursor: target.inputCursor,
         focusedPanel: "input",
-        mouseDragPanel: "input",
-        selectionAnchor: target.inputCursor,
+        mouseDragPanel: null,
+        selectionAnchor: null,
       });
     case "transcript":
-      return stateResult(startTranscriptMouseDrag(setTranscriptCursor(
+      return stateResult(setTranscriptCursor(
         { ...state, focusedPanel: "transcript", transcriptSelectionAnchor: null },
         renderModel,
         target.line,
         target.column,
         false,
-      )));
+      ));
   }
 }
 
@@ -620,54 +620,6 @@ function rightClickCopyIfSelected(
     return stateResult(state, { type: "copy", target });
   }
   return stateResult(state);
-}
-
-function startActivityMouseDrag(state: WorkbenchTerminalState): WorkbenchTerminalState {
-  return {
-    ...state,
-    activitySelectionAnchor: state.activityCursor,
-    mouseDragPanel: "activity",
-  };
-}
-
-function startHeaderMouseDrag(state: WorkbenchTerminalState): WorkbenchTerminalState {
-  return {
-    ...state,
-    headerSelectionAnchor: state.headerCursor,
-    mouseDragPanel: "header",
-  };
-}
-
-function startTranscriptMouseDrag(state: WorkbenchTerminalState): WorkbenchTerminalState {
-  return {
-    ...state,
-    mouseDragPanel: "transcript",
-    transcriptSelectionAnchor: state.transcriptCursor,
-  };
-}
-
-function extendMouseDrag(
-  state: WorkbenchTerminalState,
-  renderModel: WorkbenchRenderModel,
-  target: MouseTarget,
-): WorkbenchTerminalState {
-  if (state.mouseDragPanel === "activity" && target.panel === "activity") {
-    return setActivityCursor(state, renderModel, target.line, target.column, true);
-  }
-  if (state.mouseDragPanel === "input" && target.panel === "input") {
-    return {
-      ...state,
-      cursor: target.inputCursor,
-      selectionAnchor: state.selectionAnchor ?? state.cursor,
-    };
-  }
-  if (state.mouseDragPanel === "header" && target.panel === "header") {
-    return setHeaderCursor(state, renderModel, target.line, target.column, true);
-  }
-  if (state.mouseDragPanel === "transcript" && target.panel === "transcript") {
-    return setTranscriptCursor(state, renderModel, target.line, target.column, true);
-  }
-  return state;
 }
 
 function endMouseDrag(state: WorkbenchTerminalState): WorkbenchTerminalState {

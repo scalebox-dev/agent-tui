@@ -1804,19 +1804,14 @@ test("workbench terminal controller routes focused panel operations", () => {
 
   applyMouse({ button: "left", column: 5, kind: "press", row: 2 });
   assert.equal(terminalState.focusedPanel, "header");
-  assert.equal(terminalState.mouseDragPanel, "header");
+  assert.equal(terminalState.mouseDragPanel, null);
   assert.deepEqual(terminalState.headerCursor, { column: 1, line: 0 });
   applyMouse({ button: "left", column: 9, kind: "motion", row: 2 });
-  assert.deepEqual(selectedPanelRange(terminalState.headerSelectionAnchor, terminalState.headerCursor), {
-    start: { column: 1, line: 0 },
-    end: { column: 5, line: 0 },
-  });
+  assert.equal(terminalState.headerSelectionAnchor, null);
   applyMouse({ button: "left", column: 9, kind: "release", row: 2 });
   assert.equal(terminalState.mouseDragPanel, null);
-  assert.deepEqual(selectedPanelRange(terminalState.headerSelectionAnchor, terminalState.headerCursor), {
-    start: { column: 1, line: 0 },
-    end: { column: 5, line: 0 },
-  });
+  assert.equal(terminalState.headerSelectionAnchor, null);
+  apply("", { rightArrow: true, shift: true });
   const copiedHeader = apply("c", { meta: true });
   assert.deepEqual(copiedHeader.effects, [{ type: "copy", target: "header" }]);
   const rightClickCopyHeader = applyMouse({ button: "right", column: 5, kind: "press", row: 2 });
@@ -1827,19 +1822,13 @@ test("workbench terminal controller routes focused panel operations", () => {
 
   applyMouse({ button: "left", column: 5, kind: "press", row: 7 });
   assert.equal(terminalState.focusedPanel, "transcript");
-  assert.equal(terminalState.mouseDragPanel, "transcript");
+  assert.equal(terminalState.mouseDragPanel, null);
   assert.deepEqual(terminalState.transcriptCursor, { column: 1, line: 0 });
   applyMouse({ button: "left", column: 9, kind: "motion", row: 7 });
-  assert.deepEqual(selectedPanelRange(terminalState.transcriptSelectionAnchor, terminalState.transcriptCursor), {
-    start: { column: 1, line: 0 },
-    end: { column: 5, line: 0 },
-  });
+  assert.equal(terminalState.transcriptSelectionAnchor, null);
   applyMouse({ button: "left", column: 9, kind: "release", row: 7 });
   assert.equal(terminalState.mouseDragPanel, null);
-  assert.deepEqual(selectedPanelRange(terminalState.transcriptSelectionAnchor, terminalState.transcriptCursor), {
-    start: { column: 1, line: 0 },
-    end: { column: 5, line: 0 },
-  });
+  assert.equal(terminalState.transcriptSelectionAnchor, null);
 
   const beforeWheel = terminalState.transcriptOffset;
   applyMouse({ button: "wheel_up", column: 5, kind: "wheel", row: 7 });
@@ -1849,13 +1838,13 @@ test("workbench terminal controller routes focused panel operations", () => {
   applyMouse({ button: "left", column: 5, kind: "press", row: 22 });
   assert.equal(terminalState.focusedPanel, "input");
   assert.equal(terminalState.cursor, 1);
-  assert.equal(terminalState.mouseDragPanel, "input");
+  assert.equal(terminalState.mouseDragPanel, null);
   applyMouse({ button: "left", column: 7, kind: "motion", row: 22 });
-  assert.equal(terminalState.cursor, 3);
-  assert.equal(terminalState.selectionAnchor, 1);
+  assert.equal(terminalState.cursor, 1);
+  assert.equal(terminalState.selectionAnchor, null);
   applyMouse({ button: "left", column: 7, kind: "release", row: 22 });
   assert.equal(terminalState.mouseDragPanel, null);
-  assert.equal(terminalState.selectionAnchor, 1);
+  assert.equal(terminalState.selectionAnchor, null);
   const rightClickPaste = applyMouse({ button: "right", column: 7, kind: "press", row: 22 });
   assert.deepEqual(rightClickPaste.effects, [{ type: "paste" }]);
   terminalState = { ...terminalState, cursor: 0, draft: "", selectionAnchor: null };

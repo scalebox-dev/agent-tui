@@ -1,6 +1,6 @@
 import type { WorkbenchTerminalMouseEvent } from "@agent-api/app-engine/terminal";
 
-export const enableMouseReporting = "\x1b[?1000h\x1b[?1002h\x1b[?1006h";
+export const enableMouseReporting = "\x1b[?1000h\x1b[?1006h";
 export const disableMouseReporting = "\x1b[?1000l\x1b[?1002l\x1b[?1006l";
 
 export function parseMouseEvent(input: string): WorkbenchTerminalMouseEvent | null {
