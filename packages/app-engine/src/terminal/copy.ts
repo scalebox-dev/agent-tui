@@ -7,17 +7,21 @@ export type { WorkbenchCopyTarget };
 export function copyTextFromRenderModel(renderModel: WorkbenchRenderModel, target: WorkbenchCopyTarget): string {
   switch (target) {
     case "activity":
-      return renderModel.visibleActivities
-        .map((activity) => `${new Date(activity.timestamp).toLocaleTimeString()} ${activity.text}`)
-        .join("\n")
-        .trimEnd();
+      return copyTextFromActivities(renderModel.visibleActivities);
     case "transcript":
-      return transcriptLinesText(renderModel.transcript.lines);
+      return copyTextFromTranscriptLines(renderModel.transcript.lines);
     case "page":
-      return transcriptLinesText(renderModel.transcript.visibleLines);
+      return copyTextFromTranscriptLines(renderModel.transcript.visibleLines);
   }
 }
 
-function transcriptLinesText(lines: readonly TranscriptLine[]) {
+export function copyTextFromTranscriptLines(lines: readonly TranscriptLine[]) {
   return lines.map((line) => line.text).join("\n").trimEnd();
+}
+
+export function copyTextFromActivities(activities: readonly WorkbenchRenderModel["visibleActivities"][number][]) {
+  return activities
+    .map((activity) => `${new Date(activity.timestamp).toLocaleTimeString()} ${activity.text}`)
+    .join("\n")
+    .trimEnd();
 }

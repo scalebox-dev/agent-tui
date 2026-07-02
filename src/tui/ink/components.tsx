@@ -13,17 +13,28 @@ import {
 } from "@agent-api/app-engine/workbench";
 
 export function InkWorkbenchScreen({
+  activityCursorIndex,
+  activitySelection,
+  focusedPanel,
   renderModel,
   spinnerFrame,
+  transcriptCursorLine,
+  transcriptSelection,
 }: {
+  activityCursorIndex: number;
+  activitySelection: { end: number; start: number } | null;
+  focusedPanel: "activity" | "input" | "transcript";
   renderModel: WorkbenchRenderModel;
   spinnerFrame: number;
+  transcriptCursorLine: number;
+  transcriptSelection: { end: number; start: number } | null;
 }) {
   const activity = (
-    <Box flexDirection="column" width={renderModel.layout === "wide" ? "28%" : "100%"} height={renderModel.activityHeight} borderStyle="single" borderColor="gray" paddingX={1}>
+    <Box flexDirection="column" width={renderModel.layout === "wide" ? "28%" : "100%"} height={renderModel.activityHeight} borderStyle="single" borderColor={focusedPanel === "activity" ? "cyan" : "gray"} paddingX={1}>
       <Text bold wrap="truncate">Activity</Text>
-      {renderModel.visibleActivities.map((activity) => (
-        <Text color={activityColor(activity.level)} key={activity.id} wrap="truncate">
+      {renderModel.visibleActivities.map((activity, index) => (
+        <Text color={activityColor(activity.level)} inverse={isSelected(index, activitySelection)} key={activity.id} wrap="truncate">
+          {focusedPanel === "activity" && index === activityCursorIndex ? "› " : "  "}
           {new Date(activity.timestamp).toLocaleTimeString()} {activity.text}
         </Text>
       ))}
@@ -47,14 +58,19 @@ export function InkWorkbenchScreen({
       />
       <Box height={renderModel.viewportHeight} flexDirection={renderModel.layout === "wide" ? "row" : "column"}>
         <Box flexDirection="column" width={renderModel.layout === "wide" ? "72%" : "100%"} paddingRight={renderModel.layout === "wide" ? 1 : 0}>
-          {renderModel.transcript.visibleLines.map((line) => (
-            <TranscriptText key={line.id} line={line} />
+          {renderModel.transcript.visibleLines.map((line, index) => (
+            <TranscriptText
+              cursor={focusedPanel === "transcript" && renderModel.transcript.startLine + index - 1 === transcriptCursorLine}
+              key={line.id}
+              line={line}
+              selected={isSelected(renderModel.transcript.startLine + index - 1, transcriptSelection)}
+            />
           ))}
           {renderModel.transcript.visibleLines.length === 0 && <Text color="gray">No transcript lines.</Text>}
         </Box>
         {activity}
       </Box>
-      <Box borderStyle="single" borderColor={renderModel.input.busy ? "yellow" : "green"} paddingX={1} flexDirection="column">
+      <Box borderStyle="single" borderColor={focusedPanel === "input" ? renderModel.input.busy ? "yellow" : "green" : "gray"} paddingX={1} flexDirection="column">
         <Box>
           {renderModel.input.fullAccess && (
             <Text color="red" bold inverse>
@@ -86,17 +102,17 @@ export function InkWorkbenchScreen({
   );
 }
 
-function TranscriptText({ line }: { line: TranscriptLine }) {
-  const anchor = line.anchor ? <Text color="cyan">▸ </Text> : null;
+function TranscriptText({ cursor, line, selected }: { cursor: boolean; line: TranscriptLine; selected: boolean }) {
+  const anchor = cursor ? <Text color="cyan">› </Text> : line.anchor ? <Text color="cyan">▸ </Text> : <Text>  </Text>;
   if (!line.spans || line.spans.length === 0) {
     return (
-      <Text bold={line.bold} color={line.color} inverse={line.inverse} wrap="truncate">
+      <Text bold={line.bold || cursor} color={line.color} inverse={selected || line.inverse} wrap="truncate">
         {anchor}{line.text || " "}
       </Text>
     );
   }
   return (
-    <Text bold={line.bold} color={line.color} inverse={line.inverse} wrap="truncate">
+    <Text bold={line.bold || cursor} color={line.color} inverse={selected || line.inverse} wrap="truncate">
       {anchor}
       {line.spans.map((span, index) => (
         <Text bold={span.bold} color={span.color} inverse={span.inverse} key={index}>
@@ -105,6 +121,10 @@ function TranscriptText({ line }: { line: TranscriptLine }) {
       ))}
     </Text>
   );
+}
+
+function isSelected(index: number, selection: { end: number; start: number } | null) {
+  return Boolean(selection && index >= selection.start && index <= selection.end);
 }
 
 export function InkAuthGate({ cursorVisible, state }: { cursorVisible: boolean; state: AuthGateState }) {

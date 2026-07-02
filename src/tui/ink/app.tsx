@@ -16,11 +16,26 @@ import {
 } from "@agent-api/app-engine/workbench";
 import {
   buildWorkbenchRenderModel,
+  copyTextFromActivities,
   copyTextFromRenderModel,
+  copyTextFromTranscriptLines,
   createWorkbenchInputController,
 } from "@agent-api/app-engine/terminal";
 import { InkAuthGate, InkWorkbenchScreen } from "./components.js";
 import { writeClipboard } from "../clipboard.js";
+
+type FocusedPanel = "input" | "transcript" | "activity";
+type PanelKey = {
+  ctrl?: boolean;
+  downArrow?: boolean;
+  end?: boolean;
+  escape?: boolean;
+  home?: boolean;
+  pageDown?: boolean;
+  pageUp?: boolean;
+  shift?: boolean;
+  upArrow?: boolean;
+};
 
 export function ChatApp({ options }: { options: AgentRunOptions }) {
   return <AuthenticatedChatApp options={options} />;
@@ -173,6 +188,11 @@ function WorkbenchApp({
   const [selectionAnchor, setSelectionAnchor] = useState<number | null>(null);
   const [spinnerFrame, setSpinnerFrame] = useState(0);
   const [transcriptOffset, setTranscriptOffset] = useState(0);
+  const [focusedPanel, setFocusedPanel] = useState<FocusedPanel>("input");
+  const [transcriptCursorLine, setTranscriptCursorLine] = useState(0);
+  const [transcriptSelectionAnchor, setTranscriptSelectionAnchor] = useState<number | null>(null);
+  const [activityCursorIndex, setActivityCursorIndex] = useState(0);
+  const [activitySelectionAnchor, setActivitySelectionAnchor] = useState<number | null>(null);
   const agentEngineRef = useRef<AgentEngineApp | null>(null);
   if (!agentEngineRef.current) {
     agentEngineRef.current = createAgentEngine({
@@ -216,6 +236,16 @@ function WorkbenchApp({
     setTranscriptOffset((offset) => Math.min(offset, renderModel.transcript.maxOffset));
   }, [renderModel.transcript.maxOffset]);
 
+  useEffect(() => {
+    setTranscriptCursorLine((line) => clamp(line, 0, Math.max(0, renderModel.transcript.totalLines - 1)));
+    setTranscriptSelectionAnchor((line) => line == null ? null : clamp(line, 0, Math.max(0, renderModel.transcript.totalLines - 1)));
+  }, [renderModel.transcript.totalLines]);
+
+  useEffect(() => {
+    setActivityCursorIndex((index) => clamp(index, 0, Math.max(0, renderModel.visibleActivities.length - 1)));
+    setActivitySelectionAnchor((index) => index == null ? null : clamp(index, 0, Math.max(0, renderModel.visibleActivities.length - 1)));
+  }, [renderModel.visibleActivities.length]);
+
   function scrollTranscript(delta: number) {
     setTranscriptOffset((offset) => Math.max(0, Math.min(renderModel.transcript.maxOffset, offset + delta)));
   }
@@ -238,7 +268,7 @@ function WorkbenchApp({
   }
 
   async function copyPanelText(target: "activity" | "page" | "transcript") {
-    const text = copyTextFromRenderModel(renderModel, target);
+    const text = copyTextForTarget(target);
     if (!text) {
       dispatch({ type: "activity.add", level: "warning", text: `Nothing to copy: ${target}` });
       return;
@@ -253,6 +283,150 @@ function WorkbenchApp({
     } catch (error) {
       dispatch({ type: "activity.add", level: "error", text: `Copy failed: ${userFacingError(error)}` });
     }
+  }
+
+  function copyTextForTarget(target: "activity" | "page" | "transcript") {
+    if (target === "transcript" || target === "page") {
+      const selection = selectedRange(transcriptSelectionAnchor, transcriptCursorLine);
+      if (selection) return copyTextFromTranscriptLines(renderModel.transcript.lines.slice(selection.start, selection.end + 1));
+    }
+    if (target === "activity") {
+      const selection = selectedRange(activitySelectionAnchor, activityCursorIndex);
+      if (selection) return copyTextFromActivities(renderModel.visibleActivities.slice(selection.start, selection.end + 1));
+    }
+    return copyTextFromRenderModel(renderModel, target);
+  }
+
+  function cycleFocusedPanel(direction: 1 | -1) {
+    const panels: FocusedPanel[] = ["input", "transcript", "activity"];
+    const index = panels.indexOf(focusedPanel);
+    const next = panels[(index + direction + panels.length) % panels.length] ?? "input";
+    setFocusedPanel(next);
+    if (next !== "input") setSelectionAnchor(null);
+    if (next === "transcript") {
+      const preferred = renderModel.transcript.endLine ? renderModel.transcript.endLine - 1 : 0;
+      setTranscriptCursorLine((line) => clamp(line || preferred, 0, Math.max(0, renderModel.transcript.totalLines - 1)));
+    }
+    if (next === "activity") {
+      setActivityCursorIndex((index) => clamp(index, 0, Math.max(0, renderModel.visibleActivities.length - 1)));
+    }
+  }
+
+  function handlePanelInput(input: string, key: PanelKey) {
+    if (key.escape) {
+      if (focusedPanel === "transcript" && transcriptSelectionAnchor !== null) {
+        setTranscriptSelectionAnchor(null);
+        return;
+      }
+      if (focusedPanel === "activity" && activitySelectionAnchor !== null) {
+        setActivitySelectionAnchor(null);
+        return;
+      }
+      setFocusedPanel("input");
+      return;
+    }
+    if (key.ctrl && input === "a") {
+      if (focusedPanel === "transcript") selectTranscriptAll();
+      if (focusedPanel === "activity") selectActivityAll();
+      return;
+    }
+    if ((key.ctrl && input === "c") || input === "c") {
+      void copyPanelText(focusedPanel === "activity" ? "activity" : "page");
+      return;
+    }
+    if (focusedPanel === "transcript") {
+      handleTranscriptPanelInput(key);
+      return;
+    }
+    if (focusedPanel === "activity") {
+      handleActivityPanelInput(key);
+    }
+  }
+
+  function handleTranscriptPanelInput(key: PanelKey) {
+    const pageDelta = Math.max(1, renderModel.transcript.viewportHeight - 1);
+    if (key.pageUp) {
+      scrollTranscript(pageDelta);
+      moveTranscriptCursor(-pageDelta, Boolean(key.shift));
+      return;
+    }
+    if (key.pageDown) {
+      scrollTranscript(-pageDelta);
+      moveTranscriptCursor(pageDelta, Boolean(key.shift));
+      return;
+    }
+    if (key.home) {
+      setTranscriptCursor(0, Boolean(key.shift));
+      scrollTranscriptToTop();
+      return;
+    }
+    if (key.end) {
+      setTranscriptCursor(Math.max(0, renderModel.transcript.totalLines - 1), Boolean(key.shift));
+      scrollTranscriptToBottom();
+      return;
+    }
+    if (key.upArrow) moveTranscriptCursor(-1, Boolean(key.shift));
+    if (key.downArrow) moveTranscriptCursor(1, Boolean(key.shift));
+  }
+
+  function handleActivityPanelInput(key: PanelKey) {
+    if (key.home) {
+      setActivityCursor(0, Boolean(key.shift));
+      return;
+    }
+    if (key.end) {
+      setActivityCursor(Math.max(0, renderModel.visibleActivities.length - 1), Boolean(key.shift));
+      return;
+    }
+    if (key.upArrow) moveActivityCursor(-1, Boolean(key.shift));
+    if (key.downArrow) moveActivityCursor(1, Boolean(key.shift));
+  }
+
+  function moveTranscriptCursor(delta: number, selecting: boolean) {
+    setTranscriptCursor(transcriptCursorLine + delta, selecting);
+  }
+
+  function setTranscriptCursor(next: number, selecting: boolean) {
+    const current = transcriptCursorLine;
+    const clamped = clamp(next, 0, Math.max(0, renderModel.transcript.totalLines - 1));
+    setTranscriptCursorLine(clamped);
+    setTranscriptSelectionAnchor(selecting ? transcriptSelectionAnchor ?? current : null);
+    revealTranscriptLine(clamped);
+  }
+
+  function moveActivityCursor(delta: number, selecting: boolean) {
+    setActivityCursor(activityCursorIndex + delta, selecting);
+  }
+
+  function setActivityCursor(next: number, selecting: boolean) {
+    const current = activityCursorIndex;
+    const clamped = clamp(next, 0, Math.max(0, renderModel.visibleActivities.length - 1));
+    setActivityCursorIndex(clamped);
+    setActivitySelectionAnchor(selecting ? activitySelectionAnchor ?? current : null);
+  }
+
+  function selectTranscriptAll() {
+    if (renderModel.transcript.totalLines === 0) return;
+    setTranscriptSelectionAnchor(0);
+    setTranscriptCursorLine(renderModel.transcript.totalLines - 1);
+    revealTranscriptLine(renderModel.transcript.totalLines - 1);
+  }
+
+  function selectActivityAll() {
+    if (renderModel.visibleActivities.length === 0) return;
+    setActivitySelectionAnchor(0);
+    setActivityCursorIndex(renderModel.visibleActivities.length - 1);
+  }
+
+  function revealTranscriptLine(line: number) {
+    const total = renderModel.transcript.totalLines;
+    const height = renderModel.transcript.viewportHeight;
+    const currentStart = Math.max(0, total - height - transcriptOffset);
+    const currentEnd = currentStart + height - 1;
+    if (line >= currentStart && line <= currentEnd) return;
+    const nextStart = line < currentStart ? line : line - height + 1;
+    const nextOffset = total - height - nextStart;
+    setTranscriptOffset(clamp(nextOffset, 0, renderModel.transcript.maxOffset));
   }
 
   useEffect(() => {
@@ -289,6 +463,14 @@ function WorkbenchApp({
   }, [agentEngine, options.profile]);
 
   useInput((input, key) => {
+    if (key.tab) {
+      cycleFocusedPanel(key.shift ? -1 : 1);
+      return;
+    }
+    if (focusedPanel !== "input") {
+      handlePanelInput(input, key);
+      return;
+    }
     const result = inputController.handle(input, key, {
       busy: state.busy,
       cursor,
@@ -347,7 +529,17 @@ function WorkbenchApp({
     return () => agentEngine.dispose();
   }, [agentEngine]);
 
-  return <InkWorkbenchScreen renderModel={renderModel} spinnerFrame={spinnerFrame} />;
+  return (
+    <InkWorkbenchScreen
+      activityCursorIndex={activityCursorIndex}
+      activitySelection={selectedRange(activitySelectionAnchor, activityCursorIndex)}
+      focusedPanel={focusedPanel}
+      renderModel={renderModel}
+      spinnerFrame={spinnerFrame}
+      transcriptCursorLine={transcriptCursorLine}
+      transcriptSelection={selectedRange(transcriptSelectionAnchor, transcriptCursorLine)}
+    />
+  );
 }
 
 function useTerminalSize(stdout: NodeJS.WriteStream) {
@@ -381,4 +573,16 @@ function useTerminalSize(stdout: NodeJS.WriteStream) {
 function userFacingError(error: unknown) {
   if (error instanceof Error) return error.message;
   return String(error);
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(value, max));
+}
+
+function selectedRange(anchor: number | null, cursor: number) {
+  if (anchor === null || anchor === cursor) return null;
+  return {
+    start: Math.min(anchor, cursor),
+    end: Math.max(anchor, cursor),
+  };
 }

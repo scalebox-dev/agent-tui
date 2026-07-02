@@ -1,7 +1,11 @@
 export type { WorkbenchInputController } from "./terminal/input-controller.js";
 export { createWorkbenchInputController } from "./terminal/input-controller.js";
 export type { WorkbenchCopyTarget } from "./terminal/copy.js";
-export { copyTextFromRenderModel } from "./terminal/copy.js";
+export {
+  copyTextFromActivities,
+  copyTextFromRenderModel,
+  copyTextFromTranscriptLines,
+} from "./terminal/copy.js";
 export type { WorkbenchRenderModel } from "./terminal/render-model.js";
 export {
   buildWorkbenchRenderModel,
