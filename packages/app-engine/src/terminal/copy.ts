@@ -9,6 +9,8 @@ export function copyTextFromRenderModel(renderModel: WorkbenchRenderModel, targe
   switch (target) {
     case "activity":
       return copyTextFromActivities(renderModel.visibleActivities);
+    case "header":
+      return copyTextFromHeaderLines(renderModel.header.lines);
     case "transcript":
       return copyTextFromTranscriptLines(renderModel.transcript.lines);
     case "page":
@@ -25,6 +27,17 @@ export function copyTextFromActivities(activities: readonly WorkbenchRenderModel
     .map((activity) => `${new Date(activity.timestamp).toLocaleTimeString()} ${activity.text}`)
     .join("\n")
     .trimEnd();
+}
+
+export function copyTextFromHeaderLines(lines: readonly string[]) {
+  return lines.join("\n").trimEnd();
+}
+
+export function copyTextFromHeaderSelection(
+  lines: readonly string[],
+  selection: WorkbenchPanelSelection,
+) {
+  return copySelectedLines(lines, selection);
 }
 
 export function copyTextFromTranscriptSelection(

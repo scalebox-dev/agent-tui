@@ -18,6 +18,8 @@ export function InkWorkbenchScreen({
   activityCursor,
   activitySelection,
   focusedPanel,
+  headerCursor,
+  headerSelection,
   renderModel,
   spinnerFrame,
   transcriptCursor,
@@ -26,13 +28,23 @@ export function InkWorkbenchScreen({
   activityCursor: WorkbenchPanelPosition;
   activitySelection: WorkbenchPanelSelection | null;
   focusedPanel: "activity" | "header" | "input" | "transcript";
+  headerCursor: WorkbenchPanelPosition;
+  headerSelection: WorkbenchPanelSelection | null;
   renderModel: WorkbenchRenderModel;
   spinnerFrame: number;
   transcriptCursor: WorkbenchPanelPosition;
   transcriptSelection: WorkbenchPanelSelection | null;
 }) {
   const activity = (
-    <Box flexDirection="column" width={renderModel.layout === "wide" ? "28%" : "100%"} height={renderModel.activityHeight} borderStyle="single" borderColor={panelBorderColor(focusedPanel === "activity")} paddingX={1}>
+    <Box
+      borderColor={panelBorderColor(focusedPanel === "activity")}
+      borderStyle="round"
+      flexDirection="column"
+      height={renderModel.activityHeight}
+      marginLeft={renderModel.layout === "wide" ? 1 : 0}
+      paddingX={1}
+      width={renderModel.layout === "wide" ? "27%" : "100%"}
+    >
       <Text bold color={focusedPanel === "activity" ? "cyan" : undefined} wrap="truncate">Activity</Text>
       {renderModel.visibleActivities.map((activity, index) => {
         const cursor = focusedPanel === "activity" && index === activityCursor.line;
@@ -54,11 +66,14 @@ export function InkWorkbenchScreen({
     <Box flexDirection="column">
       <Header
         focused={focusedPanel === "header"}
+        cursor={headerCursor}
+        selection={headerSelection}
         contextEnabled={renderModel.header.contextEnabled}
         conversation={renderModel.header.conversation}
         conversationId={renderModel.header.conversationId}
         conversationPreviousResponseId={renderModel.header.conversationPreviousResponseId}
         conversationStatus={renderModel.header.conversationStatus}
+        lines={renderModel.header.lines}
         model={renderModel.header.model}
         accessMode={renderModel.header.accessMode}
         pendingLocalLabel={renderModel.header.pendingLocalLabel}
@@ -69,7 +84,7 @@ export function InkWorkbenchScreen({
       />
       <Box height={renderModel.viewportHeight} flexDirection={renderModel.layout === "wide" ? "row" : "column"}>
         <Box
-          borderStyle="single"
+          borderStyle="round"
           borderColor={panelBorderColor(focusedPanel === "transcript")}
           flexDirection="column"
           height={renderModel.transcript.viewportHeight + 2}
@@ -91,7 +106,7 @@ export function InkWorkbenchScreen({
         </Box>
         {activity}
       </Box>
-      <Box borderStyle="single" borderColor={panelBorderColor(focusedPanel === "input")} paddingX={1} flexDirection="column">
+      <Box borderStyle="round" borderColor={panelBorderColor(focusedPanel === "input")} paddingX={1} flexDirection="column">
         <Box>
           {renderModel.input.fullAccess && (
             <Text color="red" bold inverse>
@@ -300,7 +315,7 @@ export function InkAuthGate({ cursorVisible, state }: { cursorVisible: boolean; 
 
 function AuthPrompt({ cursorVisible, label, value }: { cursorVisible: boolean; label: string; value: string }) {
   return (
-    <Box borderStyle="single" borderColor="green" paddingX={1} marginTop={1}>
+    <Box borderStyle="round" borderColor="green" paddingX={1} marginTop={1}>
       <Text color="green">{label}: </Text>
       <Text>
         {value}
@@ -311,12 +326,15 @@ function AuthPrompt({ cursorVisible, label, value }: { cursorVisible: boolean; l
 }
 
 function Header({
+  cursor,
   focused,
+  selection,
   contextEnabled,
   conversation,
   conversationId,
   conversationPreviousResponseId,
   conversationStatus,
+  lines,
   accessMode,
   model,
   pendingLocalLabel,
@@ -325,12 +343,15 @@ function Header({
   renderMode,
   workdir,
 }: {
+  cursor: WorkbenchPanelPosition;
   focused: boolean;
+  selection: WorkbenchPanelSelection | null;
   contextEnabled: boolean;
   conversation: string;
   conversationId: string;
   conversationPreviousResponseId: string;
   conversationStatus: "fresh" | "continued" | "unknown";
+  lines: string[];
   accessMode: string;
   model: string;
   pendingLocalLabel: string;
@@ -339,18 +360,29 @@ function Header({
   renderMode: RenderMode;
   workdir: string;
 }) {
+  const renderedLines = [
+    { bold: true, text: lines[0] ?? "Agent API Workbench" },
+    { color: "gray", text: lines[1] ?? `profile=${profile} conversation=${conversation} id=${conversationId} preset=${preset} model=${model}` },
+    {
+      color: conversationStatus === "continued" ? "yellow" : conversationStatus === "fresh" ? "green" : "gray",
+      text: lines[2] ?? `conversation_state=${conversationStatus}${conversationPreviousResponseId ? ` previous=${conversationPreviousResponseId}` : ""}`,
+    },
+    { color: "gray", text: lines[3] ?? `workdir=${workdir} access=${accessMode} local_tools=${contextEnabled ? "on" : "off"} render=${renderMode} pending=${pendingLocalLabel}` },
+  ];
   return (
     <Box borderStyle="round" borderColor={panelBorderColor(focused)} paddingX={1} flexDirection="column">
-      <Text bold color={focused ? "cyan" : undefined}>Agent API Workbench</Text>
-      <Text color="gray" wrap="truncate">
-        profile={profile} conversation={conversation} id={conversationId} preset={preset} model={model}
-      </Text>
-      <Text color={conversationStatus === "continued" ? "yellow" : conversationStatus === "fresh" ? "green" : "gray"} wrap="truncate">
-        conversation_state={conversationStatus}{conversationPreviousResponseId ? ` previous=${conversationPreviousResponseId}` : ""}
-      </Text>
-      <Text color="gray" wrap="truncate">
-        workdir={workdir} access={accessMode} local_tools={contextEnabled ? "on" : "off"} render={renderMode} pending={pendingLocalLabel}
-      </Text>
+      {renderedLines.map((line, index) => (
+        <Text bold={line.bold || (focused && index === cursor.line)} color={focused && index === 0 ? "cyan" : line.color} key={index} wrap="truncate">
+          {focused && index === cursor.line ? <Text color="cyan">› </Text> : <Text>  </Text>}
+          <SelectableText
+            bold={line.bold}
+            color={line.color}
+            cursorColumn={focused && index === cursor.line && !selection ? cursor.column : null}
+            selection={lineSelection(index, selection)}
+            text={line.text}
+          />
+        </Text>
+      ))}
     </Box>
   );
 }

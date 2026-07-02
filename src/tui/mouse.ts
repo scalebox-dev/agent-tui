@@ -14,16 +14,23 @@ export function parseMouseEvent(input: string): WorkbenchTerminalMouseEvent | nu
   if (code === 65) return { button: "wheel_down", column, kind: "wheel", row };
   if ((code & 32) === 32) {
     return {
-      button: (code & 3) === 0 ? "left" : "unknown",
+      button: mouseButton(code),
       column,
       kind: "motion",
       row,
     };
   }
   return {
-    button: (code & 3) === 0 ? "left" : "unknown",
+    button: mouseButton(code),
     column,
     kind: match[4] === "m" ? "release" : "press",
     row,
   };
+}
+
+function mouseButton(code: number): WorkbenchTerminalMouseEvent["button"] {
+  const button = code & 3;
+  if (button === 0) return "left";
+  if (button === 2) return "right";
+  return "unknown";
 }

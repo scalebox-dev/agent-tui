@@ -763,6 +763,7 @@ test("workbench command parser and reducer handle local workflow state", () => {
   assert.deepEqual(parseWorkbenchCommand("/copy visible"), { kind: "copy", target: "page" });
   assert.deepEqual(parseWorkbenchCommand("/copy transcript"), { kind: "copy", target: "transcript" });
   assert.deepEqual(parseWorkbenchCommand("/copy all"), { kind: "copy", target: "transcript" });
+  assert.deepEqual(parseWorkbenchCommand("/copy header"), { kind: "copy", target: "header" });
   assert.deepEqual(parseWorkbenchCommand("/copy activity"), { kind: "copy", target: "activity" });
   assert.deepEqual(parseWorkbenchCommand("/copy activities"), { kind: "copy", target: "activity" });
   assert.deepEqual(parseWorkbenchCommand("/copy sidebar"), { kind: "invalid", command: "copy sidebar" });
@@ -1803,7 +1804,26 @@ test("workbench terminal controller routes focused panel operations", () => {
 
   applyMouse({ button: "left", column: 5, kind: "press", row: 2 });
   assert.equal(terminalState.focusedPanel, "header");
+  assert.equal(terminalState.mouseDragPanel, "header");
+  assert.deepEqual(terminalState.headerCursor, { column: 1, line: 0 });
+  applyMouse({ button: "left", column: 9, kind: "motion", row: 2 });
+  assert.deepEqual(selectedPanelRange(terminalState.headerSelectionAnchor, terminalState.headerCursor), {
+    start: { column: 1, line: 0 },
+    end: { column: 5, line: 0 },
+  });
+  applyMouse({ button: "left", column: 9, kind: "release", row: 2 });
   assert.equal(terminalState.mouseDragPanel, null);
+  assert.deepEqual(selectedPanelRange(terminalState.headerSelectionAnchor, terminalState.headerCursor), {
+    start: { column: 1, line: 0 },
+    end: { column: 5, line: 0 },
+  });
+  const copiedHeader = apply("c", { meta: true });
+  assert.deepEqual(copiedHeader.effects, [{ type: "copy", target: "header" }]);
+  const rightClickCopyHeader = applyMouse({ button: "right", column: 5, kind: "press", row: 2 });
+  assert.deepEqual(rightClickCopyHeader.effects, [{ type: "copy", target: "header" }]);
+  terminalState = { ...terminalState, headerSelectionAnchor: null };
+  const inactiveRightClickCopyHeader = applyMouse({ button: "right", column: 5, kind: "press", row: 2 });
+  assert.deepEqual(inactiveRightClickCopyHeader.effects, []);
 
   applyMouse({ button: "left", column: 5, kind: "press", row: 7 });
   assert.equal(terminalState.focusedPanel, "transcript");
@@ -1836,6 +1856,8 @@ test("workbench terminal controller routes focused panel operations", () => {
   applyMouse({ button: "left", column: 7, kind: "release", row: 22 });
   assert.equal(terminalState.mouseDragPanel, null);
   assert.equal(terminalState.selectionAnchor, 1);
+  const rightClickPaste = applyMouse({ button: "right", column: 7, kind: "press", row: 22 });
+  assert.deepEqual(rightClickPaste.effects, [{ type: "paste" }]);
   terminalState = { ...terminalState, cursor: 0, draft: "", selectionAnchor: null };
 
   apply("", { tab: true });
@@ -1862,8 +1884,15 @@ test("workbench terminal controller routes focused panel operations", () => {
     end: { column: rendered.transcript.lines[lastLine].text.length, line: lastLine },
   });
 
-  const copied = apply("c", {});
+  const plainC = apply("c", {});
+  assert.deepEqual(plainC.effects, []);
+  const copied = apply("c", { meta: true });
   assert.deepEqual(copied.effects, [{ type: "copy", target: "page" }]);
+  const beforePasteShortcut = terminalState;
+  const pasted = apply("v", { meta: true });
+  assert.equal(terminalState.focusedPanel, "input");
+  assert.deepEqual(pasted.effects, [{ type: "paste" }]);
+  terminalState = beforePasteShortcut;
 
   apply("", { tab: true, shift: true });
   assert.equal(terminalState.focusedPanel, "header");
@@ -1892,6 +1921,12 @@ test("tui mouse parser accepts Ink-delivered SGR reports without ESC", () => {
     button: "wheel_up",
     column: 51,
     kind: "wheel",
+    row: 41,
+  });
+  assert.deepEqual(parseMouseEvent("[<2;51;41M"), {
+    button: "right",
+    column: 51,
+    kind: "press",
     row: 41,
   });
 });
@@ -2667,7 +2702,7 @@ test("workbench input controller maps navigation and busy abort policy", () => {
     effects: [],
     selectionAnchor: null,
   });
-  assert.deepEqual(controller.handle("", { delete: true }, { busy: false, cursor: 4, draft: "abcd", viewportHeight: 11 }), {
+  assert.deepEqual(controller.handle("", { backspace: true }, { busy: false, cursor: 4, draft: "abcd", viewportHeight: 11 }), {
     cursor: 3,
     draft: "abc",
     effects: [],
@@ -2760,25 +2795,25 @@ test("workbench input controller supports visual-row movement and selected delet
 
   const shiftedUp = controller.handle("", { upArrow: true, shift: true }, {
     busy: false,
-    cursor: 12,
+    cursor: 14,
     draft: "line1\nline2\nline3",
-    viewportColumns: 80,
+    viewportColumns: 6,
     viewportHeight: 10,
   });
-  assert.equal(shiftedUp.cursor, 12);
-  assert.equal(shiftedUp.selectionAnchor, null);
-  assert.deepEqual(shiftedUp.effects, [{ type: "scroll", delta: 1 }]);
+  assert.equal(shiftedUp.cursor, 8);
+  assert.equal(shiftedUp.selectionAnchor, 14);
+  assert.deepEqual(shiftedUp.effects, []);
 
   const shiftedDown = controller.handle("", { downArrow: true, shift: true }, {
     busy: false,
     cursor: 2,
     draft: "line1\nline2\nline3",
-    viewportColumns: 80,
+    viewportColumns: 6,
     viewportHeight: 10,
   });
-  assert.equal(shiftedDown.cursor, 2);
-  assert.equal(shiftedDown.selectionAnchor, null);
-  assert.deepEqual(shiftedDown.effects, [{ type: "scroll", delta: -1 }]);
+  assert.equal(shiftedDown.cursor, 8);
+  assert.equal(shiftedDown.selectionAnchor, 2);
+  assert.deepEqual(shiftedDown.effects, []);
 
   const metaFallback = controller.handle("", { downArrow: true, meta: true }, {
     busy: false,
@@ -2809,6 +2844,16 @@ test("workbench input controller supports visual-row movement and selected delet
   assert.equal(deleted.draft, "abd");
   assert.equal(deleted.cursor, 2);
   assert.equal(deleted.selectionAnchor, null);
+
+  const forwardDeleted = controller.handle("", { delete: true }, {
+    busy: false,
+    cursor: 1,
+    draft: "abcd",
+    viewportHeight: 10,
+  });
+  assert.equal(forwardDeleted.draft, "acd");
+  assert.equal(forwardDeleted.cursor, 1);
+  assert.equal(forwardDeleted.selectionAnchor, null);
 
   const allSelected = controller.handle("a", { ctrl: true }, {
     busy: false,

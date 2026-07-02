@@ -18,6 +18,7 @@ import {
   buildWorkbenchRenderModel,
   copyTextFromActivitySelection,
   copyTextFromActivities,
+  copyTextFromHeaderSelection,
   copyTextFromRenderModel,
   copyTextFromTranscriptSelection,
   copyTextFromTranscriptLines,
@@ -29,7 +30,13 @@ import {
   type WorkbenchTerminalState,
 } from "@agent-api/app-engine/terminal";
 import { InkAuthGate, InkWorkbenchScreen } from "./components.js";
-import { writeClipboard } from "../clipboard.js";
+import {
+  detectClipboardCapabilities,
+  formatClipboardCapabilities,
+  readClipboard,
+  writeClipboard,
+  type ClipboardCapabilities,
+} from "../clipboard.js";
 import { disableMouseReporting, enableMouseReporting, parseMouseEvent } from "../mouse.js";
 
 export function ChatApp({ options }: { options: AgentRunOptions }) {
@@ -191,6 +198,7 @@ function WorkbenchApp({
   const app = useApp();
   const { stdout } = useStdout();
   const terminalSize = useTerminalSize(stdout);
+  const [clipboardCapabilities, setClipboardCapabilities] = useState<ClipboardCapabilities | null>(null);
   const [terminalState, setTerminalState] = useState<WorkbenchTerminalState>(() => initialWorkbenchTerminalState());
   const [spinnerFrame, setSpinnerFrame] = useState(0);
   const agentEngineRef = useRef<AgentEngineApp | null>(null);
@@ -248,28 +256,57 @@ function WorkbenchApp({
     await agentEngine.submit(input);
   }
 
-  async function copyPanelText(target: "activity" | "page" | "transcript") {
+  async function copyPanelText(target: "activity" | "header" | "page" | "transcript") {
     const text = copyTextForTarget(target);
     if (!text) {
       dispatch({ type: "activity.add", level: "warning", text: `Nothing to copy: ${target}` });
       return;
     }
     try {
-      const copied = await writeClipboard(text, stdout);
+      const copied = await writeClipboard(text, stdout, clipboardCapabilities);
       dispatch({
         type: "activity.add",
-        level: copied ? "success" : "warning",
-        text: copied ? `Copied ${target} to clipboard` : `Clipboard unavailable for ${target}`,
+        level: copied.reliable ? "success" : copied.ok ? "warning" : "warning",
+        text: copied.reliable
+          ? `Copied ${target} to clipboard`
+          : copied.ok
+            ? `Sent ${target} copy request to terminal clipboard (OSC52); your terminal may block it`
+            : `Clipboard unavailable for ${target}`,
       });
     } catch (error) {
       dispatch({ type: "activity.add", level: "error", text: `Copy failed: ${userFacingError(error)}` });
     }
   }
 
-  function copyTextForTarget(target: "activity" | "page" | "transcript") {
+  async function pasteClipboardIntoInput() {
+    try {
+      const text = await readClipboard(clipboardCapabilities);
+      if (!text) {
+        dispatch({ type: "activity.add", level: "warning", text: "Clipboard paste unavailable" });
+        return;
+      }
+      setTerminalState((current) => {
+        const normalized = normalizeTerminalState({ ...current, focusedPanel: "input" }, renderModel);
+        const result = terminalController.handle(text, {}, normalized, {
+          busy: state.busy,
+          renderModel,
+        });
+        return result.state;
+      });
+      dispatch({ type: "activity.add", level: "success", text: "Pasted clipboard into input" });
+    } catch (error) {
+      dispatch({ type: "activity.add", level: "error", text: `Paste failed: ${userFacingError(error)}` });
+    }
+  }
+
+  function copyTextForTarget(target: "activity" | "header" | "page" | "transcript") {
     if (target === "transcript" || target === "page") {
       const selection = selectedPanelRange(terminalState.transcriptSelectionAnchor, terminalState.transcriptCursor);
       if (selection) return copyTextFromTranscriptSelection(renderModel.transcript.lines, selection);
+    }
+    if (target === "header") {
+      const selection = selectedPanelRange(terminalState.headerSelectionAnchor, terminalState.headerCursor);
+      if (selection) return copyTextFromHeaderSelection(renderModel.header.lines, selection);
     }
     if (target === "activity") {
       const selection = selectedPanelRange(terminalState.activitySelectionAnchor, terminalState.activityCursor);
@@ -287,6 +324,18 @@ function WorkbenchApp({
       mounted = false;
     };
   }, [agentEngine]);
+
+  useEffect(() => {
+    let mounted = true;
+    detectClipboardCapabilities(stdout).then((capabilities) => {
+      if (!mounted) return;
+      setClipboardCapabilities(capabilities);
+      dispatch({ type: "activity.add", text: formatClipboardCapabilities(capabilities) });
+    });
+    return () => {
+      mounted = false;
+    };
+  }, [dispatch, stdout]);
 
   useEffect(() => {
     if (!state.contextEnabled || state.workdir) return;
@@ -359,6 +408,9 @@ function WorkbenchApp({
         case "copy":
           void copyPanelText(effect.target);
           break;
+        case "paste":
+          void pasteClipboardIntoInput();
+          break;
       }
     }
   });
@@ -387,6 +439,8 @@ function WorkbenchApp({
       activityCursor={terminalState.activityCursor}
       activitySelection={selectedPanelRange(terminalState.activitySelectionAnchor, terminalState.activityCursor)}
       focusedPanel={terminalState.focusedPanel}
+      headerCursor={terminalState.headerCursor}
+      headerSelection={selectedPanelRange(terminalState.headerSelectionAnchor, terminalState.headerCursor)}
       renderModel={renderModel}
       spinnerFrame={spinnerFrame}
       transcriptCursor={terminalState.transcriptCursor}
@@ -435,6 +489,9 @@ function sameTerminalState(a: WorkbenchTerminalState, b: WorkbenchTerminalState)
     && a.cursor === b.cursor
     && a.draft === b.draft
     && a.focusedPanel === b.focusedPanel
+    && a.headerCursor.line === b.headerCursor.line
+    && a.headerCursor.column === b.headerCursor.column
+    && samePositionOrNull(a.headerSelectionAnchor, b.headerSelectionAnchor)
     && a.mouseDragPanel === b.mouseDragPanel
     && a.selectionAnchor === b.selectionAnchor
     && a.transcriptCursor.line === b.transcriptCursor.line

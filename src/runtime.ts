@@ -1,4 +1,4 @@
 export const cliName = "agent-tui";
 export const cliAuthor = "AgentsWay";
-export const cliVersion = "0.4.23";
+export const cliVersion = "0.4.25";
 export const legacyCliName = "agent-api-cli";

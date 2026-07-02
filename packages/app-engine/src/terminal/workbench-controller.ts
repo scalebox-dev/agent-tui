@@ -21,7 +21,7 @@ export interface WorkbenchTerminalKey extends WorkbenchInputKey {
 }
 
 export interface WorkbenchTerminalMouseEvent {
-  button: "left" | "wheel_down" | "wheel_up" | "unknown";
+  button: "left" | "right" | "wheel_down" | "wheel_up" | "unknown";
   column: number;
   kind: "motion" | "press" | "release" | "wheel";
   row: number;
@@ -33,6 +33,8 @@ export interface WorkbenchTerminalState {
   cursor: number;
   draft: string;
   focusedPanel: WorkbenchFocusedPanel;
+  headerCursor: WorkbenchPanelPosition;
+  headerSelectionAnchor: WorkbenchPanelPosition | null;
   mouseDragPanel: WorkbenchFocusedPanel | null;
   selectionAnchor: number | null;
   transcriptCursor: WorkbenchPanelPosition;
@@ -42,7 +44,8 @@ export interface WorkbenchTerminalState {
 
 export type WorkbenchTerminalEffect =
   | WorkbenchInputEffect
-  | { type: "copy"; target: WorkbenchCopyTarget };
+  | { type: "copy"; target: WorkbenchCopyTarget }
+  | { type: "paste" };
 
 export interface WorkbenchTerminalContext {
   busy: boolean;
@@ -75,6 +78,8 @@ export function initialWorkbenchTerminalState(): WorkbenchTerminalState {
     cursor: 0,
     draft: "",
     focusedPanel: "input",
+    headerCursor: { column: 0, line: 0 },
+    headerSelectionAnchor: null,
     mouseDragPanel: null,
     selectionAnchor: null,
     transcriptCursor: { column: 0, line: 0 },
@@ -91,6 +96,9 @@ export function createWorkbenchTerminalController(): WorkbenchTerminalController
       const normalized = normalizeTerminalState(state, context.renderModel);
       if (key.tab) {
         return stateResult(cycleFocusedPanel(normalized, context.renderModel, key.shift ? -1 : 1));
+      }
+      if (key.meta && input.toLowerCase() === "v") {
+        return stateResult({ ...normalized, focusedPanel: "input" }, { type: "paste" });
       }
       if (normalized.focusedPanel !== "input") {
         return handleReadOnlyPanel(input, key, normalized, context.renderModel);
@@ -137,7 +145,13 @@ export function normalizeTerminalState(
 ): WorkbenchTerminalState {
   const maxTranscriptLine = Math.max(0, renderModel.transcript.totalLines - 1);
   const maxActivityIndex = Math.max(0, renderModel.visibleActivities.length - 1);
+  const maxHeaderIndex = Math.max(0, renderModel.header.lines.length - 1);
   const draftLength = state.draft.length;
+  const headerCursor = normalizePanelPosition(
+    state.headerCursor,
+    maxHeaderIndex,
+    (line) => headerLineText(renderModel, line),
+  );
   const transcriptCursor = normalizePanelPosition(
     state.transcriptCursor,
     maxTranscriptLine,
@@ -155,6 +169,10 @@ export function normalizeTerminalState(
       ? null
       : normalizePanelPosition(state.activitySelectionAnchor, maxActivityIndex, (line) => activityLineText(renderModel, line)),
     cursor: clamp(state.cursor, 0, draftLength),
+    headerCursor,
+    headerSelectionAnchor: state.headerSelectionAnchor == null
+      ? null
+      : normalizePanelPosition(state.headerSelectionAnchor, maxHeaderIndex, (line) => headerLineText(renderModel, line)),
     selectionAnchor: state.selectionAnchor == null ? null : clamp(state.selectionAnchor, 0, draftLength),
     transcriptCursor,
     transcriptOffset: clamp(state.transcriptOffset, 0, renderModel.transcript.maxOffset),
@@ -177,20 +195,46 @@ function handleReadOnlyPanel(
     if (state.focusedPanel === "activity" && state.activitySelectionAnchor !== null) {
       return stateResult({ ...state, activitySelectionAnchor: null });
     }
+    if (state.focusedPanel === "header" && state.headerSelectionAnchor !== null) {
+      return stateResult({ ...state, headerSelectionAnchor: null });
+    }
     return stateResult({ ...state, focusedPanel: "input" });
   }
   if (key.ctrl && input === "a") {
     if (state.focusedPanel === "transcript") return stateResult(selectTranscriptAll(state, renderModel));
     if (state.focusedPanel === "activity") return stateResult(selectActivityAll(state, renderModel));
+    if (state.focusedPanel === "header") return stateResult(selectHeaderAll(state, renderModel));
   }
-  if ((key.ctrl && input === "c") || input === "c") {
-    return { state, effects: [{ type: "copy", target: state.focusedPanel === "activity" ? "activity" : "page" }] };
+  if (key.meta && input.toLowerCase() === "c") {
+    const target: WorkbenchCopyTarget = state.focusedPanel === "activity"
+      ? "activity"
+      : state.focusedPanel === "header"
+        ? "header"
+        : "page";
+    return { state, effects: [{ type: "copy", target }] };
   }
   if (state.focusedPanel === "transcript") {
     return stateResult(handleTranscriptPanelKey(key, state, renderModel));
   }
-  if (state.focusedPanel === "header") return stateResult(state);
+  if (state.focusedPanel === "header") return stateResult(handleHeaderPanelKey(key, state, renderModel));
   return stateResult(handleActivityPanelKey(key, state, renderModel));
+}
+
+function handleHeaderPanelKey(
+  key: WorkbenchTerminalKey,
+  state: WorkbenchTerminalState,
+  renderModel: WorkbenchRenderModel,
+): WorkbenchTerminalState {
+  if (key.home) return setHeaderCursor(state, renderModel, 0, 0, Boolean(key.shift));
+  if (key.end) {
+    const line = Math.max(0, renderModel.header.lines.length - 1);
+    return setHeaderCursor(state, renderModel, line, headerLineText(renderModel, line).length, Boolean(key.shift));
+  }
+  if (key.leftArrow) return moveHeaderColumn(state, renderModel, -1, Boolean(key.shift));
+  if (key.rightArrow) return moveHeaderColumn(state, renderModel, 1, Boolean(key.shift));
+  if (key.upArrow) return moveHeaderCursor(state, renderModel, -1, Boolean(key.shift));
+  if (key.downArrow) return moveHeaderCursor(state, renderModel, 1, Boolean(key.shift));
+  return state;
 }
 
 function handleTranscriptPanelKey(
@@ -269,6 +313,9 @@ function cycleFocusedPanel(
   }
   if (focusedPanel === "activity") {
     return setActivityCursor(next, renderModel, next.activityCursor.line, next.activityCursor.column, false);
+  }
+  if (focusedPanel === "header") {
+    return setHeaderCursor(next, renderModel, next.headerCursor.line, next.headerCursor.column, false);
   }
   return next;
 }
@@ -365,6 +412,49 @@ function moveActivityCursor(
   return setActivityCursor(state, renderModel, state.activityCursor.line + delta, state.activityCursor.column, selecting);
 }
 
+function moveHeaderCursor(
+  state: WorkbenchTerminalState,
+  renderModel: WorkbenchRenderModel,
+  delta: number,
+  selecting: boolean,
+) {
+  return setHeaderCursor(state, renderModel, state.headerCursor.line + delta, state.headerCursor.column, selecting);
+}
+
+function setHeaderCursor(
+  state: WorkbenchTerminalState,
+  renderModel: WorkbenchRenderModel,
+  next: number,
+  columnOrSelecting: number | boolean,
+  selecting: boolean,
+): WorkbenchTerminalState {
+  const nextColumn = typeof columnOrSelecting === "number" ? columnOrSelecting : state.headerCursor.column;
+  const shouldSelect = typeof columnOrSelecting === "number" ? selecting : columnOrSelecting;
+  const current = state.headerCursor;
+  const clamped = clamp(next, 0, Math.max(0, renderModel.header.lines.length - 1));
+  const cursor = normalizePanelPosition({ line: clamped, column: nextColumn }, clamped, (line) => headerLineText(renderModel, line));
+  return {
+    ...state,
+    headerCursor: cursor,
+    headerSelectionAnchor: shouldSelect ? state.headerSelectionAnchor ?? current : null,
+  };
+}
+
+function moveHeaderColumn(
+  state: WorkbenchTerminalState,
+  renderModel: WorkbenchRenderModel,
+  delta: -1 | 1,
+  selecting: boolean,
+) {
+  const cursor = movePanelColumn(
+    state.headerCursor,
+    delta,
+    Math.max(0, renderModel.header.lines.length - 1),
+    (line) => headerLineText(renderModel, line),
+  );
+  return setHeaderCursor(state, renderModel, cursor.line, cursor.column, selecting);
+}
+
 function setActivityCursor(
   state: WorkbenchTerminalState,
   renderModel: WorkbenchRenderModel,
@@ -425,6 +515,19 @@ function selectActivityAll(
   };
 }
 
+function selectHeaderAll(
+  state: WorkbenchTerminalState,
+  renderModel: WorkbenchRenderModel,
+): WorkbenchTerminalState {
+  if (renderModel.header.lines.length === 0) return state;
+  const line = renderModel.header.lines.length - 1;
+  return {
+    ...state,
+    headerSelectionAnchor: { column: 0, line: 0 },
+    headerCursor: { column: headerLineText(renderModel, line).length, line },
+  };
+}
+
 function stateResult(state: WorkbenchTerminalState, ...effects: WorkbenchTerminalEffect[]): WorkbenchTerminalResult {
   return { state, effects };
 }
@@ -446,11 +549,20 @@ function handleMouseEvent(
     return stateResult(scrollTranscript({ ...state, focusedPanel: "transcript" }, renderModel, delta));
   }
   if (event.kind === "release") return stateResult(endMouseDrag(state));
+  if (event.kind === "press" && event.button === "right") {
+    return handleRightClick(state, target);
+  }
   if (event.button !== "left") return stateResult(state);
   if (event.kind === "motion") return stateResult(extendMouseDrag(state, renderModel, target));
   switch (target.panel) {
     case "header":
-      return stateResult({ ...state, focusedPanel: "header", mouseDragPanel: null });
+      return stateResult(startHeaderMouseDrag(setHeaderCursor(
+        { ...state, focusedPanel: "header", headerSelectionAnchor: null },
+        renderModel,
+        target.line,
+        target.column,
+        false,
+      )));
     case "activity":
       return stateResult(startActivityMouseDrag(setActivityCursor(
         { ...state, focusedPanel: "activity", activitySelectionAnchor: null },
@@ -478,11 +590,51 @@ function handleMouseEvent(
   }
 }
 
+function handleRightClick(
+  state: WorkbenchTerminalState,
+  target: MouseTarget,
+): WorkbenchTerminalResult {
+  switch (target.panel) {
+    case "activity":
+      return rightClickCopyIfSelected({ ...state, focusedPanel: "activity" }, "activity");
+    case "header":
+      return rightClickCopyIfSelected({ ...state, focusedPanel: "header" }, "header");
+    case "input":
+      return stateResult({ ...state, cursor: target.inputCursor, focusedPanel: "input" }, { type: "paste" });
+    case "transcript":
+      return rightClickCopyIfSelected({ ...state, focusedPanel: "transcript" }, "page");
+  }
+}
+
+function rightClickCopyIfSelected(
+  state: WorkbenchTerminalState,
+  target: WorkbenchCopyTarget,
+): WorkbenchTerminalResult {
+  if (state.focusedPanel === "activity" && selectedPanelRange(state.activitySelectionAnchor, state.activityCursor)) {
+    return stateResult(state, { type: "copy", target });
+  }
+  if (state.focusedPanel === "header" && selectedPanelRange(state.headerSelectionAnchor, state.headerCursor)) {
+    return stateResult(state, { type: "copy", target });
+  }
+  if (state.focusedPanel === "transcript" && selectedPanelRange(state.transcriptSelectionAnchor, state.transcriptCursor)) {
+    return stateResult(state, { type: "copy", target });
+  }
+  return stateResult(state);
+}
+
 function startActivityMouseDrag(state: WorkbenchTerminalState): WorkbenchTerminalState {
   return {
     ...state,
     activitySelectionAnchor: state.activityCursor,
     mouseDragPanel: "activity",
+  };
+}
+
+function startHeaderMouseDrag(state: WorkbenchTerminalState): WorkbenchTerminalState {
+  return {
+    ...state,
+    headerSelectionAnchor: state.headerCursor,
+    mouseDragPanel: "header",
   };
 }
 
@@ -509,6 +661,9 @@ function extendMouseDrag(
       selectionAnchor: state.selectionAnchor ?? state.cursor,
     };
   }
+  if (state.mouseDragPanel === "header" && target.panel === "header") {
+    return setHeaderCursor(state, renderModel, target.line, target.column, true);
+  }
   if (state.mouseDragPanel === "transcript" && target.panel === "transcript") {
     return setTranscriptCursor(state, renderModel, target.line, target.column, true);
   }
@@ -523,6 +678,9 @@ function endMouseDrag(state: WorkbenchTerminalState): WorkbenchTerminalState {
   if (next.selectionAnchor === next.cursor) {
     next.selectionAnchor = null;
   }
+  if (samePositionOrNull(next.headerSelectionAnchor, next.headerCursor)) {
+    next.headerSelectionAnchor = null;
+  }
   if (samePositionOrNull(next.transcriptSelectionAnchor, next.transcriptCursor)) {
     next.transcriptSelectionAnchor = null;
   }
@@ -531,7 +689,7 @@ function endMouseDrag(state: WorkbenchTerminalState): WorkbenchTerminalState {
 
 type MouseTarget =
   | { panel: "activity"; column: number; line: number }
-  | { panel: "header" }
+  | { panel: "header"; column: number; line: number }
   | { inputCursor: number; panel: "input" }
   | { panel: "transcript"; column: number; line: number };
 
@@ -540,7 +698,12 @@ function mouseTarget(event: WorkbenchTerminalMouseEvent, renderModel: WorkbenchR
   const row = event.row;
   const column = event.column;
   if (row >= layout.header.top && row <= layout.header.bottom) {
-    return { panel: "header" };
+    const line = clamp(row - layout.header.textTop, 0, Math.max(0, renderModel.header.lines.length - 1));
+    return {
+      panel: "header",
+      line,
+      column: textIndexAtMouseColumn(headerLineText(renderModel, line), column - layout.header.textLeft),
+    };
   }
   if (row >= layout.transcript.top && row <= layout.transcript.bottom) {
     if (renderModel.layout === "wide" && column >= layout.activity.left) {
@@ -607,7 +770,14 @@ function mouseTargetForPanel(
       };
     }
     case "header":
-      return { panel };
+      {
+        const line = clamp(event.row - layout.header.textTop, 0, Math.max(0, renderModel.header.lines.length - 1));
+        return {
+          panel,
+          line,
+          column: textIndexAtMouseColumn(headerLineText(renderModel, line), event.column - layout.header.textLeft),
+        };
+      }
     case "transcript": {
       const line = clamp(
         renderModel.transcript.startLine + event.row - layout.transcript.top - 1,
@@ -638,6 +808,8 @@ function mouseLayout(renderModel: WorkbenchRenderModel) {
   return {
     header: {
       bottom: headerHeight,
+      textLeft: 3,
+      textTop: 2,
       top: 1,
     },
     activity: {
@@ -720,4 +892,8 @@ function transcriptLineText(renderModel: WorkbenchRenderModel, line: number) {
 function activityLineText(renderModel: WorkbenchRenderModel, line: number) {
   const activity = renderModel.visibleActivities[line];
   return activity ? `${new Date(activity.timestamp).toLocaleTimeString()} ${activity.text}` : "";
+}
+
+function headerLineText(renderModel: WorkbenchRenderModel, line: number) {
+  return renderModel.header.lines[line] ?? "";
 }

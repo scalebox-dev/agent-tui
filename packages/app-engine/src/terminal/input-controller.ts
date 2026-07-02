@@ -1,6 +1,7 @@
 import { createInputHistory } from "../workbench/state.js";
 import {
   deleteTextBeforeCursor,
+  deleteTextAtCursor,
   insertText,
   moveTextEditorCursor,
   normalizeTextEditorState,
@@ -67,8 +68,6 @@ export function createWorkbenchInputController(): WorkbenchInputController {
       const editor = normalizeTextEditorState({ text: context.draft, cursor, selectionAnchor });
       const layout = { viewportColumns };
       if (key.ctrl && input === "c") return editorResult(editor, { type: "exit" });
-      if (key.shift && key.upArrow && !key.ctrl && !key.meta) return editorResult(editor, { type: "scroll", delta: 1 });
-      if (key.shift && key.downArrow && !key.ctrl && !key.meta) return editorResult(editor, { type: "scroll", delta: -1 });
       if (key.pageUp) {
         return editorResult(editor, { type: "scroll", delta: pageScrollDelta(context.viewportHeight) });
       }
@@ -113,6 +112,10 @@ function handleBusyInput(
     history.reset();
     return editorResult(deleteTextBeforeCursor(editor));
   }
+  if (key.delete) {
+    history.reset();
+    return editorResult(deleteTextAtCursor(editor));
+  }
   if (input && !key.ctrl && !key.meta) {
     history.reset();
     return editorResult(insertText(editor, input));
@@ -139,6 +142,10 @@ function handleReadyInput(
   if (isBackwardDelete(input, key)) {
     history.reset();
     return editorResult(deleteTextBeforeCursor(editor));
+  }
+  if (key.delete) {
+    history.reset();
+    return editorResult(deleteTextAtCursor(editor));
   }
   if (input && !key.ctrl && !key.meta) {
     history.reset();
@@ -188,5 +195,5 @@ function isCopyCommand(command: string) {
 }
 
 function isBackwardDelete(input: string, key: WorkbenchInputKey) {
-  return Boolean(key.backspace || key.delete || (key.ctrl && input === "h"));
+  return Boolean(key.backspace || (key.ctrl && input === "h"));
 }

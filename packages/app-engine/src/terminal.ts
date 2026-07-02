@@ -20,6 +20,8 @@ export type { WorkbenchCopyTarget } from "./terminal/copy.js";
 export {
   copyTextFromActivitySelection,
   copyTextFromActivities,
+  copyTextFromHeaderLines,
+  copyTextFromHeaderSelection,
   copyTextFromRenderModel,
   copyTextFromTranscriptSelection,
   copyTextFromTranscriptLines,

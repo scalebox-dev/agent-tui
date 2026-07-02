@@ -22,6 +22,7 @@ export interface WorkbenchRenderModel {
     conversationId: string;
     conversationPreviousResponseId: string;
     conversationStatus: "fresh" | "continued" | "unknown";
+    lines: string[];
     model: string;
     pendingLocalLabel: string;
     preset: string;
@@ -109,12 +110,35 @@ export function buildWorkbenchRenderModel(input: BuildWorkbenchRenderModelInput)
     width: transcriptWidth,
   });
 
+  const header = {
+    accessMode: input.state.accessMode,
+    contextEnabled: input.state.contextEnabled,
+    conversation: input.state.currentConversation,
+    conversationId: input.state.conversationId || "unresolved",
+    conversationPreviousResponseId: input.state.conversationPreviousResponseId || "",
+    conversationStatus: input.state.conversationStatus,
+    model: input.state.runModel || "auto",
+    pendingLocalLabel: pendingLocalLabel(input.state),
+    preset: input.state.runPreset || "none",
+    profile: input.profileName,
+    renderMode: input.state.renderMode,
+    workdir: input.state.workdir?.root || input.workdirFallback,
+  };
+  const headerLines = [
+    "Agent API Workbench",
+    `profile=${header.profile} conversation=${header.conversation} id=${header.conversationId} preset=${header.preset} model=${header.model}`,
+    `conversation_state=${header.conversationStatus}${header.conversationPreviousResponseId ? ` previous=${header.conversationPreviousResponseId}` : ""}`,
+    `workdir=${header.workdir} access=${header.accessMode} local_tools=${header.contextEnabled ? "on" : "off"} render=${header.renderMode} pending=${header.pendingLocalLabel}`,
+  ];
+
   return {
     activityHeight,
     footerText: [
       "PgUp/PgDn page",
       "Shift+↑/↓ row",
       "End live",
+      "Alt+C copy",
+      "Alt+V paste",
       "/copy page",
       "/export save",
       "/transcript preview",
@@ -122,20 +146,7 @@ export function buildWorkbenchRenderModel(input: BuildWorkbenchRenderModelInput)
         ? `${transcript.scrollPercent}% · rows ${transcript.startLine}-${transcript.endLine}/${transcript.totalLines} · ${transcript.offset} from live`
         : "live",
     ].join(" · "),
-    header: {
-      accessMode: input.state.accessMode,
-      contextEnabled: input.state.contextEnabled,
-      conversation: input.state.currentConversation,
-      conversationId: input.state.conversationId || "unresolved",
-      conversationPreviousResponseId: input.state.conversationPreviousResponseId || "",
-      conversationStatus: input.state.conversationStatus,
-      model: input.state.runModel || "auto",
-      pendingLocalLabel: pendingLocalLabel(input.state),
-      preset: input.state.runPreset || "none",
-      profile: input.profileName,
-      renderMode: input.state.renderMode,
-      workdir: input.state.workdir?.root || input.workdirFallback,
-    },
+    header: { ...header, lines: headerLines },
     layout,
     input: {
       busy: input.state.busy,
