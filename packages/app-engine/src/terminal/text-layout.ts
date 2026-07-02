@@ -83,7 +83,7 @@ function displayWidthSegments(line: string, offset: number, width: number): Text
   return segments;
 }
 
-function displayColumnAtIndex(text: string, targetIndex: number) {
+export function displayColumnAtIndex(text: string, targetIndex: number) {
   let column = 0;
   for (let index = 0; index < text.length && index < targetIndex;) {
     const char = codePointChar(text, index);
@@ -93,7 +93,7 @@ function displayColumnAtIndex(text: string, targetIndex: number) {
   return column;
 }
 
-function indexAtDisplayColumn(text: string, targetColumn: number) {
+export function indexAtDisplayColumn(text: string, targetColumn: number) {
   let column = 0;
   let previousIndex = 0;
   for (let index = 0; index < text.length;) {
@@ -107,7 +107,7 @@ function indexAtDisplayColumn(text: string, targetColumn: number) {
   return text.length;
 }
 
-function displayWidth(char: string) {
+export function displayWidth(char: string) {
   const codePoint = char.codePointAt(0) ?? 0;
   if (codePoint === 0) return 0;
   if (char === "\t") return 4;

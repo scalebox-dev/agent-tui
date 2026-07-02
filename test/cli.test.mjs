@@ -55,10 +55,14 @@ import {
   buildTranscriptLines,
   buildTranscriptViewModel,
   buildWorkbenchRenderModel,
+  copyTextFromTranscriptSelection,
   copyTextFromRenderModel,
   createWorkbenchInputController,
+  createWorkbenchTerminalController,
   elapsedDots,
+  initialWorkbenchTerminalState,
   pendingLocalLabel,
+  selectedPanelRange,
   spinnerGlyph,
 } from "@agent-api/app-engine/terminal";
 import {
@@ -1705,12 +1709,15 @@ test("workbench render model exposes renderer-neutral screen state", () => {
     beforeCursor: "he",
     cursorText: "l",
     afterCursor: "lo",
+    end: 5,
     hasCursor: true,
+    start: 0,
     spans: [
       { text: "he" },
       { text: "l", inverse: true },
       { text: "lo" },
     ],
+    text: "hello",
   }]);
   assert.equal(model.layout, "wide");
   assert.equal(model.viewportHeight, 19);
@@ -1760,6 +1767,105 @@ test("workbench render model extracts panel-scoped copy text", () => {
   assert.doesNotMatch(copyTextFromRenderModel(model, "activity"), /Second transcript line/);
 });
 
+test("workbench terminal controller routes focused panel operations", () => {
+  const controller = createWorkbenchTerminalController();
+  let workbenchState = createInitialWorkbenchState({});
+  workbenchState = workbenchReducer(workbenchState, { type: "message.add", role: "assistant", text: "First transcript line\nSecond transcript line" });
+  let terminalState = initialWorkbenchTerminalState();
+  const model = () => buildWorkbenchRenderModel({
+    cursor: terminalState.cursor,
+    draft: terminalState.draft,
+    profileName: "default",
+    selectionAnchor: terminalState.selectionAnchor,
+    spinnerFrame: 0,
+    state: workbenchState,
+    transcriptOffset: terminalState.transcriptOffset,
+    viewport: { rows: 24, columns: 120 },
+    workdirFallback: "/fallback",
+  });
+  const apply = (input, key) => {
+    const result = controller.handle(input, key, terminalState, {
+      busy: workbenchState.busy,
+      renderModel: model(),
+    });
+    terminalState = result.state;
+    return result;
+  };
+  const applyMouse = (event) => {
+    const result = controller.handleMouse(event, terminalState, {
+      busy: workbenchState.busy,
+      renderModel: model(),
+    });
+    terminalState = result.state;
+    return result;
+  };
+
+  applyMouse({ button: "left", column: 5, kind: "press", row: 7 });
+  assert.equal(terminalState.focusedPanel, "transcript");
+  assert.equal(terminalState.mouseDragPanel, "transcript");
+  assert.deepEqual(terminalState.transcriptCursor, { column: 1, line: 0 });
+  applyMouse({ button: "left", column: 9, kind: "motion", row: 7 });
+  assert.deepEqual(selectedPanelRange(terminalState.transcriptSelectionAnchor, terminalState.transcriptCursor), {
+    start: { column: 1, line: 0 },
+    end: { column: 5, line: 0 },
+  });
+  applyMouse({ button: "left", column: 9, kind: "release", row: 7 });
+  assert.equal(terminalState.mouseDragPanel, null);
+  assert.deepEqual(selectedPanelRange(terminalState.transcriptSelectionAnchor, terminalState.transcriptCursor), {
+    start: { column: 1, line: 0 },
+    end: { column: 5, line: 0 },
+  });
+
+  const beforeWheel = terminalState.transcriptOffset;
+  applyMouse({ button: "wheel_up", column: 5, kind: "wheel", row: 7 });
+  assert.ok(terminalState.transcriptOffset >= beforeWheel);
+
+  terminalState = { ...terminalState, cursor: 0, draft: "abc", selectionAnchor: null };
+  applyMouse({ button: "left", column: 5, kind: "press", row: 22 });
+  assert.equal(terminalState.focusedPanel, "input");
+  assert.equal(terminalState.cursor, 1);
+  assert.equal(terminalState.mouseDragPanel, "input");
+  applyMouse({ button: "left", column: 7, kind: "motion", row: 22 });
+  assert.equal(terminalState.cursor, 3);
+  assert.equal(terminalState.selectionAnchor, 1);
+  applyMouse({ button: "left", column: 7, kind: "release", row: 22 });
+  assert.equal(terminalState.mouseDragPanel, null);
+  assert.equal(terminalState.selectionAnchor, 1);
+  terminalState = { ...terminalState, cursor: 0, draft: "", selectionAnchor: null };
+
+  apply("", { tab: true });
+  assert.equal(terminalState.focusedPanel, "transcript");
+
+  apply("", { home: true });
+  apply("", { rightArrow: true });
+  const characterSelection = apply("", { rightArrow: true, shift: true });
+  const oneCharacter = selectedPanelRange(characterSelection.state.transcriptSelectionAnchor, characterSelection.state.transcriptCursor);
+  assert.deepEqual(oneCharacter, {
+    start: { column: 1, line: terminalState.transcriptCursor.line },
+    end: { column: 2, line: terminalState.transcriptCursor.line },
+  });
+  assert.equal(copyTextFromTranscriptSelection(model().transcript.lines, oneCharacter), model().transcript.lines[terminalState.transcriptCursor.line].text.slice(1, 2));
+
+  const selectAll = apply("a", { ctrl: true });
+  assert.equal(selectAll.effects.length, 0);
+  const rendered = model();
+  const lastLine = rendered.transcript.totalLines - 1;
+  assert.deepEqual(selectedPanelRange(terminalState.transcriptSelectionAnchor, terminalState.transcriptCursor), {
+    start: { column: 0, line: 0 },
+    end: { column: rendered.transcript.lines[lastLine].text.length, line: lastLine },
+  });
+
+  const copied = apply("c", {});
+  assert.deepEqual(copied.effects, [{ type: "copy", target: "page" }]);
+
+  apply("", { tab: true, shift: true });
+  assert.equal(terminalState.focusedPanel, "input");
+  apply("h", {});
+  const submit = apply("i", {});
+  assert.equal(submit.state.draft, "hi");
+  assert.deepEqual(apply("", { return: true }).effects, [{ type: "submit", input: "hi" }]);
+});
+
 test("workbench render model renders a single empty editor cursor", () => {
   const model = buildWorkbenchRenderModel({
     cursor: 0,
@@ -1776,8 +1882,11 @@ test("workbench render model renders a single empty editor cursor", () => {
     afterCursor: "",
     beforeCursor: "",
     cursorText: " ",
+    end: 0,
     hasCursor: true,
+    start: 0,
     spans: [{ text: " ", inverse: true }],
+    text: "",
   }]);
 });
 
@@ -2930,15 +3039,25 @@ test("workbench engine maps agent events into state and runtime effects", () => 
   assert.match(engine.snapshot().activities.at(-1).text, /provider\/model/);
 
   assert.deepEqual(engine.handleAgentEvent({
+    type: "local_tool.started",
+    name: "local_shell",
+    action: "run",
+    arguments: { command: "npm test", description: "Run tests" },
+  }).effects, []);
+  assert.match(engine.snapshot().activities.at(-1).text, /Local shell: Run tests - npm test/);
+
+  assert.deepEqual(engine.handleAgentEvent({
     type: "local_tool.approval_requested",
-    name: "local_workdir",
-    action: "write",
-    arguments: { action: "write", path: "notes.txt", content: "hello\n" },
+    name: "local_shell",
+    action: "run",
+    arguments: { action: "run", command: "pwd", description: "Check directory", cwd: "/tmp/project" },
     callID: "call_local",
     responseID: "resp_local",
   }).effects, []);
-  assert.equal(engine.snapshot().pendingLocalTool?.name, "local_workdir");
+  assert.equal(engine.snapshot().pendingLocalTool?.name, "local_shell");
   assert.match(engine.snapshot().messages.at(-1).text, /Local action requires approval/);
+  assert.match(engine.snapshot().messages.at(-1).text, /Command:\n  pwd/);
+  assert.match(engine.snapshot().messages.at(-1).text, /Working directory: \/tmp\/project/);
 });
 
 test("workbench local controller loads, summarizes, and searches a workdir", async () => {
@@ -2990,6 +3109,11 @@ test("workbench local controller loads, summarizes, and searches a workdir", asy
     action: "write",
     arguments: { action: "write", path: "NOTES.md" },
   }), /Local approval requested: local_workdir\.write/);
+  assert.match(controller.approvalPreview({
+    name: "local_shell",
+    action: "run",
+    arguments: { command: "pwd", description: "Check directory" },
+  }), /Command:\n  pwd/);
 });
 
 test("workbench turn controller runs prompt turns through engine state", async () => {

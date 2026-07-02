@@ -599,7 +599,7 @@ export function helpText() {
     "/reject          reject or stop pending action",
     "/abort           cancel the in-flight agent turn",
     "/context         toggle local context packaging for each agent turn",
-    "/clear           clear the visible terminal transcript",
+    "/clear           clear the visible transcript",
     "/quit            leave the workbench",
   ].join("\n");
 }

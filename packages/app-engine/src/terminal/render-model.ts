@@ -54,8 +54,11 @@ export interface WorkbenchInputLine {
   afterCursor: string;
   beforeCursor: string;
   cursorText: string;
+  end: number;
   hasCursor: boolean;
+  start: number;
   spans: WorkbenchInputSpan[];
+  text: string;
 }
 
 export interface WorkbenchInputSpan {
@@ -187,13 +190,16 @@ function buildInputView(draft: string, cursor: number, selectionAnchor: number |
       beforeCursor: `${prefix}${displayText(hasCursor ? segment.text.slice(0, localCursor) : segment.text)}`,
       cursorText: hasCursor ? displayChar(charAt(segment.text, localCursor)) || " " : "",
       afterCursor: `${hasCursor ? displayText(segment.text.slice(localCursor + charLengthAt(segment.text, localCursor))) : ""}${suffix}`,
+      end: segment.end,
       hasCursor,
+      start: segment.start,
       spans: inputLineSpans(segment, {
         cursor: hasCursor ? cursor : null,
         prefix,
         selection,
         suffix,
       }),
+      text: segment.text,
     };
   });
   return { height, lines };

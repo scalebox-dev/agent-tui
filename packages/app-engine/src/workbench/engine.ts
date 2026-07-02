@@ -253,6 +253,12 @@ export function createWorkbenchEngine(options: WorkbenchEngineOptions): Workbenc
         case "tool.completed":
           dispatch({ type: "activity.add", level: event.status === "failed" ? "error" : "success", text: `Tool completed: ${event.name}${event.status ? ` (${event.status})` : ""}` });
           return eventResult();
+        case "local_tool.started":
+          dispatch({
+            type: "activity.add",
+            text: formatLocalToolStartedActivity(event),
+          });
+          return eventResult();
         case "local_tool.completed":
           dispatch({
             type: "activity.add",
@@ -503,9 +509,40 @@ function formatLocalToolApproval(event: Extract<AgentTurnEvent, { type: "local_t
   const label = `${event.name}${event.action ? `.${event.action}` : ""}`;
   return [
     `Local action requires approval: ${label}.`,
+    formatLocalToolArgumentPreview(event.name, event.arguments),
     event.preview ? `Preview:\n${formatPreview(event.preview)}` : undefined,
     "Review it in the workbench, then use /apply to execute once, /apply-all to allow future local actions, or /reject to discard it.",
   ].filter(Boolean).join("\n\n");
+}
+
+function formatLocalToolStartedActivity(event: Extract<AgentTurnEvent, { type: "local_tool.started" }>) {
+  const label = `${event.name}${event.action ? `.${event.action}` : ""}`;
+  if (event.name === "local_shell") {
+    const command = stringArg(event.arguments, "command");
+    const description = stringArg(event.arguments, "description");
+    if (command && description) return `Local shell: ${description} - ${command}`;
+    if (command) return `Local shell: ${command}`;
+  }
+  return `Local tool requested: ${label}`;
+}
+
+function formatLocalToolArgumentPreview(name: string, args: Record<string, unknown>) {
+  if (name === "local_shell") {
+    const command = stringArg(args, "command");
+    const description = stringArg(args, "description");
+    const cwd = stringArg(args, "cwd");
+    const timeout = typeof args.timeout_ms === "number" ? `${args.timeout_ms}ms` : "";
+    if (command) {
+      return [
+        "Command:",
+        `  ${command}`,
+        description ? `Description: ${description}` : "",
+        cwd ? `Working directory: ${cwd}` : "",
+        timeout ? `Timeout: ${timeout}` : "",
+      ].filter(Boolean).join("\n");
+    }
+  }
+  return `Arguments:\n${formatPreview(args)}`;
 }
 
 function formatPreview(preview: unknown) {
@@ -515,6 +552,11 @@ function formatPreview(preview: unknown) {
   } catch {
     return String(preview);
   }
+}
+
+function stringArg(args: Record<string, unknown> | undefined, key: string) {
+  const value = args?.[key];
+  return typeof value === "string" && value.trim() ? value.trim() : "";
 }
 
 function normalizeOptionalSetting(value: string, clearValues: string[]) {

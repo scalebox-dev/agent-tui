@@ -239,7 +239,7 @@ async function loginWithBrowser(
       onChallenge(challenge) {
         input.onState?.({
           ...waiting,
-          message: "Open the URL to approve this terminal session.",
+          message: "Open the URL to approve this app session.",
           browserURL: challenge.url,
           browserCode: challenge.code,
         });

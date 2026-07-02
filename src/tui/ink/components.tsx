@@ -4,6 +4,8 @@ import {
   activityColor,
   busySpinner,
   type TranscriptLine,
+  type WorkbenchPanelPosition,
+  type WorkbenchPanelSelection,
   type WorkbenchRenderModel,
 } from "@agent-api/app-engine/terminal";
 import {
@@ -13,31 +15,39 @@ import {
 } from "@agent-api/app-engine/workbench";
 
 export function InkWorkbenchScreen({
-  activityCursorIndex,
+  activityCursor,
   activitySelection,
   focusedPanel,
   renderModel,
   spinnerFrame,
-  transcriptCursorLine,
+  transcriptCursor,
   transcriptSelection,
 }: {
-  activityCursorIndex: number;
-  activitySelection: { end: number; start: number } | null;
+  activityCursor: WorkbenchPanelPosition;
+  activitySelection: WorkbenchPanelSelection | null;
   focusedPanel: "activity" | "input" | "transcript";
   renderModel: WorkbenchRenderModel;
   spinnerFrame: number;
-  transcriptCursorLine: number;
-  transcriptSelection: { end: number; start: number } | null;
+  transcriptCursor: WorkbenchPanelPosition;
+  transcriptSelection: WorkbenchPanelSelection | null;
 }) {
   const activity = (
     <Box flexDirection="column" width={renderModel.layout === "wide" ? "28%" : "100%"} height={renderModel.activityHeight} borderStyle="single" borderColor={focusedPanel === "activity" ? "cyan" : "gray"} paddingX={1}>
       <Text bold wrap="truncate">Activity</Text>
-      {renderModel.visibleActivities.map((activity, index) => (
-        <Text color={activityColor(activity.level)} inverse={isSelected(index, activitySelection)} key={activity.id} wrap="truncate">
-          {focusedPanel === "activity" && index === activityCursorIndex ? "› " : "  "}
-          {new Date(activity.timestamp).toLocaleTimeString()} {activity.text}
-        </Text>
-      ))}
+      {renderModel.visibleActivities.map((activity, index) => {
+        const cursor = focusedPanel === "activity" && index === activityCursor.line;
+        const text = `${new Date(activity.timestamp).toLocaleTimeString()} ${activity.text}`;
+        return (
+          <Text color={activityColor(activity.level)} key={activity.id} wrap="truncate">
+            {cursor ? <Text color="cyan">› </Text> : <Text>  </Text>}
+            <SelectableText
+              cursorColumn={cursor && !activitySelection ? activityCursor.column : null}
+              selection={lineSelection(index, activitySelection)}
+              text={text || " "}
+            />
+          </Text>
+        );
+      })}
     </Box>
   );
   return (
@@ -60,10 +70,13 @@ export function InkWorkbenchScreen({
         <Box flexDirection="column" width={renderModel.layout === "wide" ? "72%" : "100%"} paddingRight={renderModel.layout === "wide" ? 1 : 0}>
           {renderModel.transcript.visibleLines.map((line, index) => (
             <TranscriptText
-              cursor={focusedPanel === "transcript" && renderModel.transcript.startLine + index - 1 === transcriptCursorLine}
+              cursorColumn={focusedPanel === "transcript" && renderModel.transcript.startLine + index - 1 === transcriptCursor.line && !transcriptSelection
+                ? transcriptCursor.column
+                : null}
               key={line.id}
               line={line}
-              selected={isSelected(renderModel.transcript.startLine + index - 1, transcriptSelection)}
+              lineSelection={lineSelection(renderModel.transcript.startLine + index - 1, transcriptSelection)}
+              lineCursor={focusedPanel === "transcript" && renderModel.transcript.startLine + index - 1 === transcriptCursor.line}
             />
           ))}
           {renderModel.transcript.visibleLines.length === 0 && <Text color="gray">No transcript lines.</Text>}
@@ -102,29 +115,142 @@ export function InkWorkbenchScreen({
   );
 }
 
-function TranscriptText({ cursor, line, selected }: { cursor: boolean; line: TranscriptLine; selected: boolean }) {
-  const anchor = cursor ? <Text color="cyan">› </Text> : line.anchor ? <Text color="cyan">▸ </Text> : <Text>  </Text>;
+function TranscriptText({
+  cursorColumn,
+  line,
+  lineCursor,
+  lineSelection,
+}: {
+  cursorColumn: number | null;
+  line: TranscriptLine;
+  lineCursor: boolean;
+  lineSelection: { end: number; start: number } | null;
+}) {
+  const anchor = lineCursor ? <Text color="cyan">› </Text> : line.anchor ? <Text color="cyan">▸ </Text> : <Text>  </Text>;
   if (!line.spans || line.spans.length === 0) {
     return (
-      <Text bold={line.bold || cursor} color={line.color} inverse={selected || line.inverse} wrap="truncate">
-        {anchor}{line.text || " "}
+      <Text bold={line.bold || lineCursor} color={line.color} inverse={line.inverse} wrap="truncate">
+        {anchor}
+        <SelectableText
+          cursorColumn={cursorColumn}
+          selection={lineSelection}
+          text={line.text || " "}
+        />
       </Text>
     );
   }
   return (
-    <Text bold={line.bold || cursor} color={line.color} inverse={selected || line.inverse} wrap="truncate">
+    <Text bold={line.bold || lineCursor} color={line.color} inverse={line.inverse} wrap="truncate">
       {anchor}
-      {line.spans.map((span, index) => (
-        <Text bold={span.bold} color={span.color} inverse={span.inverse} key={index}>
-          {span.text}
-        </Text>
-      ))}
+      {line.spans.map((span, index) => {
+        const offset = line.spans?.slice(0, index).reduce((sum, item) => sum + item.text.length, 0) ?? 0;
+        return (
+          <SelectableText
+            bold={span.bold}
+            color={span.color}
+            cursorColumn={cursorColumn}
+            key={index}
+            lineLength={line.text.length}
+            offset={offset}
+            selection={lineSelection}
+            text={span.text}
+          />
+        );
+      })}
     </Text>
   );
 }
 
-function isSelected(index: number, selection: { end: number; start: number } | null) {
-  return Boolean(selection && index >= selection.start && index <= selection.end);
+function SelectableText({
+  bold,
+  color,
+  cursorColumn,
+  lineLength,
+  offset = 0,
+  selection,
+  text,
+}: {
+  bold?: boolean;
+  color?: string;
+  cursorColumn: number | null;
+  lineLength?: number;
+  offset?: number;
+  selection: { end: number; start: number } | null;
+  text: string;
+}) {
+  const pieces = selectablePieces(text, { cursorColumn, lineLength: lineLength ?? text.length, offset, selection });
+  return (
+    <>
+      {pieces.map((piece, index) => (
+        <Text bold={bold} color={color} inverse={piece.inverse} key={index}>
+          {piece.text}
+        </Text>
+      ))}
+    </>
+  );
+}
+
+function lineSelection(line: number, selection: WorkbenchPanelSelection | null) {
+  if (!selection || line < selection.start.line || line > selection.end.line) return null;
+  if (selection.start.line === selection.end.line) {
+    return selection.start.column === selection.end.column
+      ? null
+      : { start: selection.start.column, end: selection.end.column };
+  }
+  if (line === selection.start.line) return { start: selection.start.column, end: Number.POSITIVE_INFINITY };
+  if (line === selection.end.line) return { start: 0, end: selection.end.column };
+  return { start: 0, end: Number.POSITIVE_INFINITY };
+}
+
+function selectablePieces(
+  text: string,
+  options: {
+    cursorColumn: number | null;
+    lineLength: number;
+    offset: number;
+    selection: { end: number; start: number } | null;
+  },
+) {
+  const textLength = text.length;
+  const selection = options.selection
+    ? {
+      start: clamp(options.selection.start - options.offset, 0, textLength),
+      end: clamp(options.selection.end - options.offset, 0, textLength),
+    }
+    : null;
+  const segmentEnd = options.offset + textLength;
+  const cursorInSegment = options.cursorColumn != null
+    && options.cursorColumn >= options.offset
+    && (
+      options.cursorColumn < segmentEnd
+      || (options.cursorColumn === options.lineLength && segmentEnd === options.lineLength)
+    );
+  const cursor = cursorInSegment ? clamp((options.cursorColumn ?? 0) - options.offset, 0, textLength) : null;
+  const boundaries = new Set([0, textLength]);
+  if (selection && selection.start !== selection.end) {
+    boundaries.add(selection.start);
+    boundaries.add(selection.end);
+  }
+  if (cursor !== null) {
+    boundaries.add(cursor);
+    boundaries.add(Math.min(textLength, cursor + 1));
+  }
+  const sorted = Array.from(boundaries).sort((a, b) => a - b);
+  const pieces: { inverse?: boolean; text: string }[] = [];
+  for (let index = 0; index < sorted.length - 1; index += 1) {
+    const start = sorted[index] ?? 0;
+    const end = sorted[index + 1] ?? start;
+    if (end <= start) continue;
+    const selected = Boolean(selection && start >= selection.start && end <= selection.end);
+    const cursorAtPiece = cursor !== null && start >= cursor && start < cursor + 1;
+    pieces.push({ text: text.slice(start, end), inverse: selected || cursorAtPiece });
+  }
+  if (cursor === textLength) pieces.push({ text: " ", inverse: true });
+  return pieces.length ? pieces : [{ text }];
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(value, max));
 }
 
 export function InkAuthGate({ cursorVisible, state }: { cursorVisible: boolean; state: AuthGateState }) {

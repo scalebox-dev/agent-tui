@@ -109,12 +109,35 @@ function formatLocalToolApproval(approval: {
 }) {
   return [
     `Local approval requested: ${approval.name}${approval.action ? `.${approval.action}` : ""}`,
-    "Arguments:",
-    JSON.stringify(approval.arguments, null, 2),
+    formatLocalToolArgumentPreview(approval.name, approval.arguments),
     approval.preview ? ["Preview:", JSON.stringify(approval.preview, null, 2)].join("\n") : "",
     "",
     "Use /apply to execute this action once, /apply-all to allow future local actions, or /reject to discard it.",
   ].filter(Boolean).join("\n");
+}
+
+function formatLocalToolArgumentPreview(name: string, args: Record<string, unknown>) {
+  if (name === "local_shell") {
+    const command = stringArg(args, "command");
+    const description = stringArg(args, "description");
+    const cwd = stringArg(args, "cwd");
+    const timeout = typeof args.timeout_ms === "number" ? `${args.timeout_ms}ms` : "";
+    if (command) {
+      return [
+        "Command:",
+        `  ${command}`,
+        description ? `Description: ${description}` : "",
+        cwd ? `Working directory: ${cwd}` : "",
+        timeout ? `Timeout: ${timeout}` : "",
+      ].filter(Boolean).join("\n");
+    }
+  }
+  return ["Arguments:", JSON.stringify(args, null, 2)].join("\n");
+}
+
+function stringArg(args: Record<string, unknown> | undefined, key: string) {
+  const value = args?.[key];
+  return typeof value === "string" && value.trim() ? value.trim() : "";
 }
 
 function formatBytes(bytes: number) {

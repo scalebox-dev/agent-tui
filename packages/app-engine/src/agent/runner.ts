@@ -121,6 +121,7 @@ export type AgentTurnEvent =
   | { type: "reasoning.fetch_url_queries"; urls: string[] }
   | { type: "reasoning.fetch_url_results"; count: number }
   | { type: "tool.completed"; name: string; status?: string }
+  | { type: "local_tool.started"; name: string; action?: string; arguments?: Record<string, unknown> }
   | { type: "local_tool.completed"; name: string; action?: string; requiresApproval?: boolean }
   | ({ type: "local_tool.approval_requested" } & LocalToolApprovalRequest)
   | ({ type: "automatic_continuation.paused" } & AutomaticContinuationPause)
@@ -880,6 +881,12 @@ async function executeLocalFunctionCalls(
       if (!registry.has(call.name)) {
         throw new Error(`no local handler registered for function ${call.name}`);
       }
+      onEvent?.({
+        type: "local_tool.started",
+        name: call.name,
+        action: typeof args.action === "string" ? args.action : undefined,
+        arguments: args,
+      });
       result = await registry.execute(call.name, args, abortSignal);
     } catch (error) {
       throwIfAborted(abortSignal);
