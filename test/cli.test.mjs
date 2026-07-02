@@ -55,6 +55,7 @@ import {
   buildTranscriptLines,
   buildTranscriptViewModel,
   buildWorkbenchRenderModel,
+  copyTextFromRenderModel,
   createWorkbenchInputController,
   elapsedDots,
   pendingLocalLabel,
@@ -752,6 +753,14 @@ test("workbench command parser and reducer handle local workflow state", () => {
   assert.deepEqual(parseWorkbenchCommand("/render raw"), { kind: "render", mode: "raw" });
   assert.deepEqual(parseWorkbenchCommand("/render markdown"), { kind: "render", mode: "markdown" });
   assert.deepEqual(parseWorkbenchCommand("/transcript"), { kind: "transcript" });
+  assert.deepEqual(parseWorkbenchCommand("/copy"), { kind: "copy", target: "page" });
+  assert.deepEqual(parseWorkbenchCommand("/copy page"), { kind: "copy", target: "page" });
+  assert.deepEqual(parseWorkbenchCommand("/copy visible"), { kind: "copy", target: "page" });
+  assert.deepEqual(parseWorkbenchCommand("/copy transcript"), { kind: "copy", target: "transcript" });
+  assert.deepEqual(parseWorkbenchCommand("/copy all"), { kind: "copy", target: "transcript" });
+  assert.deepEqual(parseWorkbenchCommand("/copy activity"), { kind: "copy", target: "activity" });
+  assert.deepEqual(parseWorkbenchCommand("/copy activities"), { kind: "copy", target: "activity" });
+  assert.deepEqual(parseWorkbenchCommand("/copy sidebar"), { kind: "invalid", command: "copy sidebar" });
   assert.deepEqual(parseWorkbenchCommand("/export"), { kind: "export", path: undefined });
   assert.deepEqual(parseWorkbenchCommand("/export ./notes/transcript.txt"), { kind: "export", path: "./notes/transcript.txt" });
   assert.deepEqual(parseWorkbenchCommand("/access"), { kind: "access" });
@@ -1730,6 +1739,27 @@ test("workbench render model keeps input editable while busy", () => {
   assert.equal(model.input.lines[0].cursorText, "u");
 });
 
+test("workbench render model extracts panel-scoped copy text", () => {
+  let state = createInitialWorkbenchState({});
+  state = workbenchReducer(state, { type: "message.add", role: "assistant", text: "First transcript line\nSecond transcript line" });
+  state = workbenchReducer(state, { type: "activity.add", level: "success", text: "Copied safely" });
+  const model = buildWorkbenchRenderModel({
+    draft: "",
+    profileName: "default",
+    spinnerFrame: 0,
+    state,
+    transcriptOffset: 0,
+    viewport: { rows: 24, columns: 120 },
+    workdirFallback: "/fallback",
+  });
+
+  assert.match(copyTextFromRenderModel(model, "page"), /Second transcript line/);
+  assert.match(copyTextFromRenderModel(model, "transcript"), /Agent API Workbench is ready/);
+  assert.doesNotMatch(copyTextFromRenderModel(model, "transcript"), /Copied safely/);
+  assert.match(copyTextFromRenderModel(model, "activity"), /Copied safely/);
+  assert.doesNotMatch(copyTextFromRenderModel(model, "activity"), /Second transcript line/);
+});
+
 test("workbench render model renders a single empty editor cursor", () => {
   const model = buildWorkbenchRenderModel({
     cursor: 0,
@@ -2456,6 +2486,12 @@ test("workbench input controller maps navigation and busy abort policy", () => {
     effects: [{ type: "scroll", delta: -10 }],
     selectionAnchor: null,
   });
+  assert.deepEqual(controller.handle("", { return: true }, { busy: true, draft: "/copy activity", viewportHeight: 11 }), {
+    cursor: 0,
+    draft: "",
+    effects: [{ type: "submit", input: "/copy activity" }],
+    selectionAnchor: null,
+  });
   assert.deepEqual(controller.handle("u", { ctrl: true }, { busy: false, draft: "abcd", viewportHeight: 11 }), {
     cursor: 4,
     draft: "abcd",
@@ -2851,6 +2887,9 @@ test("workbench engine handles renderer-neutral commands", () => {
 
   assert.equal(engine.handleCommand({ kind: "transcript" }).handled, true);
   assert.match(engine.snapshot().messages.at(-1).text, /Transcript preview/);
+
+  assert.equal(engine.handleCommand({ kind: "copy", target: "page" }).handled, true);
+  assert.match(engine.snapshot().messages.at(-1).text, /Clipboard copy is provided by the active renderer/);
 
   assert.equal(engine.handleCommand({ kind: "invalid", command: "wat" }).handled, true);
   assert.match(engine.snapshot().messages.at(-1).text, /Unknown command: \/wat/);

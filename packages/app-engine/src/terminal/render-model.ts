@@ -111,6 +111,7 @@ export function buildWorkbenchRenderModel(input: BuildWorkbenchRenderModelInput)
       "PgUp/PgDn page",
       "Shift+↑/↓ row",
       "End live",
+      "/copy page",
       "/export save",
       "/transcript preview",
       transcript.offset > 0

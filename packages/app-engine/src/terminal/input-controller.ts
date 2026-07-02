@@ -105,6 +105,7 @@ function handleBusyInput(
     history.record(command);
     if (command === "/abort" || command === "/cancel") return editorResult(emptyEditor(), { type: "abort" });
     if (isResumeCommand(command)) return editorResult(emptyEditor(), { type: "submit", input: command });
+    if (isCopyCommand(command)) return editorResult(emptyEditor(), { type: "submit", input: command });
     if (command) return editorResult(emptyEditor(), { type: "ignored_busy" });
     return editorResult(emptyEditor());
   }
@@ -180,6 +181,10 @@ function emptyEditor(): TextEditorState {
 
 function isResumeCommand(command: string) {
   return command === "/resume" || command.startsWith("/resume ");
+}
+
+function isCopyCommand(command: string) {
+  return command === "/copy" || command.startsWith("/copy ");
 }
 
 function isBackwardDelete(input: string, key: WorkbenchInputKey) {

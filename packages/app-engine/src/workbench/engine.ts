@@ -154,6 +154,10 @@ export function createWorkbenchEngine(options: WorkbenchEngineOptions): Workbenc
           dispatch({ type: "message.add", role: "system", text: formatTranscriptPreview(state.messages) });
           dispatch({ type: "activity.add", level: "success", text: "Transcript preview ready" });
           return handled();
+        case "copy":
+          dispatch({ type: "message.add", role: "system", text: `Copy target: ${command.target}. Clipboard copy is provided by the active renderer.` });
+          dispatch({ type: "activity.add", text: `Copy requested: ${command.target}` });
+          return handled();
         case "context":
           dispatch({ type: "context.set", enabled: command.enabled ?? !state.contextEnabled });
           return handled();

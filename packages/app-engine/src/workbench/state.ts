@@ -44,6 +44,7 @@ export interface PendingUpdate {
 }
 
 export type RenderMode = "markdown" | "raw";
+export type WorkbenchCopyTarget = "page" | "transcript" | "activity";
 
 export interface WorkbenchState {
   messages: WorkbenchMessage[];
@@ -119,6 +120,7 @@ export type WorkbenchCommand =
   | { kind: "skills"; field?: "local" | "workspace"; enabled?: boolean }
   | { kind: "render"; mode?: RenderMode }
   | { kind: "transcript" }
+  | { kind: "copy"; target: WorkbenchCopyTarget }
   | { kind: "export"; path?: string }
   | { kind: "context"; enabled?: boolean }
   | { kind: "workdir"; enabled?: boolean }
@@ -440,6 +442,13 @@ export function parseWorkbenchCommand(input: string): WorkbenchCommand | null {
     }
     case "transcript":
       return { kind: "transcript" };
+    case "copy": {
+      const target = rest[0];
+      if (!target || target === "page" || target === "visible") return { kind: "copy", target: "page" };
+      if (target === "transcript" || target === "all") return { kind: "copy", target: "transcript" };
+      if (target === "activity" || target === "activities") return { kind: "copy", target: "activity" };
+      return { kind: "invalid", command: `copy ${target}` };
+    }
     case "export":
       return { kind: "export", path: rest.join(" ").trim() || undefined };
     case "context":
@@ -561,6 +570,7 @@ export function helpText() {
     "/config          show current run configuration and saved defaults",
     "/render [mode]   show or set output rendering: markdown or raw",
     "/transcript      show a plain-text transcript preview",
+    "/copy [target]   copy page, transcript, or activity text to clipboard",
     "/export [file]   save the plain-text transcript to a file",
     "/config preset   save default preset; use none/off for no preset, reset for built-in",
     "/config continuation-limit save automatic continuation checkpoint limit",

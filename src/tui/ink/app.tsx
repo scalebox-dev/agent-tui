@@ -9,15 +9,18 @@ import {
 import {
   createWorkbenchAuthController,
   createWorkbenchAuthGateController,
+  parseWorkbenchCommand,
   type AuthGateState,
   type WorkbenchAuthController,
   type WorkbenchAuthGateController,
 } from "@agent-api/app-engine/workbench";
 import {
   buildWorkbenchRenderModel,
+  copyTextFromRenderModel,
   createWorkbenchInputController,
 } from "@agent-api/app-engine/terminal";
 import { InkAuthGate, InkWorkbenchScreen } from "./components.js";
+import { writeClipboard } from "../clipboard.js";
 
 export function ChatApp({ options }: { options: AgentRunOptions }) {
   return <AuthenticatedChatApp options={options} />;
@@ -225,6 +228,33 @@ function WorkbenchApp({
     setTranscriptOffset(0);
   }
 
+  async function submitInput(input: string) {
+    const command = parseWorkbenchCommand(input);
+    if (command?.kind === "copy") {
+      await copyPanelText(command.target);
+      return;
+    }
+    await agentEngine.submit(input);
+  }
+
+  async function copyPanelText(target: "activity" | "page" | "transcript") {
+    const text = copyTextFromRenderModel(renderModel, target);
+    if (!text) {
+      dispatch({ type: "activity.add", level: "warning", text: `Nothing to copy: ${target}` });
+      return;
+    }
+    try {
+      const copied = await writeClipboard(text, stdout);
+      dispatch({
+        type: "activity.add",
+        level: copied ? "success" : "warning",
+        text: copied ? `Copied ${target} to clipboard` : `Clipboard unavailable for ${target}`,
+      });
+    } catch (error) {
+      dispatch({ type: "activity.add", level: "error", text: `Copy failed: ${userFacingError(error)}` });
+    }
+  }
+
   useEffect(() => {
     let mounted = true;
     void agentEngine.maybeCheckForUpdate({ isMounted: () => mounted });
@@ -288,7 +318,7 @@ function WorkbenchApp({
           void agentEngine.abortActiveTurn("Abort requested.");
           break;
         case "submit":
-          void agentEngine.submit(effect.input);
+          void submitInput(effect.input);
           break;
         case "ignored_busy":
           dispatch({ type: "message.add", role: "system", text: "Agent turn is running. Use /abort or Esc to cancel it." });
@@ -346,4 +376,9 @@ function useTerminalSize(stdout: NodeJS.WriteStream) {
   }, [stdout]);
 
   return size;
+}
+
+function userFacingError(error: unknown) {
+  if (error instanceof Error) return error.message;
+  return String(error);
 }
