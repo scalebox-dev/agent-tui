@@ -4,7 +4,7 @@ import { createWorkbenchInputController } from "./input-controller.js";
 import type { WorkbenchRenderModel } from "./render-model.js";
 import { indexAtDisplayColumn } from "./text-layout.js";
 
-export type WorkbenchFocusedPanel = "input" | "transcript" | "activity";
+export type WorkbenchFocusedPanel = "header" | "input" | "transcript" | "activity";
 
 export interface WorkbenchPanelPosition {
   column: number;
@@ -189,6 +189,7 @@ function handleReadOnlyPanel(
   if (state.focusedPanel === "transcript") {
     return stateResult(handleTranscriptPanelKey(key, state, renderModel));
   }
+  if (state.focusedPanel === "header") return stateResult(state);
   return stateResult(handleActivityPanelKey(key, state, renderModel));
 }
 
@@ -254,7 +255,7 @@ function cycleFocusedPanel(
   renderModel: WorkbenchRenderModel,
   direction: 1 | -1,
 ): WorkbenchTerminalState {
-  const panels: WorkbenchFocusedPanel[] = ["input", "transcript", "activity"];
+  const panels: WorkbenchFocusedPanel[] = ["input", "header", "transcript", "activity"];
   const index = panels.indexOf(state.focusedPanel);
   const focusedPanel = panels[(index + direction + panels.length) % panels.length] ?? "input";
   const next = {
@@ -448,6 +449,8 @@ function handleMouseEvent(
   if (event.button !== "left") return stateResult(state);
   if (event.kind === "motion") return stateResult(extendMouseDrag(state, renderModel, target));
   switch (target.panel) {
+    case "header":
+      return stateResult({ ...state, focusedPanel: "header", mouseDragPanel: null });
     case "activity":
       return stateResult(startActivityMouseDrag(setActivityCursor(
         { ...state, focusedPanel: "activity", activitySelectionAnchor: null },
@@ -528,6 +531,7 @@ function endMouseDrag(state: WorkbenchTerminalState): WorkbenchTerminalState {
 
 type MouseTarget =
   | { panel: "activity"; column: number; line: number }
+  | { panel: "header" }
   | { inputCursor: number; panel: "input" }
   | { panel: "transcript"; column: number; line: number };
 
@@ -535,6 +539,9 @@ function mouseTarget(event: WorkbenchTerminalMouseEvent, renderModel: WorkbenchR
   const layout = mouseLayout(renderModel);
   const row = event.row;
   const column = event.column;
+  if (row >= layout.header.top && row <= layout.header.bottom) {
+    return { panel: "header" };
+  }
   if (row >= layout.transcript.top && row <= layout.transcript.bottom) {
     if (renderModel.layout === "wide" && column >= layout.activity.left) {
       const line = clamp(row - layout.activity.top - 2, 0, Math.max(0, renderModel.visibleActivities.length - 1));
@@ -599,6 +606,8 @@ function mouseTargetForPanel(
         inputCursor: clamp(line.start + columnIndex, line.start, line.end),
       };
     }
+    case "header":
+      return { panel };
     case "transcript": {
       const line = clamp(
         renderModel.transcript.startLine + event.row - layout.transcript.top - 1,
@@ -617,7 +626,7 @@ function mouseTargetForPanel(
 function mouseLayout(renderModel: WorkbenchRenderModel) {
   const headerHeight = 6;
   const transcriptTop = headerHeight + 1;
-  const transcriptBottom = transcriptTop + renderModel.transcript.viewportHeight - 1;
+  const transcriptBottom = transcriptTop + renderModel.transcript.viewportHeight + 1;
   const inputTop = transcriptBottom + 1;
   const inputBottom = inputTop + renderModel.input.height + 2;
   const transcriptPanelWidth = renderModel.layout === "wide"
@@ -627,6 +636,10 @@ function mouseLayout(renderModel: WorkbenchRenderModel) {
   const activityTop = renderModel.layout === "wide" ? transcriptTop : transcriptBottom + 1;
   const activityBottom = renderModel.layout === "wide" ? transcriptBottom : activityTop + renderModel.activityHeight - 1;
   return {
+    header: {
+      bottom: headerHeight,
+      top: 1,
+    },
     activity: {
       bottom: activityBottom,
       left: activityLeft,

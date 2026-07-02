@@ -73,6 +73,7 @@ import {
   createPostgresStorage,
   createSQLiteStorage,
 } from "@agent-api/app-engine/storage";
+import { parseMouseEvent } from "../dist/tui/mouse.js";
 
 const execFileAsync = promisify(execFile);
 const bin = new URL("../dist/index.js", import.meta.url).pathname;
@@ -1800,6 +1801,10 @@ test("workbench terminal controller routes focused panel operations", () => {
     return result;
   };
 
+  applyMouse({ button: "left", column: 5, kind: "press", row: 2 });
+  assert.equal(terminalState.focusedPanel, "header");
+  assert.equal(terminalState.mouseDragPanel, null);
+
   applyMouse({ button: "left", column: 5, kind: "press", row: 7 });
   assert.equal(terminalState.focusedPanel, "transcript");
   assert.equal(terminalState.mouseDragPanel, "transcript");
@@ -1834,6 +1839,8 @@ test("workbench terminal controller routes focused panel operations", () => {
   terminalState = { ...terminalState, cursor: 0, draft: "", selectionAnchor: null };
 
   apply("", { tab: true });
+  assert.equal(terminalState.focusedPanel, "header");
+  apply("", { tab: true });
   assert.equal(terminalState.focusedPanel, "transcript");
 
   apply("", { home: true });
@@ -1859,11 +1866,34 @@ test("workbench terminal controller routes focused panel operations", () => {
   assert.deepEqual(copied.effects, [{ type: "copy", target: "page" }]);
 
   apply("", { tab: true, shift: true });
+  assert.equal(terminalState.focusedPanel, "header");
+  apply("", { tab: true, shift: true });
   assert.equal(terminalState.focusedPanel, "input");
   apply("h", {});
   const submit = apply("i", {});
   assert.equal(submit.state.draft, "hi");
   assert.deepEqual(apply("", { return: true }).effects, [{ type: "submit", input: "hi" }]);
+});
+
+test("tui mouse parser accepts Ink-delivered SGR reports without ESC", () => {
+  assert.deepEqual(parseMouseEvent("[<0;51;41M"), {
+    button: "left",
+    column: 51,
+    kind: "press",
+    row: 41,
+  });
+  assert.deepEqual(parseMouseEvent("\x1b[<0;51;41m"), {
+    button: "left",
+    column: 51,
+    kind: "release",
+    row: 41,
+  });
+  assert.deepEqual(parseMouseEvent("[<64;51;41M"), {
+    button: "wheel_up",
+    column: 51,
+    kind: "wheel",
+    row: 41,
+  });
 });
 
 test("workbench render model renders a single empty editor cursor", () => {

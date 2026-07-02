@@ -25,15 +25,15 @@ export function InkWorkbenchScreen({
 }: {
   activityCursor: WorkbenchPanelPosition;
   activitySelection: WorkbenchPanelSelection | null;
-  focusedPanel: "activity" | "input" | "transcript";
+  focusedPanel: "activity" | "header" | "input" | "transcript";
   renderModel: WorkbenchRenderModel;
   spinnerFrame: number;
   transcriptCursor: WorkbenchPanelPosition;
   transcriptSelection: WorkbenchPanelSelection | null;
 }) {
   const activity = (
-    <Box flexDirection="column" width={renderModel.layout === "wide" ? "28%" : "100%"} height={renderModel.activityHeight} borderStyle="single" borderColor={focusedPanel === "activity" ? "cyan" : "gray"} paddingX={1}>
-      <Text bold wrap="truncate">Activity</Text>
+    <Box flexDirection="column" width={renderModel.layout === "wide" ? "28%" : "100%"} height={renderModel.activityHeight} borderStyle="single" borderColor={panelBorderColor(focusedPanel === "activity")} paddingX={1}>
+      <Text bold color={focusedPanel === "activity" ? "cyan" : undefined} wrap="truncate">Activity</Text>
       {renderModel.visibleActivities.map((activity, index) => {
         const cursor = focusedPanel === "activity" && index === activityCursor.line;
         const text = `${new Date(activity.timestamp).toLocaleTimeString()} ${activity.text}`;
@@ -53,6 +53,7 @@ export function InkWorkbenchScreen({
   return (
     <Box flexDirection="column">
       <Header
+        focused={focusedPanel === "header"}
         contextEnabled={renderModel.header.contextEnabled}
         conversation={renderModel.header.conversation}
         conversationId={renderModel.header.conversationId}
@@ -67,7 +68,14 @@ export function InkWorkbenchScreen({
         workdir={renderModel.header.workdir}
       />
       <Box height={renderModel.viewportHeight} flexDirection={renderModel.layout === "wide" ? "row" : "column"}>
-        <Box flexDirection="column" width={renderModel.layout === "wide" ? "72%" : "100%"} paddingRight={renderModel.layout === "wide" ? 1 : 0}>
+        <Box
+          borderStyle="single"
+          borderColor={panelBorderColor(focusedPanel === "transcript")}
+          flexDirection="column"
+          height={renderModel.transcript.viewportHeight + 2}
+          paddingX={1}
+          width={renderModel.layout === "wide" ? "72%" : "100%"}
+        >
           {renderModel.transcript.visibleLines.map((line, index) => (
             <TranscriptText
               cursorColumn={focusedPanel === "transcript" && renderModel.transcript.startLine + index - 1 === transcriptCursor.line && !transcriptSelection
@@ -83,7 +91,7 @@ export function InkWorkbenchScreen({
         </Box>
         {activity}
       </Box>
-      <Box borderStyle="single" borderColor={focusedPanel === "input" ? renderModel.input.busy ? "yellow" : "green" : "gray"} paddingX={1} flexDirection="column">
+      <Box borderStyle="single" borderColor={panelBorderColor(focusedPanel === "input")} paddingX={1} flexDirection="column">
         <Box>
           {renderModel.input.fullAccess && (
             <Text color="red" bold inverse>
@@ -303,6 +311,7 @@ function AuthPrompt({ cursorVisible, label, value }: { cursorVisible: boolean; l
 }
 
 function Header({
+  focused,
   contextEnabled,
   conversation,
   conversationId,
@@ -316,6 +325,7 @@ function Header({
   renderMode,
   workdir,
 }: {
+  focused: boolean;
   contextEnabled: boolean;
   conversation: string;
   conversationId: string;
@@ -330,8 +340,8 @@ function Header({
   workdir: string;
 }) {
   return (
-    <Box borderStyle="round" borderColor="cyan" paddingX={1} flexDirection="column">
-      <Text bold>Agent API Workbench</Text>
+    <Box borderStyle="round" borderColor={panelBorderColor(focused)} paddingX={1} flexDirection="column">
+      <Text bold color={focused ? "cyan" : undefined}>Agent API Workbench</Text>
       <Text color="gray" wrap="truncate">
         profile={profile} conversation={conversation} id={conversationId} preset={preset} model={model}
       </Text>
@@ -343,6 +353,10 @@ function Header({
       </Text>
     </Box>
   );
+}
+
+function panelBorderColor(focused: boolean) {
+  return focused ? "cyan" : "gray";
 }
 
 function Cursor({ text = " ", visible }: { text?: string; visible: boolean }) {

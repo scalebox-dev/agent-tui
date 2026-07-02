@@ -93,7 +93,8 @@ export function buildWorkbenchRenderModel(input: BuildWorkbenchRenderModelInput)
   const reservedRows = 10 + inputView.height;
   const viewportHeight = Math.max(3, terminalRows - reservedRows);
   const activityHeight = layout === "wide" ? viewportHeight : Math.min(4, Math.max(2, Math.floor(viewportHeight / 3)));
-  const transcriptHeight = layout === "wide" ? viewportHeight : Math.max(3, viewportHeight - activityHeight);
+  const transcriptOuterHeight = layout === "wide" ? viewportHeight : Math.max(3, viewportHeight - activityHeight);
+  const transcriptHeight = Math.max(1, transcriptOuterHeight - 2);
   const transcriptWidth = layout === "wide"
     ? Math.max(28, Math.floor(terminalColumns * 0.72) - 4)
     : Math.max(20, terminalColumns - 4);

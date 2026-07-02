@@ -4,7 +4,7 @@ export const enableMouseReporting = "\x1b[?1000h\x1b[?1002h\x1b[?1006h";
 export const disableMouseReporting = "\x1b[?1000l\x1b[?1002l\x1b[?1006l";
 
 export function parseMouseEvent(input: string): WorkbenchTerminalMouseEvent | null {
-  const match = /\x1b\[<(\d+);(\d+);(\d+)([mM])/.exec(input);
+  const match = /(?:\x1b)?\[<(\d+);(\d+);(\d+)([mM])/.exec(input);
   if (!match) return null;
   const code = Number(match[1]);
   const column = Number(match[2]);
