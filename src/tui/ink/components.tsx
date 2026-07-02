@@ -87,15 +87,17 @@ export function InkWorkbenchScreen({
 }
 
 function TranscriptText({ line }: { line: TranscriptLine }) {
+  const anchor = line.anchor ? <Text color="cyan">▸ </Text> : null;
   if (!line.spans || line.spans.length === 0) {
     return (
       <Text bold={line.bold} color={line.color} inverse={line.inverse} wrap="truncate">
-        {line.text || " "}
+        {anchor}{line.text || " "}
       </Text>
     );
   }
   return (
     <Text bold={line.bold} color={line.color} inverse={line.inverse} wrap="truncate">
+      {anchor}
       {line.spans.map((span, index) => (
         <Text bold={span.bold} color={span.color} inverse={span.inverse} key={index}>
           {span.text}

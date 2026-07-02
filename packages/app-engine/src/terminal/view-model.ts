@@ -1,6 +1,7 @@
 import type { ActivityLevel, RenderMode, WorkbenchMessage } from "../workbench/state.js";
 
 export type TranscriptLine = {
+  anchor?: boolean;
   id: string;
   text: string;
   color?: string;
@@ -17,7 +18,11 @@ export type TranscriptSpan = {
 };
 
 export interface TranscriptViewModel {
+  endLine: number;
   lines: TranscriptLine[];
+  scrollPercent: number;
+  startLine: number;
+  totalLines: number;
   visibleLines: TranscriptLine[];
   maxOffset: number;
   offset: number;
@@ -44,9 +49,19 @@ export function buildTranscriptViewModel(input: {
   const maxOffset = Math.max(0, lines.length - input.viewportHeight);
   const offset = Math.min(input.offset, maxOffset);
   const start = Math.max(0, lines.length - input.viewportHeight - offset);
+  const visibleLines = lines.slice(start, start + input.viewportHeight).map((line, index) => ({
+    ...line,
+    anchor: offset > 0 && index === 0,
+  }));
+  const endLine = visibleLines.length ? start + visibleLines.length : 0;
+  const scrollPercent = maxOffset === 0 ? 100 : Math.round(((maxOffset - offset) / maxOffset) * 100);
   return {
+    endLine,
     lines,
-    visibleLines: lines.slice(start, start + input.viewportHeight),
+    scrollPercent,
+    startLine: visibleLines.length ? start + 1 : 0,
+    totalLines: lines.length,
+    visibleLines,
     maxOffset,
     offset,
     viewportHeight: input.viewportHeight,

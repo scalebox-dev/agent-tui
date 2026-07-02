@@ -2447,13 +2447,13 @@ test("workbench input controller maps navigation and busy abort policy", () => {
   assert.deepEqual(controller.handle("", { pageUp: true }, { busy: false, draft: "", viewportHeight: 11 }), {
     cursor: 0,
     draft: "",
-    effects: [{ type: "scroll", delta: 5 }],
+    effects: [{ type: "scroll", delta: 10 }],
     selectionAnchor: null,
   });
   assert.deepEqual(controller.handle("", { pageDown: true }, { busy: false, draft: "", viewportHeight: 11 }), {
     cursor: 0,
     draft: "",
-    effects: [{ type: "scroll", delta: -5 }],
+    effects: [{ type: "scroll", delta: -10 }],
     selectionAnchor: null,
   });
   assert.deepEqual(controller.handle("u", { ctrl: true }, { busy: false, draft: "abcd", viewportHeight: 11 }), {
@@ -2590,8 +2590,9 @@ test("workbench input controller supports visual-row movement and selected delet
     viewportColumns: 80,
     viewportHeight: 10,
   });
-  assert.equal(shiftedUp.cursor, 6);
-  assert.equal(shiftedUp.selectionAnchor, 12);
+  assert.equal(shiftedUp.cursor, 12);
+  assert.equal(shiftedUp.selectionAnchor, null);
+  assert.deepEqual(shiftedUp.effects, [{ type: "scroll", delta: 1 }]);
 
   const shiftedDown = controller.handle("", { downArrow: true, shift: true }, {
     busy: false,
@@ -2600,8 +2601,9 @@ test("workbench input controller supports visual-row movement and selected delet
     viewportColumns: 80,
     viewportHeight: 10,
   });
-  assert.equal(shiftedDown.cursor, 8);
-  assert.equal(shiftedDown.selectionAnchor, 2);
+  assert.equal(shiftedDown.cursor, 2);
+  assert.equal(shiftedDown.selectionAnchor, null);
+  assert.deepEqual(shiftedDown.effects, [{ type: "scroll", delta: -1 }]);
 
   const metaFallback = controller.handle("", { downArrow: true, meta: true }, {
     busy: false,

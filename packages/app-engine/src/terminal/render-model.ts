@@ -108,11 +108,14 @@ export function buildWorkbenchRenderModel(input: BuildWorkbenchRenderModelInput)
   return {
     activityHeight,
     footerText: [
-      "PgUp/PgDn scroll",
+      "PgUp/PgDn page",
+      "Shift+↑/↓ row",
       "End live",
       "/export save",
       "/transcript preview",
-      transcript.offset > 0 ? `${transcript.offset} rows from latest` : "live",
+      transcript.offset > 0
+        ? `${transcript.scrollPercent}% · rows ${transcript.startLine}-${transcript.endLine}/${transcript.totalLines} · ${transcript.offset} from live`
+        : "live",
     ].join(" · "),
     header: {
       accessMode: input.state.accessMode,

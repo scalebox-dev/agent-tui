@@ -265,7 +265,7 @@ function WorkbenchApp({
       draft,
       selectionAnchor,
       viewportColumns: renderModel.input.viewportColumns,
-      viewportHeight: renderModel.viewportHeight,
+      viewportHeight: renderModel.transcript.viewportHeight,
     });
     if (result.draft !== draft) setDraft(result.draft);
     if (result.cursor !== cursor) setCursor(result.cursor);

@@ -67,11 +67,13 @@ export function createWorkbenchInputController(): WorkbenchInputController {
       const editor = normalizeTextEditorState({ text: context.draft, cursor, selectionAnchor });
       const layout = { viewportColumns };
       if (key.ctrl && input === "c") return editorResult(editor, { type: "exit" });
+      if (key.shift && key.upArrow && !key.ctrl && !key.meta) return editorResult(editor, { type: "scroll", delta: 1 });
+      if (key.shift && key.downArrow && !key.ctrl && !key.meta) return editorResult(editor, { type: "scroll", delta: -1 });
       if (key.pageUp) {
-        return editorResult(editor, { type: "scroll", delta: Math.max(1, Math.floor(context.viewportHeight / 2)) });
+        return editorResult(editor, { type: "scroll", delta: pageScrollDelta(context.viewportHeight) });
       }
       if (key.pageDown) {
-        return editorResult(editor, { type: "scroll", delta: -Math.max(1, Math.floor(context.viewportHeight / 2)) });
+        return editorResult(editor, { type: "scroll", delta: -pageScrollDelta(context.viewportHeight) });
       }
       if (key.ctrl && key.upArrow) return historyResult(history.previous(context.draft));
       if (key.ctrl && key.downArrow) return historyResult(history.next(context.draft));
@@ -85,6 +87,10 @@ export function createWorkbenchInputController(): WorkbenchInputController {
       return handleReadyInput(input, key, editor, history);
     },
   };
+}
+
+function pageScrollDelta(viewportHeight: number) {
+  return Math.max(1, viewportHeight - 1);
 }
 
 function handleBusyInput(
