@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { useApp, useInput, useStdout } from "ink";
+import { useApp, useInput, useStdin, useStdout } from "ink";
 import {
   createAgentEngine,
   defaultBaseURL,
@@ -193,6 +193,7 @@ function WorkbenchApp({
 }) {
   const app = useApp();
   const { stdout } = useStdout();
+  const lastRawInputRef = useLastRawInputRef();
   const terminalSize = useTerminalSize(stdout);
   const [clipboardCapabilities, setClipboardCapabilities] = useState<ClipboardCapabilities | null>(null);
   const [terminalState, setTerminalState] = useState<WorkbenchTerminalState>(() => initialWorkbenchTerminalState());
@@ -366,7 +367,8 @@ function WorkbenchApp({
       if (!sameTerminalState(result.state, terminalState)) setTerminalState(result.state);
       return;
     }
-    const result = terminalController.handle(input, key as WorkbenchTerminalKey, terminalState, {
+    const normalizedKey = normalizeInkTerminalKey(key as WorkbenchTerminalKey, lastRawInputRef.current);
+    const result = terminalController.handle(input, normalizedKey, terminalState, {
       busy: state.busy,
       renderModel,
     });
@@ -471,6 +473,34 @@ function useTerminalSize(stdout: NodeJS.WriteStream) {
   }, [stdout]);
 
   return size;
+}
+
+function useLastRawInputRef() {
+  const { internal_eventEmitter } = useStdin();
+  const lastRawInputRef = useRef("");
+
+  useEffect(() => {
+    const recordRawInput = (data: Buffer | string) => {
+      lastRawInputRef.current = Buffer.isBuffer(data) ? data.toString("utf8") : String(data);
+    };
+    internal_eventEmitter?.on("input", recordRawInput);
+    return () => {
+      internal_eventEmitter?.removeListener("input", recordRawInput);
+    };
+  }, [internal_eventEmitter]);
+
+  return lastRawInputRef;
+}
+
+function normalizeInkTerminalKey(key: WorkbenchTerminalKey, rawInput: string): WorkbenchTerminalKey {
+  if (key.delete && !key.backspace && isRawBackspace(rawInput)) {
+    return { ...key, backspace: true, delete: false };
+  }
+  return key;
+}
+
+function isRawBackspace(rawInput: string) {
+  return rawInput === "\x7f" || rawInput === "\x1b\x7f";
 }
 
 function userFacingError(error: unknown) {

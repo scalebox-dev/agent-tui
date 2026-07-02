@@ -39,6 +39,7 @@ export function InkWorkbenchScreen({
     <Box
       borderColor={panelBorderColor(focusedPanel === "activity")}
       borderStyle="round"
+      flexShrink={0}
       flexDirection="column"
       height={renderModel.activityHeight}
       marginLeft={renderModel.layout === "wide" ? 1 : 0}
@@ -86,10 +87,11 @@ export function InkWorkbenchScreen({
         <Box
           borderStyle="round"
           borderColor={panelBorderColor(focusedPanel === "transcript")}
+          flexGrow={renderModel.layout === "wide" ? 1 : 0}
           flexDirection="column"
           height={renderModel.transcript.viewportHeight + 2}
           paddingX={1}
-          width={renderModel.layout === "wide" ? "72%" : "100%"}
+          width={renderModel.layout === "wide" ? undefined : "100%"}
         >
           {renderModel.transcript.visibleLines.map((line, index) => (
             <TranscriptText

@@ -1,6 +1,6 @@
 {
   "name": "@agent-api/cli",
-  "version": "0.4.27",
+  "version": "0.4.28",
   "description": "First-class command line interface for Agent API",
   "license": "MIT",
   "homepage": "https://github.com/scalebox-dev/agent-tui#readme",
