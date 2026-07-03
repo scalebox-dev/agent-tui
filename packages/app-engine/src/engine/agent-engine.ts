@@ -101,8 +101,10 @@ export function createAgentEngine(options: AgentEngineAppOptions): AgentEngineAp
         session.engine.dispatch({ type: "activity.add", level: "warning", text: "Conversation load is waiting for workspace context" });
         return;
       }
+      const initialConversationName = await resolveInitialConversationName(state);
+      if (lifecycleOptions.isMounted && !lifecycleOptions.isMounted()) return;
       const conversation = await session.conversation.resolveConversation(
-        state.currentConversation,
+        initialConversationName,
         options.baseOptions.profile,
         state.currentWorkspaceId,
         state.currentWorkspaceName,
@@ -320,6 +322,15 @@ export function createAgentEngine(options: AgentEngineAppOptions): AgentEngineAp
           break;
       }
     }
+  }
+
+  async function resolveInitialConversationName(state: WorkbenchState) {
+    if (options.baseOptions.conversationExplicit !== false) return state.currentConversation;
+    const conversations = await session.conversation.listConversationSelections(
+      options.baseOptions.profile,
+      state.currentWorkspaceId,
+    );
+    return conversations[0]?.name || state.currentConversation;
   }
 
   return {

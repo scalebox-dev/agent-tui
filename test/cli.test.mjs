@@ -346,6 +346,87 @@ test("agent engine facade submits prompts and commands without renderer dependen
   app.dispose();
 });
 
+test("agent engine restores latest saved conversation when conversation is implicit", async () => {
+  let resolvedName = "";
+  const loadedTranscripts = [];
+  const app = createAgentEngine({
+    authController: stubAuthController(),
+    baseOptions: {
+      accessMode: "off",
+      conversation: "default",
+      conversationExplicit: false,
+      promptParts: [],
+    },
+    profileName: "default",
+    services: {
+      conversation: {
+        async resolveConversation(name) {
+          resolvedName = name;
+          return {
+            id: name === "latest" ? "conv_latest" : "conv_default",
+            name,
+            previousResponseId: "resp_latest",
+            status: "continued",
+            message: "Continuing.",
+          };
+        },
+        async startNewConversation(name) {
+          return { id: "conv_new", name: name || "new", status: "fresh", message: "Started." };
+        },
+        async switchConversation(name) {
+          return { id: "conv_switch", name, status: "fresh", message: "Switched." };
+        },
+        async listConversationSelections() {
+          return [
+            { id: "conv_latest", name: "latest", status: "continued", previousResponseId: "resp_latest", updatedAt: 20, message: "" },
+            { id: "conv_default", name: "default", status: "continued", previousResponseId: "resp_old", updatedAt: 10, message: "" },
+          ];
+        },
+        async listConversations() {
+          return "latest";
+        },
+        async exportTranscript() {
+          return "/tmp/transcript.txt";
+        },
+      },
+      transcriptStore: {
+        async appendMessage() {},
+        async appendMessageDelta() {},
+        async clearConversation() {},
+        async exportConversation() { return ""; },
+        async getConversationSummary() { return { latestSnippet: "", messageCount: 0, titleSnippet: "" }; },
+        async loadAfterMessages() { return []; },
+        async loadBeforeMessages() { return []; },
+        async loadRecentMessages(conversationId) {
+          loadedTranscripts.push(conversationId);
+          return [{ id: "m_latest", role: "user", text: "latest transcript", transcriptSeq: 1 }];
+        },
+      },
+      turn: {
+        async startPrompt() {},
+        async continueAfterLocalApproval() {},
+        async abort() {},
+      },
+      workspace: stubWorkspaceController(),
+    },
+    async onDeleteProfile() {},
+    onExit() {},
+    onLogin() {},
+    onLogout() {},
+    onSwitchProfile() {},
+  });
+
+  await app.loadWorkspaceContext();
+  await app.loadInitialConversation();
+
+  assert.equal(resolvedName, "latest");
+  assert.equal(app.snapshot().currentConversation, "latest");
+  assert.equal(app.snapshot().conversationId, "conv_latest");
+  assert.deepEqual(loadedTranscripts, ["conv_latest"]);
+  assert.equal(app.snapshot().messages.some((message) => message.text === "latest transcript"), true);
+  app.dispose();
+});
+
 test("agent conversation manager lists, shows, and deletes local conversation state", async () => {
   const root = await mkdtemp(join(tmpdir(), "agent-api-cli-test-"));
   const env = isolatedEnv(root);
@@ -964,6 +1045,8 @@ test("chat options default to pro-search unless model or preset is explicit", ()
   assert.equal(defaultOptions.preset, "pro-search");
   assert.equal(defaultOptions.presetExplicit, false);
   assert.equal(defaultOptions.modelExplicit, false);
+  assert.equal(defaultOptions.conversation, "default");
+  assert.equal(defaultOptions.conversationExplicit, false);
   assert.equal(defaultOptions.automaticContinuationLimit, undefined);
   assert.equal(normalizeChatOptions(["hi"], { automaticContinuationLimit: "12" }).automaticContinuationLimit, 12);
   assert.equal(
@@ -979,6 +1062,10 @@ test("chat options default to pro-search unless model or preset is explicit", ()
   assert.equal(modelOptions.preset, undefined);
   assert.equal(modelOptions.model, "provider/model");
   assert.equal(modelOptions.modelExplicit, true);
+
+  const conversationOptions = normalizeChatOptions(["hi"], { conversation: "release" });
+  assert.equal(conversationOptions.conversation, "release");
+  assert.equal(conversationOptions.conversationExplicit, true);
 });
 
 test("chat options expose local skills, memory, and workspace skill scopes", () => {

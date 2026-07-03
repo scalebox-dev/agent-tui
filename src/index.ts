@@ -335,7 +335,7 @@ function agentChatCommand() {
     .description("Start an interactive chat, or send one message when prompt text is provided")
     .argument("[prompt...]", "prompt text")
     .option("-p, --profile <name>", "profile name")
-    .option("-c, --conversation <name>", "conversation name", "default")
+    .option("-c, --conversation <name>", "conversation name")
     .option("--preset <name>", "agent preset")
     .option("--model <name>", "explicit model")
     .option("--file <path>", "read prompt text from file")

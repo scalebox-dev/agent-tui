@@ -42,6 +42,7 @@ export function normalizeChatOptions(promptParts: string[], options: ChatOptions
     modelExplicit,
     stream: options.stream !== false,
     conversation: options.conversation || "default",
+    conversationExplicit: typeof options.conversation === "string" && options.conversation.trim() !== "",
     continueConversation: true,
     restartConversation: options.restart,
     workdir: options.workdir,
