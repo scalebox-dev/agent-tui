@@ -3593,9 +3593,11 @@ test("workbench engine maps agent events into state and runtime effects", () => 
     responseID: "resp_local",
   }).effects, []);
   assert.equal(engine.snapshot().pendingLocalTool?.name, "local_shell");
-  assert.match(engine.snapshot().messages.at(-1).text, /Local action requires approval/);
-  assert.match(engine.snapshot().messages.at(-1).text, /Command:\n  pwd/);
-  assert.match(engine.snapshot().messages.at(-1).text, /Working directory: \/tmp\/project/);
+  const pendingToolMessage = engine.snapshot().messages.at(-1);
+  assert.equal(pendingToolMessage.kind, "tool");
+  assert.match(pendingToolMessage.text, /Local action requires approval/);
+  assert.match(pendingToolMessage.text, /Command:\n  pwd/);
+  assert.match(pendingToolMessage.text, /Working directory: \/tmp\/project/);
 
   const largeContent = "x".repeat(10_000);
   assert.deepEqual(engine.handleAgentEvent({

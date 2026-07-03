@@ -288,7 +288,7 @@ export function createWorkbenchEngine(options: WorkbenchEngineOptions): Workbenc
               responseID: event.responseID,
             },
           });
-          dispatch({ type: "message.add", role: "system", text: formatLocalToolApproval(event) });
+          dispatch({ type: "message.add", role: "system", kind: "tool", text: formatLocalToolApproval(event) });
           return eventResult();
         case "automatic_continuation.paused":
           dispatch({

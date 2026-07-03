@@ -199,6 +199,7 @@ function WorkbenchApp({
   const terminalSize = useTerminalSize(stdout);
   const [clipboardCapabilities, setClipboardCapabilities] = useState<ClipboardCapabilities | null>(null);
   const [terminalState, setTerminalState] = useState<WorkbenchTerminalState>(() => initialWorkbenchTerminalState());
+  const terminalStateRef = useRef(terminalState);
   const [spinnerFrame, setSpinnerFrame] = useState(0);
   const agentEngineRef = useRef<AgentEngineApp | null>(null);
   const transcriptStoreRef = useRef<WorkbenchTranscriptStore | null | undefined>(undefined);
@@ -248,8 +249,19 @@ function WorkbenchApp({
     [options.workdir, profileName, spinnerFrame, state, terminalSize.columns, terminalSize.rows, terminalState.cursor, terminalState.draft, terminalState.selectionAnchor, terminalState.transcriptOffset],
   );
 
+  function commitTerminalState(next: WorkbenchTerminalState) {
+    terminalStateRef.current = next;
+    setTerminalState(next);
+  }
+
+  function updateTerminalState(updater: (current: WorkbenchTerminalState) => WorkbenchTerminalState) {
+    const next = updater(terminalStateRef.current);
+    terminalStateRef.current = next;
+    setTerminalState(next);
+  }
+
   useEffect(() => {
-    setTerminalState((current) => {
+    updateTerminalState((current) => {
       const next = normalizeTerminalState(current, renderModel);
       return sameTerminalState(current, next) ? current : next;
     });
@@ -293,7 +305,7 @@ function WorkbenchApp({
         dispatch({ type: "activity.add", level: "warning", text: "Clipboard paste unavailable" });
         return;
       }
-      setTerminalState((current) => {
+      updateTerminalState((current) => {
         const normalized = normalizeTerminalState({ ...current, focusedPanel: "input" }, renderModel);
         const result = terminalController.handle(text, {}, normalized, {
           busy: state.busy,
@@ -384,32 +396,33 @@ function WorkbenchApp({
   }, [agentEngine, options.profile]);
 
   useInput((input, key) => {
+    const currentTerminalState = terminalStateRef.current;
     const mouse = parseMouseEvent(input);
     if (mouse) {
-      const result = terminalController.handleMouse(mouse, terminalState, {
+      const result = terminalController.handleMouse(mouse, currentTerminalState, {
         busy: state.busy,
         renderModel,
       });
-      if (!sameTerminalState(result.state, terminalState)) setTerminalState(result.state);
+      if (!sameTerminalState(result.state, currentTerminalState)) commitTerminalState(result.state);
       return;
     }
     const normalizedKey = normalizeInkTerminalKey(key as WorkbenchTerminalKey, lastRawInputRef.current);
-    const result = terminalController.handle(input, normalizedKey, terminalState, {
+    const result = terminalController.handle(input, normalizedKey, currentTerminalState, {
       busy: state.busy,
       renderModel,
     });
-    if (!sameTerminalState(result.state, terminalState)) setTerminalState(result.state);
+    if (!sameTerminalState(result.state, currentTerminalState)) commitTerminalState(result.state);
     if (shouldLoadOlderTranscript(normalizedKey, result.state, renderModel)) {
       void agentEngine.loadOlderTranscript().then((count) => {
         if (count > 0) {
-          setTerminalState((current) => ({ ...current, focusedPanel: "transcript", transcriptOffset: Number.MAX_SAFE_INTEGER }));
+          updateTerminalState((current) => ({ ...current, focusedPanel: "transcript", transcriptOffset: Number.MAX_SAFE_INTEGER }));
         }
       });
     }
     if (shouldLoadNewerTranscript(normalizedKey, result.state)) {
       void agentEngine.loadNewerTranscript().then((count) => {
         if (count > 0) {
-          setTerminalState((current) => ({ ...current, focusedPanel: "transcript", transcriptOffset: 0 }));
+          updateTerminalState((current) => ({ ...current, focusedPanel: "transcript", transcriptOffset: 0 }));
         }
       });
     }
@@ -419,19 +432,19 @@ function WorkbenchApp({
           app.exit();
           break;
         case "scroll":
-          setTerminalState((current) => normalizeTerminalState({
+          updateTerminalState((current) => normalizeTerminalState({
             ...current,
             transcriptOffset: current.transcriptOffset + effect.delta,
           }, renderModel));
           break;
         case "scroll_top":
-          setTerminalState((current) => normalizeTerminalState({
+          updateTerminalState((current) => normalizeTerminalState({
             ...current,
             transcriptOffset: renderModel.transcript.maxOffset,
           }, renderModel));
           break;
         case "scroll_bottom":
-          setTerminalState((current) => ({ ...current, transcriptOffset: 0 }));
+          updateTerminalState((current) => ({ ...current, transcriptOffset: 0 }));
           break;
         case "abort":
           void agentEngine.abortActiveTurn("Abort requested.");
