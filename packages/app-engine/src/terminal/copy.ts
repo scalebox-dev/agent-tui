@@ -19,6 +19,8 @@ export function copyTextFromRenderModel(renderModel: WorkbenchRenderModel, targe
       return copyTextFromTranscriptLines(renderModel.transcript.visibleLines);
     case "workspace":
       return copyTextFromLines(renderModel.workspace.lines);
+    case "workdir":
+      return copyTextFromLines(renderModel.workdir.lines);
   }
 }
 

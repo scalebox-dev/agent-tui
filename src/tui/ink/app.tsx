@@ -264,7 +264,7 @@ function WorkbenchApp({
     await agentEngine.submit(input);
   }
 
-  async function copyPanelText(target: "activity" | "conversation" | "header" | "page" | "transcript" | "workspace") {
+  async function copyPanelText(target: "activity" | "conversation" | "header" | "page" | "transcript" | "workspace" | "workdir") {
     const text = copyTextForTarget(target);
     if (!text) {
       dispatch({ type: "activity.add", level: "warning", text: `Nothing to copy: ${target}` });
@@ -307,7 +307,7 @@ function WorkbenchApp({
     }
   }
 
-  function copyTextForTarget(target: "activity" | "conversation" | "header" | "page" | "transcript" | "workspace") {
+  function copyTextForTarget(target: "activity" | "conversation" | "header" | "page" | "transcript" | "workspace" | "workdir") {
     if (target === "transcript" || target === "page") {
       const selection = selectedPanelRange(terminalState.transcriptSelectionAnchor, terminalState.transcriptCursor);
       if (selection) return copyTextFromTranscriptSelection(renderModel.transcript.lines, selection);
@@ -324,6 +324,10 @@ function WorkbenchApp({
       const selection = selectedPanelRange(terminalState.workspaceSelectionAnchor, terminalState.workspaceCursor);
       if (selection) return copyTextFromHeaderSelection(renderModel.workspace.lines, selection);
     }
+    if (target === "workdir") {
+      const selection = selectedPanelRange(terminalState.workdirSelectionAnchor, terminalState.workdirCursor);
+      if (selection) return copyTextFromHeaderSelection(renderModel.workdir.lines, selection);
+    }
     if (target === "activity") {
       const selection = selectedPanelRange(terminalState.activitySelectionAnchor, terminalState.activityCursor);
       if (selection) return copyTextFromActivitySelection(renderModel.visibleActivities, selection);
@@ -334,7 +338,10 @@ function WorkbenchApp({
   useEffect(() => {
     let mounted = true;
     void agentEngine.maybeCheckForUpdate({ isMounted: () => mounted });
-    void agentEngine.loadInitialConversation({ isMounted: () => mounted });
+    void (async () => {
+      await agentEngine.loadWorkspaceContext({ isMounted: () => mounted });
+      await agentEngine.loadInitialConversation({ isMounted: () => mounted });
+    })();
     void agentEngine.loadInitialSettings({ isMounted: () => mounted });
     return () => {
       mounted = false;
@@ -445,13 +452,16 @@ function WorkbenchApp({
         case "switch_conversation":
           void submitInput(`/switch ${effect.name}`);
           break;
+        case "switch_workspace":
+          void submitInput(`/workspace ${effect.id}`);
+          break;
       }
     }
   });
 
   useEffect(() => {
     void agentEngine.startInitialPrompt();
-  }, [agentEngine, state.busy, state.contextEnabled, state.workdir]);
+  }, [agentEngine, state.busy, state.contextEnabled, state.currentWorkspaceId, state.workdir]);
 
   useEffect(() => {
     if (!state.busy) {
@@ -483,6 +493,8 @@ function WorkbenchApp({
       transcriptSelection={selectedPanelRange(terminalState.transcriptSelectionAnchor, terminalState.transcriptCursor)}
       workspaceCursor={terminalState.workspaceCursor}
       workspaceSelection={selectedPanelRange(terminalState.workspaceSelectionAnchor, terminalState.workspaceCursor)}
+      workdirCursor={terminalState.workdirCursor}
+      workdirSelection={selectedPanelRange(terminalState.workdirSelectionAnchor, terminalState.workdirCursor)}
     />
   );
 }
@@ -593,7 +605,10 @@ function sameTerminalState(a: WorkbenchTerminalState, b: WorkbenchTerminalState)
     && samePositionOrNull(a.transcriptSelectionAnchor, b.transcriptSelectionAnchor)
     && a.workspaceCursor.line === b.workspaceCursor.line
     && a.workspaceCursor.column === b.workspaceCursor.column
-    && samePositionOrNull(a.workspaceSelectionAnchor, b.workspaceSelectionAnchor);
+    && samePositionOrNull(a.workspaceSelectionAnchor, b.workspaceSelectionAnchor)
+    && a.workdirCursor.line === b.workdirCursor.line
+    && a.workdirCursor.column === b.workdirCursor.column
+    && samePositionOrNull(a.workdirSelectionAnchor, b.workdirSelectionAnchor);
 }
 
 function samePositionOrNull(

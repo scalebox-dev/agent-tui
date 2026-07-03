@@ -48,6 +48,8 @@ export interface AgentRunOptions {
   modelExplicit?: boolean;
   stream?: boolean;
   conversation?: string;
+  workspaceId?: string;
+  workspaceName?: string;
   continueConversation?: boolean;
   restartConversation?: boolean;
   previousResponseId?: string;

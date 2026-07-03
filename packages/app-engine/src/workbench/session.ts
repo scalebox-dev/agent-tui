@@ -9,6 +9,7 @@ import { createWorkbenchLocalController, type WorkbenchLocalController } from ".
 import { createWorkbenchRuntimeController, type WorkbenchRuntimeController } from "./runtime-controller.js";
 import { createWorkbenchSettingsController, type WorkbenchSettingsController } from "./settings-controller.js";
 import { createWorkbenchTurnController, type WorkbenchTurnController } from "./turn-controller.js";
+import { createWorkbenchWorkspaceController, type WorkbenchWorkspaceController } from "./workspace-controller.js";
 
 export interface WorkbenchSession {
   conversation: WorkbenchConversationController;
@@ -18,6 +19,7 @@ export interface WorkbenchSession {
   runtime: WorkbenchRuntimeController;
   settings: WorkbenchSettingsController;
   turn: WorkbenchTurnController;
+  workspace: WorkbenchWorkspaceController;
 }
 
 export interface WorkbenchSessionOptions {
@@ -44,6 +46,7 @@ export function createWorkbenchSession(options: WorkbenchSessionOptions): Workbe
     getShellIsolation: () => engine.snapshot().shellIsolation,
   });
   const runtime = options.services?.runtime ?? createWorkbenchRuntimeController({ dispatch: engine.dispatch });
+  const workspace = options.services?.workspace ?? createWorkbenchWorkspaceController();
   const turn = options.services?.turn ?? createWorkbenchTurnController({
     baseOptions: options.baseOptions,
     dispatch: engine.dispatch,
@@ -61,6 +64,7 @@ export function createWorkbenchSession(options: WorkbenchSessionOptions): Workbe
     runtime,
     settings: options.services?.settings ?? createWorkbenchSettingsController(),
     turn,
+    workspace,
   };
 }
 

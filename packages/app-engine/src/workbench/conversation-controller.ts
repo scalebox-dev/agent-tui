@@ -2,19 +2,22 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   conversationSummary,
-  deleteConversation,
+  deleteWorkspaceConversation,
   ensureConversation,
   listConversations,
+  renameConversation,
   startFreshConversation,
 } from "../agent.js";
 import { runtime } from "../runtime/index.js";
 
 export interface WorkbenchConversationController {
-  resolveConversation(name: string, profileName?: string): Promise<ConversationSelection>;
-  startNewConversation(name: string | undefined, profileName?: string): Promise<ConversationSelection>;
-  switchConversation(name: string, profileName?: string): Promise<ConversationSelection>;
-  listConversationSelections(profileName?: string): Promise<ConversationSelection[]>;
-  listConversations(profileName?: string): Promise<string>;
+  resolveConversation(name: string, profileName?: string, workspaceId?: string, workspaceName?: string): Promise<ConversationSelection>;
+  startNewConversation(name: string | undefined, profileName?: string, workspaceId?: string, workspaceName?: string): Promise<ConversationSelection>;
+  switchConversation(name: string, profileName?: string, workspaceId?: string, workspaceName?: string): Promise<ConversationSelection>;
+  renameConversation(name: string, nextName: string, profileName?: string, workspaceId?: string): Promise<ConversationSelection>;
+  deleteConversation(name: string, profileName?: string, workspaceId?: string): Promise<ConversationDeletion>;
+  listConversationSelections(profileName?: string, workspaceId?: string): Promise<ConversationSelection[]>;
+  listConversations(profileName?: string, query?: string, workspaceId?: string): Promise<string>;
   exportTranscript(input: { path?: string; transcript: string; conversation: string }): Promise<string>;
 }
 
@@ -26,46 +29,55 @@ export interface ConversationSelection {
   profile?: string;
   status: "fresh" | "continued";
   updatedAt?: number;
+  workspaceId?: string;
+  workspaceName?: string;
   message: string;
 }
 
+export interface ConversationDeletion {
+  message: string;
+  name: string;
+}
+
 export interface WorkbenchConversationControllerOptions {
-  deleteConversationImpl?: typeof deleteConversation;
+  deleteWorkspaceConversationImpl?: typeof deleteWorkspaceConversation;
   listConversationsImpl?: typeof listConversations;
   mkdirImpl?: typeof mkdir;
   writeFileImpl?: typeof writeFile;
   now?: () => Date;
   dataDir?: string;
   ensureConversationImpl?: typeof ensureConversation;
+  renameConversationImpl?: typeof renameConversation;
   startFreshConversationImpl?: typeof startFreshConversation;
 }
 
 export function createWorkbenchConversationController(
   options: WorkbenchConversationControllerOptions = {},
 ): WorkbenchConversationController {
-  const deleteConversationImpl = options.deleteConversationImpl ?? deleteConversation;
+  const deleteWorkspaceConversationImpl = options.deleteWorkspaceConversationImpl ?? deleteWorkspaceConversation;
   const listConversationsImpl = options.listConversationsImpl ?? listConversations;
   const ensureConversationImpl = options.ensureConversationImpl ?? ensureConversation;
+  const renameConversationImpl = options.renameConversationImpl ?? renameConversation;
   const startFreshConversationImpl = options.startFreshConversationImpl ?? startFreshConversation;
   const mkdirImpl = options.mkdirImpl ?? mkdir;
   const writeFileImpl = options.writeFileImpl ?? writeFile;
   const now = options.now ?? (() => new Date());
 
   return {
-    async resolveConversation(name, profileName) {
-      const conversation = await ensureConversationImpl(name, profileName);
+    async resolveConversation(name, profileName, workspaceId, workspaceName) {
+      const conversation = await ensureConversationImpl(name, profileName, workspaceId, workspaceName);
       return conversationSelection(conversation, `Conversation "${conversation.name}" is ${conversation.previousResponseId ? `continuing from ${conversation.previousResponseId}` : "fresh"}.`);
     },
 
-    async startNewConversation(name, profileName) {
+    async startNewConversation(name, profileName, workspaceId, workspaceName) {
       const nameToUse = name || createConversationName(now());
-      await deleteConversationImpl(nameToUse, profileName);
-      const conversation = await startFreshConversationImpl(nameToUse, profileName);
+      await deleteWorkspaceConversationImpl(nameToUse, profileName, workspaceId);
+      const conversation = await startFreshConversationImpl(nameToUse, profileName, workspaceId, workspaceName);
       return conversationSelection(conversation, `Started fresh conversation "${conversation.name}" (${conversation.id}).`);
     },
 
-    async switchConversation(name, profileName) {
-      const conversation = await ensureConversationImpl(name, profileName);
+    async switchConversation(name, profileName, workspaceId, workspaceName) {
+      const conversation = await ensureConversationImpl(name, profileName, workspaceId, workspaceName);
       return conversationSelection(
         conversation,
         conversation.previousResponseId
@@ -74,15 +86,34 @@ export function createWorkbenchConversationController(
       );
     },
 
-    async listConversations(profileName) {
-      const conversations = await listConversationsImpl(profileName);
-      return conversations.length === 0
-        ? "No saved conversations yet."
-        : conversations.map(conversationSummary).join("\n");
+    async renameConversation(name, nextName, profileName, workspaceId) {
+      const conversation = await renameConversationImpl(name, nextName, profileName, workspaceId);
+      return conversationSelection(
+        conversation,
+        `Renamed conversation "${name}" to "${conversation.name}".`,
+      );
     },
 
-    async listConversationSelections(profileName) {
-      const conversations = await listConversationsImpl(profileName);
+    async deleteConversation(name, profileName, workspaceId) {
+      const trimmed = name.trim();
+      if (!trimmed) throw new Error("Conversation name is required.");
+      await deleteWorkspaceConversationImpl(trimmed, profileName, workspaceId);
+      return {
+        name: trimmed,
+        message: `Deleted conversation "${trimmed}".`,
+      };
+    },
+
+    async listConversations(profileName, query, workspaceId) {
+      const conversations = await listConversationsImpl(profileName, workspaceId);
+      const filtered = filterConversations(conversations, query);
+      if (conversations.length === 0) return "No saved conversations yet.";
+      if (filtered.length === 0) return `No conversations match: ${query}`;
+      return filtered.map(conversationSummary).join("\n");
+    },
+
+    async listConversationSelections(profileName, workspaceId) {
+      const conversations = await listConversationsImpl(profileName, workspaceId);
       return conversations.map((conversation) => conversationSelection(conversation, ""));
     },
 
@@ -100,6 +131,31 @@ export function createWorkbenchConversationController(
   };
 }
 
+function filterConversations<T extends {
+    id: string;
+    name: string;
+    previousResponseId?: string;
+    profile: string;
+    workspaceId?: string;
+    workspaceName?: string;
+  }>(
+  conversations: T[],
+  query?: string,
+): T[] {
+  const needle = query?.trim().toLowerCase();
+  if (!needle) return conversations;
+  return conversations.filter((conversation) =>
+    [
+      conversation.id,
+      conversation.name,
+      conversation.previousResponseId ?? "",
+      conversation.profile,
+      conversation.workspaceId ?? "",
+      conversation.workspaceName ?? "",
+    ].some((value) => value.toLowerCase().includes(needle)),
+  );
+}
+
 function conversationSelection(
   conversation: {
     createdAt?: number;
@@ -108,6 +164,8 @@ function conversationSelection(
     previousResponseId?: string;
     profile?: string;
     updatedAt?: number;
+    workspaceId?: string;
+    workspaceName?: string;
   },
   message: string,
 ): ConversationSelection {
@@ -121,6 +179,8 @@ function conversationSelection(
     message,
   };
   if (conversation.previousResponseId) selection.previousResponseId = conversation.previousResponseId;
+  if (conversation.workspaceId) selection.workspaceId = conversation.workspaceId;
+  if (conversation.workspaceName) selection.workspaceName = conversation.workspaceName;
   return selection;
 }
 

@@ -7,6 +7,7 @@ import type { WorkbenchRuntimeController } from "../workbench/runtime-controller
 import type { WorkbenchSettingsController } from "../workbench/settings-controller.js";
 import type { WorkbenchTranscriptStore } from "../workbench/transcript-store.js";
 import type { WorkbenchTurnController } from "../workbench/turn-controller.js";
+import type { WorkbenchWorkspaceController } from "../workbench/workspace-controller.js";
 
 export interface AgentEngineServices {
   auth?: WorkbenchAuthController;
@@ -18,4 +19,5 @@ export interface AgentEngineServices {
   settings?: WorkbenchSettingsController;
   transcriptStore?: WorkbenchTranscriptStore;
   turn?: WorkbenchTurnController;
+  workspace?: WorkbenchWorkspaceController;
 }

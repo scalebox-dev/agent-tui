@@ -9,6 +9,7 @@ import { UnknownPresetError } from "./settings-controller.js";
 import type { WorkbenchSettingsController } from "./settings-controller.js";
 import type { WorkbenchTranscriptStore } from "./transcript-store.js";
 import type { WorkbenchTurnController } from "./turn-controller.js";
+import type { WorkbenchWorkspaceController } from "./workspace-controller.js";
 
 export interface WorkbenchCommandController {
   run(command: WorkbenchCommand): Promise<void>;
@@ -25,6 +26,7 @@ export interface WorkbenchCommandControllerOptions {
   settingsController: WorkbenchSettingsController;
   transcriptStore?: WorkbenchTranscriptStore;
   turnController: WorkbenchTurnController;
+  workspaceController: WorkbenchWorkspaceController;
   checkForUpdateImpl?: typeof checkForUpdate;
   formatUpdateNoticeImpl?: typeof formatUpdateNotice;
   installUpdateImpl?: typeof installUpdate;
@@ -74,8 +76,20 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
         case "switch_conversation":
           await switchConversation(command.name);
           return;
+        case "rename_conversation":
+          await renameConversation(command.name);
+          return;
+        case "delete_conversation":
+          await deleteConversation(command.name);
+          return;
         case "list_conversations":
-          await showConversations();
+          await showConversations(command.query);
+          return;
+        case "list_workspaces":
+          await showWorkspaces(command.query);
+          return;
+        case "switch_workspace":
+          await switchWorkspace(command.id);
           return;
         case "update":
           await checkForCliUpdate();
@@ -359,7 +373,13 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
   }
 
   async function startNewConversation(name?: string) {
-    const conversation = await options.conversationController.startNewConversation(name, options.options.profile);
+    const state = options.engine.snapshot();
+    const conversation = await options.conversationController.startNewConversation(
+      name,
+      options.options.profile,
+      state.currentWorkspaceId,
+      state.currentWorkspaceName,
+    );
     await options.transcriptStore?.clearConversation(conversation.id);
     dispatch({ type: "messages.clear" });
     dispatch({
@@ -377,7 +397,13 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
   }
 
   async function switchConversation(name: string) {
-    const conversation = await options.conversationController.switchConversation(name, options.options.profile);
+    const state = options.engine.snapshot();
+    const conversation = await options.conversationController.switchConversation(
+      name,
+      options.options.profile,
+      state.currentWorkspaceId,
+      state.currentWorkspaceName,
+    );
     const restored = await options.transcriptStore?.loadRecentMessages(conversation.id, 80) ?? [];
     dispatch(restored.length > 0 ? { type: "messages.restore", messages: restored } : { type: "messages.clear" });
     dispatch({
@@ -393,18 +419,170 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
       text: restored.length > 0
         ? `${conversation.message}\nLoaded ${restored.length} local transcript message${restored.length === 1 ? "" : "s"}.`
         : conversation.message,
-    });
+      });
   }
 
-  async function showConversations() {
+  async function renameConversation(name?: string) {
+    const nextName = name?.trim();
+    if (!nextName) {
+      dispatch({ type: "message.add", role: "system", text: "Usage: /rename <new-conversation-name>" });
+      dispatch({ type: "activity.add", level: "warning", text: "Conversation rename missing name" });
+      return;
+    }
+    try {
+      const state = options.engine.snapshot();
+      const conversation = await options.conversationController.renameConversation(
+        state.currentConversation,
+        nextName,
+        options.options.profile,
+        state.currentWorkspaceId,
+      );
+      dispatch({
+        type: "conversation.set",
+        id: conversation.id,
+        name: conversation.name,
+        previousResponseId: conversation.previousResponseId,
+        status: conversation.status,
+      });
+      dispatch({ type: "message.add", role: "system", text: conversation.message });
+      dispatch({ type: "activity.add", level: "success", text: `Conversation renamed: ${conversation.name}` });
+    } catch (error) {
+      dispatch({ type: "message.add", role: "system", text: `Conversation rename failed: ${userFacingError(error)}` });
+      dispatch({ type: "activity.add", level: "error", text: "Conversation rename failed" });
+    }
+  }
+
+  async function deleteConversation(name?: string) {
+    const trimmed = name?.trim();
+    if (!trimmed) {
+      dispatch({ type: "message.add", role: "system", text: "Usage: /delete <conversation-name>" });
+      dispatch({ type: "activity.add", level: "warning", text: "Conversation delete missing name" });
+      return;
+    }
+    try {
+      const state = options.engine.snapshot();
+      const summary = state.conversationSummaries.find((conversation) => conversation.name === trimmed);
+      const deleted = await options.conversationController.deleteConversation(trimmed, options.options.profile, state.currentWorkspaceId);
+      if (summary?.id) await options.transcriptStore?.clearConversation(summary.id);
+      const deletingActive = state.currentConversation === trimmed;
+      if (deletingActive) {
+        const next = await options.conversationController.startNewConversation(
+          "default",
+          options.options.profile,
+          state.currentWorkspaceId,
+          state.currentWorkspaceName,
+        );
+        await options.transcriptStore?.clearConversation(next.id);
+        dispatch({ type: "messages.clear" });
+        dispatch({
+          type: "conversation.set",
+          id: next.id,
+          name: next.name,
+          previousResponseId: next.previousResponseId,
+          status: next.status,
+        });
+        dispatch({
+          type: "message.add",
+          role: "system",
+          text: `${deleted.message}\nStarted fresh conversation "${next.name}" (${next.id}).`,
+        });
+      } else {
+        dispatch({ type: "message.add", role: "system", text: deleted.message });
+      }
+      dispatch({ type: "activity.add", level: "success", text: `Conversation deleted: ${trimmed}` });
+    } catch (error) {
+      dispatch({ type: "message.add", role: "system", text: `Conversation delete failed: ${userFacingError(error)}` });
+      dispatch({ type: "activity.add", level: "error", text: "Conversation delete failed" });
+    }
+  }
+
+  async function showConversations(query?: string) {
     try {
       dispatch({
         type: "message.add",
         role: "system",
-        text: await options.conversationController.listConversations(options.options.profile),
+        text: await options.conversationController.listConversations(
+          options.options.profile,
+          query,
+          options.engine.snapshot().currentWorkspaceId,
+        ),
       });
     } catch (error) {
       dispatch({ type: "message.add", role: "system", text: userFacingError(error) });
+    }
+  }
+
+  async function showWorkspaces(query?: string) {
+    const state = options.engine.snapshot();
+    const needle = query?.trim().toLowerCase();
+    const rows = state.workspaceSummaries
+      .filter((workspace) => !needle || [workspace.id, workspace.name, workspace.role].some((value) => value.toLowerCase().includes(needle)))
+      .map((workspace) => {
+        const current = workspace.id === state.currentWorkspaceId ? "*" : " ";
+        return `${current} ${workspace.id}\t${workspace.name}\t${workspace.role}\t${workspace.membershipStatus || workspace.status}`;
+      });
+    const current = state.currentWorkspaceId
+      ? `Current workspace: ${state.currentWorkspaceName || state.currentWorkspaceId} (${state.currentWorkspaceId})`
+      : "Current workspace: unresolved";
+    const switching = state.workspaceSwitchable
+      ? "Use /workspace <workspace_id> to switch."
+      : "API key profiles are fixed to one workspace; switch profile/key to change workspace.";
+    dispatch({
+      type: "message.add",
+      role: "system",
+      text: [current, switching, rows.length ? rows.join("\n") : "No workspaces loaded."].join("\n"),
+    });
+  }
+
+  async function switchWorkspace(workspaceId?: string) {
+    const id = workspaceId?.trim();
+    if (!id) {
+      await showWorkspaces();
+      return;
+    }
+    const state = options.engine.snapshot();
+    try {
+      dispatch({ type: "activity.add", text: `Switching workspace: ${id}` });
+      const snapshot = await options.workspaceController.switchWorkspace(
+        options.options.profile,
+        id,
+        state.workspaceAuthType ?? "api_key",
+      );
+      dispatch({
+        type: "workspace.set",
+        workspace: {
+          authType: snapshot.authType,
+          id: snapshot.current.id,
+          name: snapshot.current.name,
+          role: snapshot.current.role,
+          switchable: snapshot.switchable,
+        },
+      });
+      dispatch({ type: "workspaces.set", workspaces: snapshot.workspaces });
+      const conversation = await options.conversationController.resolveConversation(
+        state.currentConversation,
+        options.options.profile,
+        snapshot.current.id,
+        snapshot.current.name,
+      );
+      const restored = await options.transcriptStore?.loadRecentMessages(conversation.id, 80) ?? [];
+      dispatch(restored.length > 0 ? { type: "messages.restore", messages: restored } : { type: "messages.clear" });
+      dispatch({
+        type: "conversation.set",
+        id: conversation.id,
+        name: conversation.name,
+        previousResponseId: conversation.previousResponseId,
+        status: conversation.status,
+      });
+      dispatch({
+        type: "message.add",
+        role: "system",
+        text: `Switched workspace to "${snapshot.current.name}" (${snapshot.current.id}).\n${conversation.message}`,
+      });
+      dispatch({ type: "activity.add", level: "success", text: `Workspace switched: ${snapshot.current.name}` });
+    } catch (error) {
+      dispatch({ type: "message.add", role: "system", text: `Workspace switch failed: ${userFacingError(error)}` });
+      dispatch({ type: "activity.add", level: "error", text: "Workspace switch failed" });
     }
   }
 

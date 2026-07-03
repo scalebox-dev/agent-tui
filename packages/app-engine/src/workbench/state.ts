@@ -39,6 +39,16 @@ export interface WorkbenchConversationSummary {
   status: "fresh" | "continued";
   titleSnippet: string;
   updatedAt?: number;
+  workspaceId?: string;
+  workspaceName?: string;
+}
+
+export interface WorkbenchWorkspaceSummary {
+  id: string;
+  membershipStatus: string;
+  name: string;
+  role: string;
+  status: string;
 }
 
 export interface LocalToolApproval extends LocalToolApprovalRequest {
@@ -58,7 +68,7 @@ export interface PendingUpdate {
 }
 
 export type RenderMode = "markdown" | "raw";
-export type WorkbenchCopyTarget = "page" | "transcript" | "activity" | "conversation" | "header" | "workspace";
+export type WorkbenchCopyTarget = "page" | "transcript" | "activity" | "conversation" | "header" | "workspace" | "workdir";
 const maxWorkbenchMessages = 200;
 const maxWorkbenchMessageCharacters = 256_000;
 
@@ -78,6 +88,12 @@ export interface WorkbenchState {
   conversationPreviousResponseId?: string;
   conversationStatus: "fresh" | "continued" | "unknown";
   currentConversation: string;
+  currentWorkspaceId?: string;
+  currentWorkspaceName?: string;
+  currentWorkspaceRole?: string;
+  workspaceAuthType?: "api_key" | "browser";
+  workspaceSwitchable: boolean;
+  workspaceSummaries: WorkbenchWorkspaceSummary[];
   runPreset?: string;
   runModel?: string;
   memoryRead: boolean;
@@ -123,6 +139,8 @@ export type WorkbenchAction =
   | { type: "access.set"; mode: WorkdirAccessMode }
   | { type: "conversation.set"; id?: string; name: string; previousResponseId?: string; status?: "fresh" | "continued" | "unknown" }
   | { type: "conversations.set"; conversations: WorkbenchConversationSummary[] }
+  | { type: "workspace.set"; workspace: { authType?: "api_key" | "browser"; id: string; name: string; role?: string; switchable?: boolean } }
+  | { type: "workspaces.set"; workspaces: WorkbenchWorkspaceSummary[] }
   | { type: "settings.set"; settings: Partial<Pick<WorkbenchState, "runPreset" | "runModel" | "memoryRead" | "memoryWrite" | "memoryTenantSearch" | "localSkillsEnabled" | "workspaceSkillsEnabled" | "renderMode" | "defaultPreset" | "automaticContinuationLimit" | "shellIsolation">> };
 
 export type WorkbenchCommand =
@@ -152,7 +170,11 @@ export type WorkbenchCommand =
   | { kind: "search"; query: string }
   | { kind: "new_conversation"; name?: string }
   | { kind: "switch_conversation"; name: string }
-  | { kind: "list_conversations" }
+  | { kind: "rename_conversation"; name?: string }
+  | { kind: "delete_conversation"; name?: string }
+  | { kind: "list_conversations"; query?: string }
+  | { kind: "switch_workspace"; id?: string }
+  | { kind: "list_workspaces"; query?: string }
   | { kind: "refresh_catalog" }
   | { kind: "update" }
   | { kind: "preview" }
@@ -198,6 +220,12 @@ export function createInitialWorkbenchState(options: {
     conversationPreviousResponseId: undefined,
     conversationStatus: "unknown",
     currentConversation: options.conversation || "default",
+    currentWorkspaceId: undefined,
+    currentWorkspaceName: undefined,
+    currentWorkspaceRole: undefined,
+    workspaceAuthType: undefined,
+    workspaceSwitchable: false,
+    workspaceSummaries: [],
     runPreset: options.preset,
     runModel: options.model,
     memoryRead: Boolean(options.memoryRead),
@@ -406,6 +434,20 @@ export function workbenchReducer(state: WorkbenchState, action: WorkbenchAction)
         ...state,
         conversationSummaries: action.conversations,
       };
+    case "workspace.set":
+      return {
+        ...state,
+        currentWorkspaceId: action.workspace.id,
+        currentWorkspaceName: action.workspace.name,
+        currentWorkspaceRole: action.workspace.role,
+        workspaceAuthType: action.workspace.authType,
+        workspaceSwitchable: Boolean(action.workspace.switchable),
+      };
+    case "workspaces.set":
+      return {
+        ...state,
+        workspaceSummaries: action.workspaces,
+      };
     case "settings.set":
       return {
         ...state,
@@ -492,6 +534,8 @@ export function parseWorkbenchCommand(input: string): WorkbenchCommand | null {
       if (target === "transcript" || target === "all") return { kind: "copy", target: "transcript" };
       if (target === "activity" || target === "activities") return { kind: "copy", target: "activity" };
       if (target === "header") return { kind: "copy", target: "header" };
+      if (target === "conversation" || target === "conversations") return { kind: "copy", target: "conversation" };
+      if (target === "workdir") return { kind: "copy", target: "workdir" };
       return { kind: "invalid", command: `copy ${target}` };
     }
     case "export":
@@ -543,6 +587,12 @@ export function parseWorkbenchCommand(input: string): WorkbenchCommand | null {
     case "workspace-skills":
     case "workspace_skills":
       return { kind: "skills", field: "workspace", enabled: parseOnOff(rest[0]) };
+    case "workspace":
+    case "workspaces": {
+      const value = rest.join(" ").trim();
+      if (!value || value === "list" || value === "ls") return { kind: "list_workspaces" };
+      return { kind: "switch_workspace", id: value };
+    }
     case "workdir":
     case "local":
       return { kind: "workdir", enabled: parseOnOff(rest[0]) };
@@ -551,14 +601,25 @@ export function parseWorkbenchCommand(input: string): WorkbenchCommand | null {
     case "new":
     case "thread":
       return { kind: "new_conversation", name: rest.join(" ").trim() || undefined };
+    case "rename":
+    case "rename-conversation":
+    case "rename_conversation":
+      return { kind: "rename_conversation", name: rest.join(" ").trim() || undefined };
     case "conversation":
     case "switch":
     case "use":
       if (rest.length === 0) return { kind: "list_conversations" };
       return { kind: "switch_conversation", name: rest.join(" ").trim() };
+    case "delete":
+    case "delete-conversation":
+    case "delete_conversation":
+    case "rm":
+      return { kind: "delete_conversation", name: rest.join(" ").trim() || undefined };
     case "conversations":
-    case "threads":
-      return { kind: "list_conversations" };
+    case "threads": {
+      const query = rest.join(" ").trim();
+      return query ? { kind: "list_conversations", query } : { kind: "list_conversations" };
+    }
     case "refresh":
     case "reload":
     case "refresh-catalog":
@@ -612,10 +673,11 @@ export function helpText() {
     "/logout          leave current session and return to auth gate",
     "/switch-profile  switch/sign in with a different profile",
     "/delete-profile  delete current saved profile and return to auth",
+    "/workspace [id]  show platform workspaces or switch browser-auth workspace",
     "/config          show current run configuration and saved defaults",
     "/render [mode]   show or set output rendering: markdown or raw",
     "/transcript      show a plain-text transcript preview",
-    "/copy [target]   copy page, header, transcript, or activity text to clipboard",
+    "/copy [target]   copy page, transcript, activity, header, conversation, or workdir text",
     "/export [file]   save the plain-text transcript to a file",
     "/config preset   save default preset; use none/off for no preset, reset for built-in",
     "/config continuation-limit save automatic continuation checkpoint limit",
@@ -633,7 +695,9 @@ export function helpText() {
     "/workdir on    shortcut for /access approval; /workdir off hides local tools",
     "/new [name]      start a fresh conversation in this workbench",
     "/switch <name>   switch to an existing/new conversation handle",
-    "/conversations   list saved local conversation handles",
+    "/rename <name>   rename the current conversation handle",
+    "/delete <name>   delete a saved conversation handle and local transcript",
+    "/conversations [query] list or search saved local conversation handles",
     "/update          check for a CLI update; /apply installs when available",
     "/summary         show local workdir summary previews",
     "/search <query>  search text in the local workdir",

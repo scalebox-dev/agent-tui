@@ -36,6 +36,7 @@ export interface WorkbenchRenderModel {
     preset: string;
     profile: string;
     renderMode: RenderMode;
+    workspace: string;
     workdir: string;
   };
   layout: "wide" | "compact";
@@ -63,10 +64,18 @@ export interface WorkbenchRenderModel {
   viewportHeight: number;
   visibleActivities: WorkbenchState["activities"];
   workspace: {
+    items: {
+      id: string;
+      name: string;
+    }[];
     lines: string[];
   };
   workspaceHeight: number;
-  workspacePanelWidth: number;
+  workdir: {
+    lines: string[];
+  };
+  workdirHeight: number;
+  workdirPanelWidth: number;
 }
 
 export interface WorkbenchInputLine {
@@ -112,19 +121,22 @@ export function buildWorkbenchRenderModel(input: BuildWorkbenchRenderModelInput)
   const reservedRows = 10 + inputView.height;
   const viewportHeight = Math.max(3, terminalRows - reservedRows);
   const activityHeight = layout === "wide" ? viewportHeight : Math.min(4, Math.max(2, Math.floor(viewportHeight / 3)));
-  const workspacePanelWidth = layout === "wide"
+  const workdirPanelWidth = layout === "wide"
     ? clamp(Math.floor(terminalColumns * 0.22), 24, 34)
     : terminalColumns;
-  const conversationHeight = layout === "wide"
-    ? clamp(Math.floor((viewportHeight - 1) / 2), 4, Math.max(4, viewportHeight - 5))
-    : Math.min(4, Math.max(3, Math.floor(viewportHeight / 4)));
   const workspaceHeight = layout === "wide"
-    ? Math.max(4, viewportHeight - conversationHeight - 1)
+    ? clamp(Math.floor(viewportHeight * 0.25), 3, Math.min(5, Math.max(3, viewportHeight - 8)))
+    : Math.min(4, Math.max(3, Math.floor(viewportHeight / 5)));
+  const conversationHeight = layout === "wide"
+    ? clamp(Math.floor((viewportHeight - workspaceHeight - 2) / 2), 3, Math.max(3, viewportHeight - workspaceHeight - 5))
+    : Math.min(4, Math.max(3, Math.floor(viewportHeight / 4)));
+  const workdirHeight = layout === "wide"
+    ? Math.max(3, viewportHeight - conversationHeight - workspaceHeight - 2)
     : Math.min(4, Math.max(3, Math.floor(viewportHeight / 4)));
   const transcriptOuterHeight = layout === "wide" ? viewportHeight : Math.max(3, viewportHeight - activityHeight);
   const transcriptHeight = Math.max(1, transcriptOuterHeight - 3);
   const transcriptWidth = layout === "wide"
-    ? Math.max(28, terminalColumns - workspacePanelWidth - Math.floor(terminalColumns * 0.27) - 8)
+    ? Math.max(28, terminalColumns - workdirPanelWidth - Math.floor(terminalColumns * 0.27) - 8)
     : Math.max(20, terminalColumns - 4);
   const transcript = buildTranscriptViewModel({
     activeAssistantMessageId: input.state.activeAssistantMessageId,
@@ -149,11 +161,12 @@ export function buildWorkbenchRenderModel(input: BuildWorkbenchRenderModelInput)
     preset: input.state.runPreset || "none",
     profile: input.profileName,
     renderMode: input.state.renderMode,
+    workspace: input.state.currentWorkspaceName || input.state.currentWorkspaceId || "unresolved",
     workdir: input.state.workdir?.root || input.workdirFallback,
   };
   const headerLines = [
     "Agent API Workbench",
-    `profile=${header.profile} conversation=${header.conversation} id=${header.conversationId} preset=${header.preset} model=${header.model}`,
+    `profile=${header.profile} workspace=${header.workspace} conversation=${header.conversation} id=${header.conversationId}`,
     `conversation_state=${header.conversationStatus}${header.conversationPreviousResponseId ? ` previous=${header.conversationPreviousResponseId}` : ""}`,
     `workdir=${header.workdir} access=${header.accessMode} local_tools=${header.contextEnabled ? "on" : "off"} render=${header.renderMode} pending=${header.pendingLocalLabel}`,
   ];
@@ -162,7 +175,12 @@ export function buildWorkbenchRenderModel(input: BuildWorkbenchRenderModelInput)
     name: conversation.name,
   }));
   const conversationLines = conversationPanelLines(input.state, header);
-  const workspaceLines = workspacePanelLines(input.state, header);
+  const workspaceLines = workspacePanelLines(input.state);
+  const workspaceItems = input.state.workspaceSummaries.slice(0, 6).map((workspace) => ({
+    id: workspace.id,
+    name: workspace.name,
+  }));
+  const workdirLines = workdirPanelLines(input.state, header);
   const transcriptStatus = transcript.offset > 0
     ? {
       color: "yellow" as const,
@@ -220,10 +238,30 @@ export function buildWorkbenchRenderModel(input: BuildWorkbenchRenderModelInput)
     transcriptWidth,
     viewportHeight,
     visibleActivities: input.state.activities.slice(-Math.max(1, activityHeight - 2)),
-    workspace: { lines: workspaceLines },
+    workspace: { items: workspaceItems, lines: workspaceLines },
     workspaceHeight,
-    workspacePanelWidth,
+    workdir: { lines: workdirLines },
+    workdirHeight,
+    workdirPanelWidth,
   };
+}
+
+function workspacePanelLines(state: WorkbenchState) {
+  if (state.workspaceSummaries.length > 0) {
+    return state.workspaceSummaries.slice(0, 6).map((workspace) => {
+      const current = workspace.id === state.currentWorkspaceId;
+      const role = workspace.role ? ` · ${workspace.role}` : "";
+      return `${current ? "*" : " "} ${shortId(workspace.id)} ${workspace.name}${role}`;
+    });
+  }
+  return [
+    state.currentWorkspaceId
+      ? `current=${state.currentWorkspaceName || state.currentWorkspaceId}`
+      : "current=unresolved",
+    `id=${state.currentWorkspaceId || "unknown"}`,
+    `role=${state.currentWorkspaceRole || "unknown"}`,
+    `switch=${state.workspaceSwitchable ? "browser" : "fixed"}`,
+  ];
 }
 
 function conversationPanelLines(
@@ -258,7 +296,7 @@ function shortId(id: string) {
   return `${id.slice(0, 9)}...`;
 }
 
-function workspacePanelLines(
+function workdirPanelLines(
   state: WorkbenchState,
   header: {
     accessMode: string;

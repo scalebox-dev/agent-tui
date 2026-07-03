@@ -84,6 +84,13 @@ export { localShellIsolationOptions } from "./workbench/shell-isolation.js";
 export type { WorkbenchTurnController } from "./workbench/turn-controller.js";
 export { createWorkbenchTurnController } from "./workbench/turn-controller.js";
 export type {
+  WorkbenchWorkspaceContext,
+  WorkbenchWorkspaceController,
+  WorkbenchWorkspaceItem,
+  WorkbenchWorkspaceSnapshot,
+} from "./workbench/workspace-controller.js";
+export { createWorkbenchWorkspaceController } from "./workbench/workspace-controller.js";
+export type {
   ActivityLevel,
   InputHistory,
   LocalToolApproval,
@@ -96,6 +103,7 @@ export type {
   WorkbenchRole,
   WorkbenchState,
   WorkbenchWorkdirStatus,
+  WorkbenchWorkspaceSummary,
 } from "./workbench/state.js";
 export {
   createInitialWorkbenchState,

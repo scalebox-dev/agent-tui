@@ -4,7 +4,7 @@ import { createWorkbenchInputController } from "./input-controller.js";
 import type { WorkbenchRenderModel } from "./render-model.js";
 import { indexAtDisplayColumn } from "./text-layout.js";
 
-export type WorkbenchFocusedPanel = "activity" | "conversation" | "header" | "input" | "transcript" | "workspace";
+export type WorkbenchFocusedPanel = "activity" | "conversation" | "header" | "input" | "transcript" | "workspace" | "workdir";
 
 export interface WorkbenchPanelPosition {
   column: number;
@@ -44,13 +44,16 @@ export interface WorkbenchTerminalState {
   transcriptSelectionAnchor: WorkbenchPanelPosition | null;
   workspaceCursor: WorkbenchPanelPosition;
   workspaceSelectionAnchor: WorkbenchPanelPosition | null;
+  workdirCursor: WorkbenchPanelPosition;
+  workdirSelectionAnchor: WorkbenchPanelPosition | null;
 }
 
 export type WorkbenchTerminalEffect =
   | WorkbenchInputEffect
   | { type: "copy"; target: WorkbenchCopyTarget }
   | { type: "paste" }
-  | { type: "switch_conversation"; name: string };
+  | { type: "switch_conversation"; name: string }
+  | { type: "switch_workspace"; id: string };
 
 export interface WorkbenchTerminalContext {
   busy: boolean;
@@ -94,6 +97,8 @@ export function initialWorkbenchTerminalState(): WorkbenchTerminalState {
     transcriptSelectionAnchor: null,
     workspaceCursor: { column: 0, line: 0 },
     workspaceSelectionAnchor: null,
+    workdirCursor: { column: 0, line: 0 },
+    workdirSelectionAnchor: null,
   };
 }
 
@@ -157,6 +162,7 @@ export function normalizeTerminalState(
   const maxConversationIndex = Math.max(0, renderModel.conversation.lines.length - 1);
   const maxHeaderIndex = Math.max(0, renderModel.header.lines.length - 1);
   const maxWorkspaceIndex = Math.max(0, renderModel.workspace.lines.length - 1);
+  const maxWorkdirIndex = Math.max(0, renderModel.workdir.lines.length - 1);
   const draftLength = state.draft.length;
   const conversationCursor = normalizePanelPosition(
     state.conversationCursor,
@@ -207,6 +213,14 @@ export function normalizeTerminalState(
     workspaceSelectionAnchor: state.workspaceSelectionAnchor == null
       ? null
       : normalizePanelPosition(state.workspaceSelectionAnchor, maxWorkspaceIndex, (line) => workspaceLineText(renderModel, line)),
+    workdirCursor: normalizePanelPosition(
+      state.workdirCursor,
+      maxWorkdirIndex,
+      (line) => workdirLineText(renderModel, line),
+    ),
+    workdirSelectionAnchor: state.workdirSelectionAnchor == null
+      ? null
+      : normalizePanelPosition(state.workdirSelectionAnchor, maxWorkdirIndex, (line) => workdirLineText(renderModel, line)),
   };
 }
 
@@ -232,6 +246,9 @@ function handleReadOnlyPanel(
     if (state.focusedPanel === "workspace" && state.workspaceSelectionAnchor !== null) {
       return stateResult({ ...state, workspaceSelectionAnchor: null });
     }
+    if (state.focusedPanel === "workdir" && state.workdirSelectionAnchor !== null) {
+      return stateResult({ ...state, workdirSelectionAnchor: null });
+    }
     return stateResult({ ...state, focusedPanel: "input" });
   }
   if (key.ctrl && input === "a") {
@@ -240,6 +257,7 @@ function handleReadOnlyPanel(
     if (state.focusedPanel === "conversation") return stateResult(selectConversationAll(state, renderModel));
     if (state.focusedPanel === "header") return stateResult(selectHeaderAll(state, renderModel));
     if (state.focusedPanel === "workspace") return stateResult(selectWorkspaceAll(state, renderModel));
+    if (state.focusedPanel === "workdir") return stateResult(selectWorkdirAll(state, renderModel));
   }
   if (key.meta && input.toLowerCase() === "c") {
     const target: WorkbenchCopyTarget = state.focusedPanel === "activity"
@@ -250,7 +268,9 @@ function handleReadOnlyPanel(
           ? "header"
           : state.focusedPanel === "workspace"
             ? "workspace"
-            : "page";
+            : state.focusedPanel === "workdir"
+              ? "workdir"
+              : "page";
     return { state, effects: [{ type: "copy", target }] };
   }
   if (state.focusedPanel === "conversation" && key.return) {
@@ -260,12 +280,18 @@ function handleReadOnlyPanel(
     }
     return stateResult(state);
   }
+  if (state.focusedPanel === "workspace" && key.return) {
+    const workspace = renderModel.workspace.lines[state.workspaceCursor.line];
+    const id = renderModel.workspace.items?.[state.workspaceCursor.line]?.id ?? workspaceIDFromLine(workspace || "");
+    if (id) return { state, effects: [{ type: "switch_workspace", id }] };
+  }
   if (state.focusedPanel === "transcript") {
     return stateResult(handleTranscriptPanelKey(key, state, renderModel));
   }
   if (state.focusedPanel === "conversation") return stateResult(handleConversationPanelKey(key, state, renderModel));
   if (state.focusedPanel === "header") return stateResult(handleHeaderPanelKey(key, state, renderModel));
   if (state.focusedPanel === "workspace") return stateResult(handleWorkspacePanelKey(key, state, renderModel));
+  if (state.focusedPanel === "workdir") return stateResult(handleWorkdirPanelKey(key, state, renderModel));
   return stateResult(handleActivityPanelKey(key, state, renderModel));
 }
 
@@ -300,6 +326,23 @@ function handleWorkspacePanelKey(
   if (key.rightArrow) return moveWorkspaceColumn(state, renderModel, 1, Boolean(key.shift));
   if (key.upArrow) return moveWorkspaceCursor(state, renderModel, -1, Boolean(key.shift));
   if (key.downArrow) return moveWorkspaceCursor(state, renderModel, 1, Boolean(key.shift));
+  return state;
+}
+
+function handleWorkdirPanelKey(
+  key: WorkbenchTerminalKey,
+  state: WorkbenchTerminalState,
+  renderModel: WorkbenchRenderModel,
+): WorkbenchTerminalState {
+  if (key.home) return setWorkdirCursor(state, renderModel, 0, 0, Boolean(key.shift));
+  if (key.end) {
+    const line = Math.max(0, renderModel.workdir.lines.length - 1);
+    return setWorkdirCursor(state, renderModel, line, workdirLineText(renderModel, line).length, Boolean(key.shift));
+  }
+  if (key.leftArrow) return moveWorkdirColumn(state, renderModel, -1, Boolean(key.shift));
+  if (key.rightArrow) return moveWorkdirColumn(state, renderModel, 1, Boolean(key.shift));
+  if (key.upArrow) return moveWorkdirCursor(state, renderModel, -1, Boolean(key.shift));
+  if (key.downArrow) return moveWorkdirCursor(state, renderModel, 1, Boolean(key.shift));
   return state;
 }
 
@@ -382,7 +425,7 @@ function cycleFocusedPanel(
   renderModel: WorkbenchRenderModel,
   direction: 1 | -1,
 ): WorkbenchTerminalState {
-  const panels: WorkbenchFocusedPanel[] = ["input", "header", "conversation", "workspace", "transcript", "activity"];
+  const panels: WorkbenchFocusedPanel[] = ["input", "header", "workspace", "conversation", "workdir", "transcript", "activity"];
   const index = panels.indexOf(state.focusedPanel);
   const focusedPanel = panels[(index + direction + panels.length) % panels.length] ?? "input";
   const next = {
@@ -400,11 +443,14 @@ function cycleFocusedPanel(
   if (focusedPanel === "conversation") {
     return setConversationCursor(next, renderModel, next.conversationCursor.line, next.conversationCursor.column, false);
   }
+  if (focusedPanel === "workspace") {
+    return setWorkspaceCursor(next, renderModel, next.workspaceCursor.line, next.workspaceCursor.column, false);
+  }
   if (focusedPanel === "header") {
     return setHeaderCursor(next, renderModel, next.headerCursor.line, next.headerCursor.column, false);
   }
-  if (focusedPanel === "workspace") {
-    return setWorkspaceCursor(next, renderModel, next.workspaceCursor.line, next.workspaceCursor.column, false);
+  if (focusedPanel === "workdir") {
+    return setWorkdirCursor(next, renderModel, next.workdirCursor.line, next.workdirCursor.column, false);
   }
   return next;
 }
@@ -528,6 +574,15 @@ function moveWorkspaceCursor(
   return setWorkspaceCursor(state, renderModel, state.workspaceCursor.line + delta, state.workspaceCursor.column, selecting);
 }
 
+function moveWorkdirCursor(
+  state: WorkbenchTerminalState,
+  renderModel: WorkbenchRenderModel,
+  delta: number,
+  selecting: boolean,
+) {
+  return setWorkdirCursor(state, renderModel, state.workdirCursor.line + delta, state.workdirCursor.column, selecting);
+}
+
 function setConversationCursor(
   state: WorkbenchTerminalState,
   renderModel: WorkbenchRenderModel,
@@ -585,6 +640,25 @@ function setWorkspaceCursor(
   };
 }
 
+function setWorkdirCursor(
+  state: WorkbenchTerminalState,
+  renderModel: WorkbenchRenderModel,
+  next: number,
+  columnOrSelecting: number | boolean,
+  selecting: boolean,
+): WorkbenchTerminalState {
+  const nextColumn = typeof columnOrSelecting === "number" ? columnOrSelecting : state.workdirCursor.column;
+  const shouldSelect = typeof columnOrSelecting === "number" ? selecting : columnOrSelecting;
+  const current = state.workdirCursor;
+  const clamped = clamp(next, 0, Math.max(0, renderModel.workdir.lines.length - 1));
+  const cursor = normalizePanelPosition({ line: clamped, column: nextColumn }, clamped, (line) => workdirLineText(renderModel, line));
+  return {
+    ...state,
+    workdirCursor: cursor,
+    workdirSelectionAnchor: shouldSelect ? state.workdirSelectionAnchor ?? current : null,
+  };
+}
+
 function moveConversationColumn(
   state: WorkbenchTerminalState,
   renderModel: WorkbenchRenderModel,
@@ -628,6 +702,21 @@ function moveWorkspaceColumn(
     (line) => workspaceLineText(renderModel, line),
   );
   return setWorkspaceCursor(state, renderModel, cursor.line, cursor.column, selecting);
+}
+
+function moveWorkdirColumn(
+  state: WorkbenchTerminalState,
+  renderModel: WorkbenchRenderModel,
+  delta: -1 | 1,
+  selecting: boolean,
+) {
+  const cursor = movePanelColumn(
+    state.workdirCursor,
+    delta,
+    Math.max(0, renderModel.workdir.lines.length - 1),
+    (line) => workdirLineText(renderModel, line),
+  );
+  return setWorkdirCursor(state, renderModel, cursor.line, cursor.column, selecting);
 }
 
 function setActivityCursor(
@@ -729,6 +818,19 @@ function selectWorkspaceAll(
   };
 }
 
+function selectWorkdirAll(
+  state: WorkbenchTerminalState,
+  renderModel: WorkbenchRenderModel,
+): WorkbenchTerminalState {
+  if (renderModel.workdir.lines.length === 0) return state;
+  const line = renderModel.workdir.lines.length - 1;
+  return {
+    ...state,
+    workdirSelectionAnchor: { column: 0, line: 0 },
+    workdirCursor: { column: workdirLineText(renderModel, line).length, line },
+  };
+}
+
 function stateResult(state: WorkbenchTerminalState, ...effects: WorkbenchTerminalEffect[]): WorkbenchTerminalResult {
   return { state, effects };
 }
@@ -804,6 +906,14 @@ function handleMouseEvent(
         target.column,
         false,
       ));
+    case "workdir":
+      return stateResult(setWorkdirCursor(
+        { ...state, focusedPanel: "workdir", workdirSelectionAnchor: null },
+        renderModel,
+        target.line,
+        target.column,
+        false,
+      ));
   }
 }
 
@@ -816,14 +926,16 @@ function handleRightClick(
       return rightClickCopyIfSelected({ ...state, focusedPanel: "activity" }, "activity");
     case "conversation":
       return rightClickCopyIfSelected({ ...state, focusedPanel: "conversation" }, "conversation");
+    case "workspace":
+      return rightClickCopyIfSelected({ ...state, focusedPanel: "workspace" }, "workspace");
     case "header":
       return rightClickCopyIfSelected({ ...state, focusedPanel: "header" }, "header");
     case "input":
       return stateResult({ ...state, cursor: target.inputCursor, focusedPanel: "input" }, { type: "paste" });
     case "transcript":
       return rightClickCopyIfSelected({ ...state, focusedPanel: "transcript" }, "page");
-    case "workspace":
-      return rightClickCopyIfSelected({ ...state, focusedPanel: "workspace" }, "workspace");
+    case "workdir":
+      return rightClickCopyIfSelected({ ...state, focusedPanel: "workdir" }, "workdir");
   }
 }
 
@@ -840,10 +952,13 @@ function rightClickCopyIfSelected(
   if (state.focusedPanel === "header" && selectedPanelRange(state.headerSelectionAnchor, state.headerCursor)) {
     return stateResult(state, { type: "copy", target });
   }
+  if (state.focusedPanel === "workspace" && selectedPanelRange(state.workspaceSelectionAnchor, state.workspaceCursor)) {
+    return stateResult(state, { type: "copy", target });
+  }
   if (state.focusedPanel === "transcript" && selectedPanelRange(state.transcriptSelectionAnchor, state.transcriptCursor)) {
     return stateResult(state, { type: "copy", target });
   }
-  if (state.focusedPanel === "workspace" && selectedPanelRange(state.workspaceSelectionAnchor, state.workspaceCursor)) {
+  if (state.focusedPanel === "workdir" && selectedPanelRange(state.workdirSelectionAnchor, state.workdirCursor)) {
     return stateResult(state, { type: "copy", target });
   }
   return stateResult(state);
@@ -869,6 +984,9 @@ function endMouseDrag(state: WorkbenchTerminalState): WorkbenchTerminalState {
   if (samePositionOrNull(next.workspaceSelectionAnchor, next.workspaceCursor)) {
     next.workspaceSelectionAnchor = null;
   }
+  if (samePositionOrNull(next.workdirSelectionAnchor, next.workdirCursor)) {
+    next.workdirSelectionAnchor = null;
+  }
   return next;
 }
 
@@ -878,7 +996,8 @@ type MouseTarget =
   | { panel: "header"; column: number; line: number }
   | { inputCursor: number; panel: "input" }
   | { panel: "transcript"; column: number; line: number }
-  | { panel: "workspace"; column: number; line: number };
+  | { panel: "workspace"; column: number; line: number }
+  | { panel: "workdir"; column: number; line: number };
 
 function mouseTarget(event: WorkbenchTerminalMouseEvent, renderModel: WorkbenchRenderModel): MouseTarget | null {
   const layout = mouseLayout(renderModel);
@@ -901,11 +1020,19 @@ function mouseTarget(event: WorkbenchTerminalMouseEvent, renderModel: WorkbenchR
         column: textIndexAtMouseColumn(conversationLineText(renderModel, line), column - layout.conversation.textLeft),
       };
     }
-    const line = clamp(row - layout.workspace.textTop, 0, Math.max(0, renderModel.workspace.lines.length - 1));
+    if (row >= layout.workspace.top && row <= layout.workspace.bottom) {
+      const line = clamp(row - layout.workspace.textTop, 0, Math.max(0, renderModel.workspace.lines.length - 1));
+      return {
+        panel: "workspace",
+        line,
+        column: textIndexAtMouseColumn(workspaceLineText(renderModel, line), column - layout.workspace.textLeft),
+      };
+    }
+    const line = clamp(row - layout.workdir.textTop, 0, Math.max(0, renderModel.workdir.lines.length - 1));
     return {
-      panel: "workspace",
+      panel: "workdir",
       line,
-      column: textIndexAtMouseColumn(workspaceLineText(renderModel, line), column - layout.workspace.textLeft),
+      column: textIndexAtMouseColumn(workdirLineText(renderModel, line), column - layout.workdir.textLeft),
     };
   }
   if (row >= layout.transcript.top && row <= layout.transcript.bottom) {
@@ -1009,6 +1136,14 @@ function mouseTargetForPanel(
         column: textIndexAtMouseColumn(workspaceLineText(renderModel, line), event.column - layout.workspace.textLeft),
       };
     }
+    case "workdir": {
+      const line = clamp(event.row - layout.workdir.textTop, 0, Math.max(0, renderModel.workdir.lines.length - 1));
+      return {
+        panel,
+        line,
+        column: textIndexAtMouseColumn(workdirLineText(renderModel, line), event.column - layout.workdir.textLeft),
+      };
+    }
   }
 }
 
@@ -1018,7 +1153,7 @@ function mouseLayout(renderModel: WorkbenchRenderModel) {
   const transcriptBottom = transcriptTop + renderModel.transcript.viewportHeight + 1;
   const inputTop = transcriptBottom + 1;
   const inputBottom = inputTop + renderModel.input.height + 2;
-  const sidePanelWidth = renderModel.layout === "wide" ? renderModel.workspacePanelWidth + 1 : 0;
+  const sidePanelWidth = renderModel.layout === "wide" ? renderModel.workdirPanelWidth + 1 : 0;
   const transcriptPanelWidth = renderModel.layout === "wide"
     ? Math.max(1, renderModel.terminalColumns - sidePanelWidth - Math.floor(renderModel.terminalColumns * 0.27) - 1)
     : renderModel.terminalColumns;
@@ -1028,7 +1163,9 @@ function mouseLayout(renderModel: WorkbenchRenderModel) {
   const activityBottom = renderModel.layout === "wide" ? transcriptBottom : activityTop + renderModel.activityHeight - 1;
   const conversationTop = transcriptTop;
   const conversationBottom = conversationTop + renderModel.conversationHeight - 1;
-  const workspaceTop = conversationBottom + 1;
+  const workdirTop = conversationBottom + 1;
+  const workdirBottom = workdirTop + renderModel.workdirHeight - 1;
+  const workspaceTop = workdirBottom + 1;
   const workspaceBottom = transcriptBottom;
   return {
     header: {
@@ -1063,7 +1200,7 @@ function mouseLayout(renderModel: WorkbenchRenderModel) {
     },
     side: {
       bottom: workspaceBottom,
-      right: renderModel.workspacePanelWidth,
+      right: renderModel.workdirPanelWidth,
       top: conversationTop,
     },
     workspace: {
@@ -1071,6 +1208,12 @@ function mouseLayout(renderModel: WorkbenchRenderModel) {
       textLeft: 4,
       textTop: workspaceTop + 2,
       top: workspaceTop,
+    },
+    workdir: {
+      bottom: workdirBottom,
+      textLeft: 4,
+      textTop: workdirTop + 2,
+      top: workdirTop,
     },
   };
 }
@@ -1146,4 +1289,14 @@ function headerLineText(renderModel: WorkbenchRenderModel, line: number) {
 
 function workspaceLineText(renderModel: WorkbenchRenderModel, line: number) {
   return renderModel.workspace.lines[line] ?? "";
+}
+
+function workdirLineText(renderModel: WorkbenchRenderModel, line: number) {
+  return renderModel.workdir.lines[line] ?? "";
+}
+
+function workspaceIDFromLine(line: string) {
+  const trimmed = line.trim().replace(/^\*\s*/, "");
+  const [id = ""] = trimmed.split(/\s+/);
+  return id.endsWith("...") ? "" : id;
 }

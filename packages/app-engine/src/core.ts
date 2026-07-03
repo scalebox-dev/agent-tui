@@ -25,6 +25,7 @@ export {
   clearPresetToolCatalogCache,
   conversationSummary,
   deleteConversation,
+  deleteWorkspaceConversation,
   ensureConversation,
   getConversation,
   isAvailablePreset,
@@ -62,7 +63,9 @@ export {
 } from "./config.js";
 export type {
   AuthStatus,
+  CurrentWorkspaceIdentity,
   RuntimeProfile,
+  WorkspaceInfo,
 } from "./profile.js";
 export {
   AuthSessionUnavailableError,
@@ -71,6 +74,8 @@ export {
   deleteProfile,
   formatDeviceUserCode,
   getAuthStatus,
+  getCurrentWorkspaceIdentity,
+  listProfileWorkspaces,
   listProfiles,
   loginWithAPIKey,
   loginWithBrowser,
@@ -82,6 +87,7 @@ export {
   resolveRuntimeProfile,
   saveBrowserProfile,
   startBrowserAuthChallenge,
+  switchBrowserWorkspace,
   useProfile,
   waitForBrowserAuthChallenge,
 } from "./profile.js";

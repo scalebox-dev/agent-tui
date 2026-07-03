@@ -25,8 +25,10 @@ export {
 export {
   conversationSummary,
   deleteConversation,
+  deleteWorkspaceConversation,
   ensureConversation,
   getConversation,
   listConversations,
+  renameConversation,
   startFreshConversation,
 } from "./conversation/index.js";

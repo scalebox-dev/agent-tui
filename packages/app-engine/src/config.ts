@@ -38,6 +38,8 @@ export interface ConversationState {
   id: string;
   name: string;
   profile: string;
+  workspaceId?: string;
+  workspaceName?: string;
   previousResponseId?: string;
   createdAt: number;
   updatedAt: number;
@@ -75,6 +77,8 @@ const conversationSchema = z.object({
   id: z.string().optional(),
   name: z.string(),
   profile: z.string(),
+  workspaceId: z.string().optional(),
+  workspaceName: z.string().optional(),
   previousResponseId: z.string().optional(),
   createdAt: z.number().optional(),
   updatedAt: z.number(),
@@ -225,6 +229,8 @@ function normalizeConversationConfiguration(config: {
       id,
       name: conversation.name,
       profile: conversation.profile,
+      workspaceId: conversation.workspaceId,
+      workspaceName: conversation.workspaceName,
       previousResponseId: conversation.previousResponseId,
       createdAt,
       updatedAt: conversation.updatedAt,

@@ -114,11 +114,44 @@ function stubConversationController() {
     async switchConversation(name) {
       return { id: "conv_stub", name, status: "fresh", message: "Switched." };
     },
+    async renameConversation(_name, nextName) {
+      return { id: "conv_stub", name: nextName, status: "fresh", message: "Renamed." };
+    },
+    async deleteConversation(name) {
+      return { name, message: `Deleted ${name}.` };
+    },
     async listConversations() {
       return "No conversations.";
     },
     async exportTranscript() {
       return "/tmp/transcript.txt";
+    },
+  };
+}
+
+function stubWorkspaceController() {
+  return {
+    async load() {
+      return {
+        authType: "browser",
+        current: { id: "wrk_stub", name: "Stub Workspace", role: "owner", userId: "user_stub" },
+        switchable: true,
+        workspaces: [
+          { id: "wrk_stub", name: "Stub Workspace", role: "owner", status: "active", membershipStatus: "active" },
+          { id: "wrk_other", name: "Other Workspace", role: "member", status: "active", membershipStatus: "active" },
+        ],
+      };
+    },
+    async switchWorkspace(_profile, workspaceId) {
+      return {
+        authType: "browser",
+        current: { id: workspaceId, name: workspaceId === "wrk_other" ? "Other Workspace" : "Stub Workspace", role: "owner", userId: "user_stub" },
+        switchable: true,
+        workspaces: [
+          { id: "wrk_stub", name: "Stub Workspace", role: "owner", status: "active", membershipStatus: "active" },
+          { id: "wrk_other", name: "Other Workspace", role: "member", status: "active", membershipStatus: "active" },
+        ],
+      };
     },
   };
 }
@@ -278,6 +311,7 @@ test("agent engine facade submits prompts and commands without renderer dependen
           aborts.push(message);
         },
       },
+      workspace: stubWorkspaceController(),
     },
     async onDeleteProfile() {},
     onExit() {
@@ -288,6 +322,7 @@ test("agent engine facade submits prompts and commands without renderer dependen
     onSwitchProfile() {},
   });
 
+  await app.loadWorkspaceContext();
   await app.loadInitialConversation();
   assert.equal(app.snapshot().conversationId, "conv_existing");
   assert.equal(app.snapshot().conversationStatus, "continued");
@@ -736,8 +771,13 @@ test("workbench command parser and reducer handle local workflow state", () => {
   assert.deepEqual(parseWorkbenchCommand("/new release notes"), { kind: "new_conversation", name: "release notes" });
   assert.deepEqual(parseWorkbenchCommand("/new"), { kind: "new_conversation", name: undefined });
   assert.deepEqual(parseWorkbenchCommand("/switch release"), { kind: "switch_conversation", name: "release" });
+  assert.deepEqual(parseWorkbenchCommand("/rename release notes"), { kind: "rename_conversation", name: "release notes" });
+  assert.deepEqual(parseWorkbenchCommand("/rename"), { kind: "rename_conversation", name: undefined });
+  assert.deepEqual(parseWorkbenchCommand("/delete release"), { kind: "delete_conversation", name: "release" });
+  assert.deepEqual(parseWorkbenchCommand("/delete"), { kind: "delete_conversation", name: undefined });
   assert.deepEqual(parseWorkbenchCommand("/conversation"), { kind: "list_conversations" });
   assert.deepEqual(parseWorkbenchCommand("/conversations"), { kind: "list_conversations" });
+  assert.deepEqual(parseWorkbenchCommand("/conversations release"), { kind: "list_conversations", query: "release" });
   assert.deepEqual(parseWorkbenchCommand("/refresh"), { kind: "refresh_catalog" });
   assert.deepEqual(parseWorkbenchCommand("/auth"), { kind: "auth_status" });
   assert.deepEqual(parseWorkbenchCommand("/abort"), { kind: "abort" });
@@ -767,6 +807,9 @@ test("workbench command parser and reducer handle local workflow state", () => {
   assert.deepEqual(parseWorkbenchCommand("/copy transcript"), { kind: "copy", target: "transcript" });
   assert.deepEqual(parseWorkbenchCommand("/copy all"), { kind: "copy", target: "transcript" });
   assert.deepEqual(parseWorkbenchCommand("/copy header"), { kind: "copy", target: "header" });
+  assert.deepEqual(parseWorkbenchCommand("/copy conversation"), { kind: "copy", target: "conversation" });
+  assert.deepEqual(parseWorkbenchCommand("/copy workdir"), { kind: "copy", target: "workdir" });
+  assert.deepEqual(parseWorkbenchCommand("/copy workspace"), { kind: "invalid", command: "copy workspace" });
   assert.deepEqual(parseWorkbenchCommand("/copy activity"), { kind: "copy", target: "activity" });
   assert.deepEqual(parseWorkbenchCommand("/copy activities"), { kind: "copy", target: "activity" });
   assert.deepEqual(parseWorkbenchCommand("/copy sidebar"), { kind: "invalid", command: "copy sidebar" });
@@ -1419,6 +1462,7 @@ test("workbench command controller applies renderer-neutral preset commands", as
       clearPresetToolCatalogCache() {},
     },
     turnController: stubTurnController(),
+    workspaceController: stubWorkspaceController(),
     async onDeleteProfile() {},
     onExit() {},
     onLogin() {},
@@ -1433,6 +1477,115 @@ test("workbench command controller applies renderer-neutral preset commands", as
   await controller.run({ kind: "preset", value: "missing" });
   assert.equal(engine.snapshot().runPreset, "analysis");
   assert.match(engine.snapshot().messages.at(-1).text, /Unknown preset: missing/);
+});
+
+test("workbench command controller deletes conversations and local transcripts", async () => {
+  const engine = createWorkbenchEngine({ contextEnabled: false, conversation: "release" });
+  const deleted = [];
+  const cleared = [];
+  engine.dispatch({ type: "conversation.set", id: "conv_release", name: "release", status: "continued", previousResponseId: "resp_release" });
+  engine.dispatch({
+    type: "conversations.set",
+    conversations: [
+      {
+        id: "conv_release",
+        latestSnippet: "Release notes",
+        messageCount: 3,
+        name: "release",
+        previousResponseId: "resp_release",
+        status: "continued",
+        titleSnippet: "Release notes",
+      },
+    ],
+  });
+  engine.dispatch({ type: "message.add", role: "assistant", text: "old transcript" });
+  const controller = createWorkbenchCommandController({
+    authController: stubAuthController(),
+    conversationController: {
+      ...stubConversationController(),
+      async deleteConversation(name, profile) {
+        deleted.push([name, profile]);
+        return { name, message: `Deleted conversation "${name}".` };
+      },
+      async startNewConversation(name, profile) {
+        return { id: "conv_default", name, profile, status: "fresh", message: "Started default." };
+      },
+    },
+    engine,
+    localController: stubLocalController(),
+    options: { promptParts: [], profile: "dev" },
+    profileName: "dev",
+    settingsController: stubSettingsController(),
+    transcriptStore: {
+      async appendMessage() {},
+      async appendMessageDelta() {},
+      async clearConversation(id) { cleared.push(id); },
+      async exportConversation() { return ""; },
+      async getConversationSummary() { return { latestSnippet: "", messageCount: 0, titleSnippet: "" }; },
+      async loadAfterMessages() { return []; },
+      async loadBeforeMessages() { return []; },
+      async loadRecentMessages() { return []; },
+    },
+    turnController: stubTurnController(),
+    workspaceController: stubWorkspaceController(),
+    async onDeleteProfile() {},
+    onExit() {},
+    onLogin() {},
+    onLogout() {},
+    onSwitchProfile() {},
+  });
+
+  await controller.run({ kind: "delete_conversation", name: "release" });
+
+  assert.deepEqual(deleted, [["release", "dev"]]);
+  assert.deepEqual(cleared, ["conv_release", "conv_default"]);
+  assert.equal(engine.snapshot().currentConversation, "default");
+  assert.equal(engine.snapshot().conversationId, "conv_default");
+  assert.equal(engine.snapshot().conversationStatus, "fresh");
+  assert.equal(engine.snapshot().messages.some((message) => message.text === "old transcript"), false);
+  assert.match(engine.snapshot().messages.at(-1).text, /Deleted conversation "release"/);
+});
+
+test("workbench command controller renames the active conversation", async () => {
+  const engine = createWorkbenchEngine({ contextEnabled: false, conversation: "release" });
+  const renamed = [];
+  engine.dispatch({ type: "conversation.set", id: "conv_release", name: "release", status: "continued", previousResponseId: "resp_release" });
+  const controller = createWorkbenchCommandController({
+    authController: stubAuthController(),
+    conversationController: {
+      ...stubConversationController(),
+      async renameConversation(name, nextName, profile) {
+        renamed.push([name, nextName, profile]);
+        return {
+          id: "conv_release",
+          name: nextName,
+          previousResponseId: "resp_release",
+          status: "continued",
+          message: `Renamed conversation "${name}" to "${nextName}".`,
+        };
+      },
+    },
+    engine,
+    localController: stubLocalController(),
+    options: { promptParts: [], profile: "dev" },
+    profileName: "dev",
+    settingsController: stubSettingsController(),
+    turnController: stubTurnController(),
+    workspaceController: stubWorkspaceController(),
+    async onDeleteProfile() {},
+    onExit() {},
+    onLogin() {},
+    onLogout() {},
+    onSwitchProfile() {},
+  });
+
+  await controller.run({ kind: "rename_conversation", name: "release notes" });
+
+  assert.deepEqual(renamed, [["release", "release notes", "dev"]]);
+  assert.equal(engine.snapshot().currentConversation, "release notes");
+  assert.equal(engine.snapshot().conversationId, "conv_release");
+  assert.equal(engine.snapshot().conversationPreviousResponseId, "resp_release");
+  assert.match(engine.snapshot().messages.at(-1).text, /Renamed conversation "release" to "release notes"/);
 });
 
 test("workbench command controller saves automatic continuation limit", async () => {
@@ -1456,6 +1609,7 @@ test("workbench command controller saves automatic continuation limit", async ()
       },
     },
     turnController: stubTurnController(),
+    workspaceController: stubWorkspaceController(),
     async onDeleteProfile() {},
     onExit() {},
     onLogin() {},
@@ -1511,6 +1665,7 @@ test("workbench command controller reports when no timed local pause is active",
     profileName: "default",
     settingsController: stubSettingsController(),
     turnController: stubTurnController(),
+    workspaceController: stubWorkspaceController(),
     async onDeleteProfile() {},
     onExit() {},
     onLogin() {},
@@ -1613,6 +1768,7 @@ test("workbench command controller checks and applies CLI updates", async () => 
     profileName: "default",
     settingsController: stubSettingsController(),
     turnController: stubTurnController(),
+    workspaceController: stubWorkspaceController(),
     async checkForUpdateImpl() {
       return updateResult;
     },
@@ -1651,6 +1807,7 @@ test("workbench command controller skips CLI update checkpoint when current", as
     profileName: "default",
     settingsController: stubSettingsController(),
     turnController: stubTurnController(),
+    workspaceController: stubWorkspaceController(),
     async checkForUpdateImpl() {
       return {
         current: "0.4.10",
@@ -1851,7 +2008,7 @@ test("workbench terminal controller routes focused panel operations", () => {
   applyMouse({ button: "left", column: 5, kind: "press", row: 7 });
   assert.equal(terminalState.focusedPanel, "conversation");
   applyMouse({ button: "left", column: 5, kind: "press", row: 13 });
-  assert.equal(terminalState.focusedPanel, "workspace");
+  assert.equal(terminalState.focusedPanel, "workdir");
 
   applyMouse({ button: "left", column: 32, kind: "press", row: 7 });
   assert.equal(terminalState.focusedPanel, "transcript");
@@ -1885,12 +2042,14 @@ test("workbench terminal controller routes focused panel operations", () => {
   apply("", { tab: true });
   assert.equal(terminalState.focusedPanel, "header");
   apply("", { tab: true });
+  assert.equal(terminalState.focusedPanel, "workspace");
+  apply("", { tab: true });
   assert.equal(terminalState.focusedPanel, "conversation");
   apply("", { downArrow: true });
   assert.deepEqual(apply("", { return: true }).effects, [{ type: "switch_conversation", name: "oom" }]);
   apply("", { upArrow: true });
   apply("", { tab: true });
-  assert.equal(terminalState.focusedPanel, "workspace");
+  assert.equal(terminalState.focusedPanel, "workdir");
   apply("", { tab: true });
   assert.equal(terminalState.focusedPanel, "transcript");
 
@@ -1924,9 +2083,11 @@ test("workbench terminal controller routes focused panel operations", () => {
   terminalState = beforePasteShortcut;
 
   apply("", { tab: true, shift: true });
-  assert.equal(terminalState.focusedPanel, "workspace");
+  assert.equal(terminalState.focusedPanel, "workdir");
   apply("", { tab: true, shift: true });
   assert.equal(terminalState.focusedPanel, "conversation");
+  apply("", { tab: true, shift: true });
+  assert.equal(terminalState.focusedPanel, "workspace");
   apply("", { tab: true, shift: true });
   assert.equal(terminalState.focusedPanel, "header");
   apply("", { tab: true, shift: true });
@@ -2505,11 +2666,11 @@ test("workbench conversation controller manages handles and transcript export", 
   const controller = createWorkbenchConversationController({
     dataDir: root,
     now,
-    async deleteConversationImpl(name, profile) {
-      calls.push(["delete", name, profile]);
+    async deleteWorkspaceConversationImpl(name, profile, workspaceId) {
+      calls.push(["delete", name, profile, workspaceId]);
     },
-    async listConversationsImpl(profile) {
-      calls.push(["list", profile]);
+    async listConversationsImpl(profile, workspaceId) {
+      calls.push(["list", profile, workspaceId]);
       return [
         {
           id: "conv_release",
@@ -2519,27 +2680,50 @@ test("workbench conversation controller manages handles and transcript export", 
           createdAt: 4102444700,
           updatedAt: 4102444800,
         },
+        {
+          id: "conv_notes",
+          name: "notes",
+          profile: profile || "default",
+          createdAt: 4102444600,
+          updatedAt: 4102444700,
+        },
       ];
     },
-    async startFreshConversationImpl(name, profile) {
-      calls.push(["fresh", name, profile]);
+    async startFreshConversationImpl(name, profile, workspaceId, workspaceName) {
+      calls.push(["fresh", name, profile, workspaceId, workspaceName]);
       return {
         id: "conv_new",
         name,
         profile,
+        workspaceId,
+        workspaceName,
         createdAt: 1782131696,
         updatedAt: 1782131696,
       };
     },
-    async ensureConversationImpl(name, profile) {
-      calls.push(["ensure", name, profile]);
+    async ensureConversationImpl(name, profile, workspaceId, workspaceName) {
+      calls.push(["ensure", name, profile, workspaceId, workspaceName]);
       return {
         id: "conv_release",
         name,
         profile,
+        workspaceId,
+        workspaceName,
         previousResponseId: "resp_test",
         createdAt: 4102444700,
         updatedAt: 4102444800,
+      };
+    },
+    async renameConversationImpl(name, nextName, profile, workspaceId) {
+      calls.push(["rename", name, nextName, profile, workspaceId]);
+      return {
+        id: "conv_release",
+        name: nextName,
+        profile,
+        workspaceId,
+        previousResponseId: "resp_test",
+        createdAt: 4102444700,
+        updatedAt: 4102444900,
       };
     },
   });
@@ -2563,6 +2747,20 @@ test("workbench conversation controller manages handles and transcript export", 
     updatedAt: 4102444800,
     message: 'Switched to conversation "release" (conv_release). Continuing from resp_test.',
   });
+  assert.deepEqual(await controller.renameConversation("release", "release notes", "dev"), {
+    createdAt: 4102444700,
+    id: "conv_release",
+    name: "release notes",
+    profile: "dev",
+    previousResponseId: "resp_test",
+    status: "continued",
+    updatedAt: 4102444900,
+    message: 'Renamed conversation "release" to "release notes".',
+  });
+  assert.deepEqual(await controller.deleteConversation("release", "dev"), {
+    name: "release",
+    message: 'Deleted conversation "release".',
+  });
   assert.deepEqual(await controller.listConversationSelections("dev"), [{
     createdAt: 4102444700,
     id: "conv_release",
@@ -2572,8 +2770,18 @@ test("workbench conversation controller manages handles and transcript export", 
     status: "continued",
     updatedAt: 4102444800,
     message: "",
+  }, {
+    createdAt: 4102444600,
+    id: "conv_notes",
+    name: "notes",
+    profile: "dev",
+    status: "fresh",
+    updatedAt: 4102444700,
+    message: "",
   }]);
   assert.match(await controller.listConversations("dev"), /release\tdev\t2100-01-01T00:00:00\.000Z\tconv_release response=resp_test/);
+  assert.doesNotMatch(await controller.listConversations("dev", "release"), /notes\tdev/);
+  assert.match(await controller.listConversations("dev", "missing"), /No conversations match: missing/);
 
   const exported = await controller.exportTranscript({
     conversation: "release notes",
@@ -2582,11 +2790,15 @@ test("workbench conversation controller manages handles and transcript export", 
   assert.equal(exported, join(root, "transcripts", "release-notes-2026-06-22T12-34-56-000Z.txt"));
   assert.equal(await readFile(exported, "utf8"), "System:\nReady.\n");
   assert.deepEqual(calls, [
-    ["delete", "thread-20260622-123456", "dev"],
-    ["fresh", "thread-20260622-123456", "dev"],
-    ["ensure", "release", "dev"],
-    ["list", "dev"],
-    ["list", "dev"],
+    ["delete", "thread-20260622-123456", "dev", undefined],
+    ["fresh", "thread-20260622-123456", "dev", undefined, undefined],
+    ["ensure", "release", "dev", undefined, undefined],
+    ["rename", "release", "release notes", "dev", undefined],
+    ["delete", "release", "dev", undefined],
+    ["list", "dev", undefined],
+    ["list", "dev", undefined],
+    ["list", "dev", undefined],
+    ["list", "dev", undefined],
   ]);
 });
 
@@ -3540,6 +3752,8 @@ test("workbench command controller resumes automatic continuation checkpoints", 
     conversationController: {
       async startNewConversation() {},
       async switchConversation() {},
+      async renameConversation() {},
+      async deleteConversation() {},
       async listConversations() { return ""; },
       async exportTranscript() { return ""; },
     },

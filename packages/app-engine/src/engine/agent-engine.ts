@@ -21,6 +21,7 @@ export interface AgentEngineApp {
   subscribe(listener: () => void): () => void;
   dispatch(action: WorkbenchAction): void;
   maybeCheckForUpdate(options?: AgentEngineLifecycleOptions): Promise<void>;
+  loadWorkspaceContext(options?: AgentEngineLifecycleOptions): Promise<void>;
   loadInitialConversation(options?: AgentEngineLifecycleOptions): Promise<void>;
   refreshConversationSummaries(options?: AgentEngineLifecycleOptions): Promise<void>;
   loadOlderTranscript(limit?: number): Promise<number>;
@@ -67,6 +68,7 @@ export function createAgentEngine(options: AgentEngineAppOptions): AgentEngineAp
     settingsController: session.settings,
     transcriptStore: options.services?.transcriptStore,
     turnController: session.turn,
+    workspaceController: session.workspace,
     onDeleteProfile: options.onDeleteProfile,
     onExit: options.onExit,
     onLogin: options.onLogin,
@@ -95,7 +97,16 @@ export function createAgentEngine(options: AgentEngineAppOptions): AgentEngineAp
   async function loadInitialConversation(lifecycleOptions: AgentEngineLifecycleOptions = {}) {
     try {
       const state = session.engine.snapshot();
-      const conversation = await session.conversation.resolveConversation(state.currentConversation, options.baseOptions.profile);
+      if (!state.currentWorkspaceId) {
+        session.engine.dispatch({ type: "activity.add", level: "warning", text: "Conversation load is waiting for workspace context" });
+        return;
+      }
+      const conversation = await session.conversation.resolveConversation(
+        state.currentConversation,
+        options.baseOptions.profile,
+        state.currentWorkspaceId,
+        state.currentWorkspaceName,
+      );
       if (lifecycleOptions.isMounted && !lifecycleOptions.isMounted()) return;
       session.engine.dispatch({
         type: "conversation.set",
@@ -132,7 +143,10 @@ export function createAgentEngine(options: AgentEngineAppOptions): AgentEngineAp
 
   async function refreshConversationSummaries(lifecycleOptions: AgentEngineLifecycleOptions = {}) {
     try {
-      const conversations = await session.conversation.listConversationSelections(options.baseOptions.profile);
+      const conversations = await session.conversation.listConversationSelections(
+        options.baseOptions.profile,
+        session.engine.snapshot().currentWorkspaceId,
+      );
       const summaries = await buildConversationSummaries(conversations, options.services?.transcriptStore);
       if (lifecycleOptions.isMounted && !lifecycleOptions.isMounted()) return;
       session.engine.dispatch({ type: "conversations.set", conversations: summaries });
@@ -171,6 +185,36 @@ export function createAgentEngine(options: AgentEngineAppOptions): AgentEngineAp
         type: "activity.add",
         level: "warning",
         text: `Config preferences unavailable: ${userFacingError(error)}`,
+      });
+    }
+  }
+
+  async function loadWorkspaceContext(lifecycleOptions: AgentEngineLifecycleOptions = {}) {
+    try {
+      const snapshot = await session.workspace.load(options.baseOptions.profile);
+      if (lifecycleOptions.isMounted && !lifecycleOptions.isMounted()) return;
+      session.engine.dispatch({
+        type: "workspace.set",
+        workspace: {
+          authType: snapshot.authType,
+          id: snapshot.current.id,
+          name: snapshot.current.name,
+          role: snapshot.current.role,
+          switchable: snapshot.switchable,
+        },
+      });
+      session.engine.dispatch({ type: "workspaces.set", workspaces: snapshot.workspaces });
+      session.engine.dispatch({
+        type: "activity.add",
+        level: "success",
+        text: `Workspace: ${snapshot.current.name}`,
+      });
+    } catch (error) {
+      if (lifecycleOptions.isMounted && !lifecycleOptions.isMounted()) return;
+      session.engine.dispatch({
+        type: "activity.add",
+        level: "warning",
+        text: `Workspace context unavailable: ${userFacingError(error)}`,
       });
     }
   }
@@ -253,6 +297,7 @@ export function createAgentEngine(options: AgentEngineAppOptions): AgentEngineAp
 
   async function startInitialPrompt() {
     const state = session.engine.snapshot();
+    if (!state.currentWorkspaceId) return;
     const initialPrompt = session.lifecycle.initialPrompt({
       busy: state.busy,
       promptParts: options.baseOptions.promptParts,
@@ -284,6 +329,7 @@ export function createAgentEngine(options: AgentEngineAppOptions): AgentEngineAp
     subscribe: session.engine.subscribe,
     dispatch: session.engine.dispatch,
     maybeCheckForUpdate,
+    loadWorkspaceContext,
     loadInitialConversation,
     refreshConversationSummaries,
     loadOlderTranscript,

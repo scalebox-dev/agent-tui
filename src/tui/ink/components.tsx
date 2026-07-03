@@ -28,12 +28,14 @@ export function InkWorkbenchScreen({
   transcriptSelection,
   workspaceCursor,
   workspaceSelection,
+  workdirCursor,
+  workdirSelection,
 }: {
   activityCursor: WorkbenchPanelPosition;
   activitySelection: WorkbenchPanelSelection | null;
   conversationCursor: WorkbenchPanelPosition;
   conversationSelection: WorkbenchPanelSelection | null;
-  focusedPanel: "activity" | "conversation" | "header" | "input" | "transcript" | "workspace";
+  focusedPanel: "activity" | "conversation" | "header" | "input" | "transcript" | "workspace" | "workdir";
   headerCursor: WorkbenchPanelPosition;
   headerSelection: WorkbenchPanelSelection | null;
   renderModel: WorkbenchRenderModel;
@@ -42,6 +44,8 @@ export function InkWorkbenchScreen({
   transcriptSelection: WorkbenchPanelSelection | null;
   workspaceCursor: WorkbenchPanelPosition;
   workspaceSelection: WorkbenchPanelSelection | null;
+  workdirCursor: WorkbenchPanelPosition;
+  workdirSelection: WorkbenchPanelSelection | null;
 }) {
   const activity = (
     <Box
@@ -76,7 +80,7 @@ export function InkWorkbenchScreen({
       flexDirection="column"
       flexShrink={0}
       marginRight={renderModel.layout === "wide" ? 1 : 0}
-      width={renderModel.layout === "wide" ? renderModel.workspacePanelWidth : "100%"}
+      width={renderModel.layout === "wide" ? renderModel.workdirPanelWidth : "100%"}
     >
       <InfoPanel
         cursor={conversationCursor}
@@ -86,6 +90,16 @@ export function InkWorkbenchScreen({
         selection={conversationSelection}
         title="Conversation"
       />
+      <Box marginTop={renderModel.layout === "wide" ? 1 : 0}>
+        <InfoPanel
+          cursor={workdirCursor}
+          focused={focusedPanel === "workdir"}
+          height={renderModel.workdirHeight}
+          lines={renderModel.workdir.lines}
+          selection={workdirSelection}
+          title="Workdir"
+        />
+      </Box>
       <Box marginTop={renderModel.layout === "wide" ? 1 : 0}>
         <InfoPanel
           cursor={workspaceCursor}

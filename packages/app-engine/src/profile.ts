@@ -35,6 +35,26 @@ export interface AuthStatus {
   me?: unknown;
 }
 
+export interface CurrentWorkspaceIdentity {
+  apiKeyId?: string;
+  authMethod?: string;
+  scopes: string[];
+  userId: string;
+  userStatus?: string;
+  workspaceId: string;
+  workspaceName: string;
+  workspaceRole: string;
+}
+
+export interface WorkspaceInfo {
+  id: string;
+  name: string;
+  slug?: string;
+  role: string;
+  status: string;
+  membershipStatus: string;
+}
+
 export class AuthSessionExpiredError extends Error {
   readonly profile: string;
   readonly baseURL: string;
@@ -152,18 +172,58 @@ export async function resolveRuntimeProfile(profileName?: string): Promise<Runti
 
 export async function getAuthStatus(profileName?: string): Promise<AuthStatus> {
   const runtime = await resolveRuntimeProfile(profileName);
-  const response = await fetch(`${runtime.profile.baseURL}/v1/me`, {
-    headers: { Authorization: `Bearer ${runtime.token}` },
-  });
-  const payload = await response.json().catch(() => undefined);
-  if (!response.ok) {
-    throw new Error(errorMessageFromPayload(payload) || `whoami failed with ${response.status}`);
-  }
+  const payload = await fetchJSON(`${runtime.profile.baseURL}/v1/me`, runtime.token, "whoami");
   return {
     profile: runtime.profile.name,
     baseURL: runtime.profile.baseURL,
     authType: runtime.profile.auth.type,
     me: payload,
+  };
+}
+
+export async function getCurrentWorkspaceIdentity(profileName?: string): Promise<CurrentWorkspaceIdentity> {
+  const runtime = await resolveRuntimeProfile(profileName);
+  const payload = await fetchJSON(`${runtime.profile.baseURL}/v1/me`, runtime.token, "current identity");
+  return currentWorkspaceIdentityFromPayload(payload);
+}
+
+export async function listProfileWorkspaces(profileName?: string): Promise<WorkspaceInfo[]> {
+  const runtime = await resolveRuntimeProfile(profileName);
+  const payload = await fetchJSON(`${runtime.profile.baseURL}/v1/workspaces`, runtime.token, "list workspaces");
+  const data = Array.isArray(payload?.data) ? payload.data : [];
+  return data.map(workspaceInfoFromPayload).filter((workspace): workspace is WorkspaceInfo => Boolean(workspace));
+}
+
+export async function switchBrowserWorkspace(profileName: string | undefined, workspaceId: string): Promise<CurrentWorkspaceIdentity> {
+  const runtime = await resolveRuntimeProfile(profileName);
+  if (runtime.profile.auth.type !== "browser") {
+    throw new Error("Workspace switching requires browser auth. API key profiles are bound to their key workspace.");
+  }
+  const id = workspaceId.trim();
+  if (!id) throw new Error("workspace_id is required");
+  const payload = await fetchJSON(`${runtime.profile.baseURL}/v1/workspaces/${encodeURIComponent(id)}/switch`, runtime.token, "switch workspace", {
+    method: "POST",
+  });
+  await saveBrowserProfile(runtime.profile.name, runtime.profile.baseURL, {
+    access_token: stringPayload(payload?.access_token),
+    refresh_token: stringPayload(payload?.refresh_token),
+    access_token_expires_at: numberPayload(payload?.access_token_expires_at),
+    refresh_token_expires_at: numberPayload(payload?.refresh_token_expires_at),
+    scopes: stringArrayPayload(payload?.scopes),
+    status: "approved",
+    user_id: stringPayload(payload?.user_id),
+    workspace_id: stringPayload(payload?.workspace_id),
+    workspace_role: stringPayload(payload?.workspace_role),
+  });
+  return {
+    apiKeyId: undefined,
+    authMethod: "jwt",
+    scopes: stringArrayPayload(payload?.scopes),
+    userId: stringPayload(payload?.user_id),
+    userStatus: undefined,
+    workspaceId: stringPayload(payload?.workspace_id),
+    workspaceName: stringPayload(payload?.workspace_name),
+    workspaceRole: stringPayload(payload?.workspace_role),
   };
 }
 
@@ -226,6 +286,66 @@ function isTransientAuthRefreshError(error: unknown) {
     return isRetryableStatus(error.status);
   }
   return false;
+}
+
+async function fetchJSON(url: string, token: string, label: string, init: RequestInit = {}) {
+  const response = await fetch(url, {
+    ...init,
+    headers: {
+      ...init.headers,
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  const payload = await response.json().catch(() => undefined);
+  if (!response.ok) {
+    throw new Error(errorMessageFromPayload(payload) || `${label} failed with ${response.status}`);
+  }
+  return payload as Record<string, unknown>;
+}
+
+function currentWorkspaceIdentityFromPayload(payload: Record<string, unknown> | undefined): CurrentWorkspaceIdentity {
+  return {
+    apiKeyId: optionalStringPayload(payload?.api_key_id),
+    authMethod: optionalStringPayload(payload?.auth_method),
+    scopes: stringArrayPayload(payload?.scopes),
+    userId: stringPayload(payload?.user_id),
+    userStatus: optionalStringPayload(payload?.user_status),
+    workspaceId: stringPayload(payload?.workspace_id),
+    workspaceName: stringPayload(payload?.workspace_name),
+    workspaceRole: stringPayload(payload?.workspace_role),
+  };
+}
+
+function workspaceInfoFromPayload(value: unknown): WorkspaceInfo | null {
+  if (!value || typeof value !== "object") return null;
+  const payload = value as Record<string, unknown>;
+  const id = stringPayload(payload.workspace_id);
+  if (!id) return null;
+  return {
+    id,
+    name: stringPayload(payload.name) || id,
+    slug: optionalStringPayload(payload.slug),
+    role: stringPayload(payload.role),
+    status: stringPayload(payload.status),
+    membershipStatus: stringPayload(payload.membership_status),
+  };
+}
+
+function stringPayload(value: unknown) {
+  return typeof value === "string" ? value : "";
+}
+
+function optionalStringPayload(value: unknown) {
+  const text = stringPayload(value);
+  return text || undefined;
+}
+
+function numberPayload(value: unknown) {
+  return typeof value === "number" ? value : 0;
+}
+
+function stringArrayPayload(value: unknown) {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }
 
 export async function listProfiles() {
