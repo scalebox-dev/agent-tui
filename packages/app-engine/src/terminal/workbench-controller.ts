@@ -111,11 +111,17 @@ export function createWorkbenchTerminalController(): WorkbenchTerminalController
       if (key.tab) {
         return stateResult(cycleFocusedPanel(normalized, context.renderModel, key.shift ? -1 : 1));
       }
+      if (key.meta && input === " ") {
+        return stateResult({ ...normalized, focusedPanel: "input" });
+      }
+      if (key.meta && input.toLowerCase() === "t") {
+        return stateResult(focusPanel(normalized, context.renderModel, "transcript"));
+      }
       if (key.meta && input.toLowerCase() === "v") {
         return stateResult({ ...normalized, focusedPanel: "input" }, { type: "paste" });
       }
       const direction = directionalPanelShortcut(input, key);
-      if (direction && normalized.focusedPanel !== "input") {
+      if (direction) {
         return stateResult(focusDirectionalPanel(normalized, context.renderModel, direction));
       }
       if (normalized.focusedPanel !== "input") {
@@ -285,9 +291,9 @@ function handleReadOnlyPanel(
     return stateResult(state);
   }
   if (state.focusedPanel === "workspace" && key.return) {
-    const workspace = renderModel.workspace.lines[state.workspaceCursor.line];
-    const id = renderModel.workspace.items?.[state.workspaceCursor.line]?.id ?? workspaceIDFromLine(workspace || "");
-    if (id) return { state, effects: [{ type: "switch_workspace", id }] };
+    const item = renderModel.workspace.items[state.workspaceCursor.line];
+    if (item?.id) return { state, effects: [{ type: "switch_workspace", id: item.id }] };
+    return stateResult(state);
   }
   if (state.focusedPanel === "transcript") {
     return stateResult(handleTranscriptPanelKey(key, state, renderModel));
@@ -438,10 +444,8 @@ function cycleFocusedPanel(
 type PanelDirection = "down" | "left" | "right" | "up";
 
 function directionalPanelShortcut(input: string, key: WorkbenchTerminalKey): PanelDirection | null {
-  if (key.ctrl || key.meta) return null;
+  if (!key.meta || key.ctrl || key.shift) return null;
   const ch = input.length === 1 ? input : "";
-  const shifted = key.shift || (ch >= "A" && ch <= "Z");
-  if (!shifted) return null;
   switch (ch.toLowerCase()) {
     case "w":
       return "up";
@@ -940,8 +944,8 @@ function handleMouseEvent(
   renderModel: WorkbenchRenderModel,
 ): WorkbenchTerminalResult {
   const target = state.mouseDragPanel && event.kind !== "press"
-    ? mouseTargetForPanel(state.mouseDragPanel, event, renderModel)
-    : mouseTarget(event, renderModel);
+    ? mouseTargetForPanel(state.mouseDragPanel, event, state, renderModel)
+    : mouseTarget(event, state, renderModel);
   if (!target) return stateResult(state);
   if (event.kind === "wheel") {
     if (target.panel !== "transcript") return stateResult({ ...state, focusedPanel: target.panel });
@@ -1098,7 +1102,11 @@ type MouseTarget =
   | { panel: "workspace"; column: number; line: number }
   | { panel: "workdir"; column: number; line: number };
 
-function mouseTarget(event: WorkbenchTerminalMouseEvent, renderModel: WorkbenchRenderModel): MouseTarget | null {
+function mouseTarget(
+  event: WorkbenchTerminalMouseEvent,
+  state: WorkbenchTerminalState,
+  renderModel: WorkbenchRenderModel,
+): MouseTarget | null {
   const layout = mouseLayout(renderModel);
   const row = event.row;
   const column = event.column;
@@ -1120,7 +1128,7 @@ function mouseTarget(event: WorkbenchTerminalMouseEvent, renderModel: WorkbenchR
       };
     }
     if (row >= layout.workspace.top && row <= layout.workspace.bottom) {
-      const line = clamp(row - layout.workspace.textTop, 0, Math.max(0, renderModel.workspace.lines.length - 1));
+      const line = workspaceLineFromVisibleRow(row - layout.workspace.textTop, state, renderModel);
       return {
         panel: "workspace",
         line,
@@ -1176,6 +1184,7 @@ function mouseTarget(event: WorkbenchTerminalMouseEvent, renderModel: WorkbenchR
 function mouseTargetForPanel(
   panel: WorkbenchFocusedPanel,
   event: WorkbenchTerminalMouseEvent,
+  state: WorkbenchTerminalState,
   renderModel: WorkbenchRenderModel,
 ): MouseTarget | null {
   const layout = mouseLayout(renderModel);
@@ -1228,7 +1237,7 @@ function mouseTargetForPanel(
       };
     }
     case "workspace": {
-      const line = clamp(event.row - layout.workspace.textTop, 0, Math.max(0, renderModel.workspace.lines.length - 1));
+      const line = workspaceLineFromVisibleRow(event.row - layout.workspace.textTop, state, renderModel);
       return {
         panel,
         line,
@@ -1244,6 +1253,21 @@ function mouseTargetForPanel(
       };
     }
   }
+}
+
+function workspaceLineFromVisibleRow(
+  visibleRow: number,
+  state: WorkbenchTerminalState,
+  renderModel: WorkbenchRenderModel,
+) {
+  const visibleCount = Math.max(0, renderModel.workspaceHeight - 2);
+  const start = panelWindowStart(state.workspaceCursor.line, renderModel.workspace.lines.length, visibleCount);
+  return clamp(start + visibleRow, 0, Math.max(0, renderModel.workspace.lines.length - 1));
+}
+
+function panelWindowStart(cursorLine: number, lineCount: number, visibleCount: number) {
+  if (visibleCount <= 0 || lineCount <= visibleCount) return 0;
+  return Math.max(0, Math.min(cursorLine, lineCount - visibleCount));
 }
 
 function mouseLayout(renderModel: WorkbenchRenderModel) {
@@ -1262,9 +1286,9 @@ function mouseLayout(renderModel: WorkbenchRenderModel) {
   const activityBottom = renderModel.layout === "wide" ? transcriptBottom : activityTop + renderModel.activityHeight - 1;
   const conversationTop = transcriptTop;
   const conversationBottom = conversationTop + renderModel.conversationHeight - 1;
-  const workdirTop = conversationBottom + 2;
+  const workdirTop = conversationBottom + 1;
   const workdirBottom = workdirTop + renderModel.workdirHeight - 1;
-  const workspaceTop = workdirBottom + 2;
+  const workspaceTop = workdirBottom + 1;
   const workspaceBottom = transcriptBottom;
   return {
     header: {
@@ -1392,10 +1416,4 @@ function workspaceLineText(renderModel: WorkbenchRenderModel, line: number) {
 
 function workdirLineText(renderModel: WorkbenchRenderModel, line: number) {
   return renderModel.workdir.lines[line] ?? "";
-}
-
-function workspaceIDFromLine(line: string) {
-  const trimmed = line.trim().replace(/^\*\s*/, "");
-  const [id = ""] = trimmed.split(/\s+/);
-  return id.endsWith("...") ? "" : id;
 }

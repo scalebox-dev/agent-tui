@@ -14,6 +14,7 @@ import {
   configureAgentAppRuntime,
   createAgentEngine,
   formatUpdateNotice,
+  listProfileWorkspaces,
   loadConfig,
   loginWithAPIKey,
   localToolExecutionErrorResult,
@@ -1950,6 +1951,19 @@ test("workbench terminal controller routes focused panel operations", () => {
       { id: "conv_other", latestSnippet: "Fix transcript OOM", messageCount: 7, name: "oom", status: "continued", titleSnippet: "Fix transcript OOM" },
     ],
   });
+  workbenchState = workbenchReducer(workbenchState, {
+    type: "workspace.set",
+    workspace: { authType: "browser", id: "wrk_current_000000000000000000000001", name: "Current Workspace", role: "owner", switchable: true },
+  });
+  workbenchState = workbenchReducer(workbenchState, {
+    type: "workspaces.set",
+    workspaces: [
+      { id: "wrk_current_000000000000000000000001", membershipStatus: "active", name: "Current Workspace", role: "owner", status: "active" },
+      { id: "wrk_target_000000000000000000000002", membershipStatus: "active", name: "Target Workspace", role: "member", status: "active" },
+      { id: "wrk_review_000000000000000000000003", membershipStatus: "active", name: "Review Workspace", role: "member", status: "active" },
+      { id: "wrk_later_000000000000000000000004", membershipStatus: "active", name: "Later Workspace", role: "member", status: "active" },
+    ],
+  });
   let terminalState = initialWorkbenchTerminalState();
   const model = () => buildWorkbenchRenderModel({
     cursor: terminalState.cursor,
@@ -2050,35 +2064,49 @@ test("workbench terminal controller routes focused panel operations", () => {
   assert.equal(terminalState.focusedPanel, "workdir");
   apply("", { tab: true });
   assert.equal(terminalState.focusedPanel, "workspace");
+  apply("", { downArrow: true });
+  assert.deepEqual(apply("", { return: true }).effects, [{ type: "switch_workspace", id: "wrk_target_000000000000000000000002" }]);
+  apply("", { downArrow: true });
+  apply("", { downArrow: true });
+  assert.deepEqual(apply("", { return: true }).effects, [{ type: "switch_workspace", id: "wrk_later_000000000000000000000004" }]);
   apply("", { tab: true });
   assert.equal(terminalState.focusedPanel, "transcript");
 
-  apply("A", {});
+  apply("a", { meta: true });
   assert.equal(terminalState.focusedPanel, "conversation");
-  apply("D", {});
+  apply("d", { meta: true });
   assert.equal(terminalState.focusedPanel, "transcript");
-  apply("S", {});
+  apply("s", { meta: true });
   assert.equal(terminalState.focusedPanel, "input");
   const inputAfterPanelShortcut = terminalState;
   apply("W", {});
   assert.equal(terminalState.focusedPanel, "input");
   assert.equal(terminalState.draft, "W");
+  apply("t", { meta: true });
+  assert.equal(terminalState.focusedPanel, "transcript");
+  assert.equal(terminalState.draft, "W");
+  terminalState = { ...inputAfterPanelShortcut };
+  apply("w", { meta: true });
+  assert.equal(terminalState.focusedPanel, "transcript");
+  const directInputFocus = apply(" ", { meta: true });
+  assert.equal(terminalState.focusedPanel, "input");
+  assert.deepEqual(directInputFocus.effects, []);
   terminalState = { ...inputAfterPanelShortcut };
   apply("", { tab: true, shift: true });
   assert.equal(terminalState.focusedPanel, "activity");
-  apply("W", {});
+  apply("w", { meta: true });
   assert.equal(terminalState.focusedPanel, "header");
-  apply("S", {});
+  apply("s", { meta: true });
   assert.equal(terminalState.focusedPanel, "conversation");
-  apply("D", {});
+  apply("d", { meta: true });
   assert.equal(terminalState.focusedPanel, "transcript");
-  apply("D", {});
+  apply("d", { meta: true });
   assert.equal(terminalState.focusedPanel, "activity");
-  apply("S", {});
+  apply("s", { meta: true });
   assert.equal(terminalState.focusedPanel, "input");
   apply("", { tab: true, shift: true });
   assert.equal(terminalState.focusedPanel, "activity");
-  apply("A", {});
+  apply("a", { meta: true });
   assert.equal(terminalState.focusedPanel, "transcript");
 
   apply("", { home: true });
@@ -4001,6 +4029,47 @@ test("app engine runtime accepts injected storage", async () => {
     assert.equal(config.profiles.memory.baseURL, "https://api.test");
     assert.equal(await storage.get("profiles.json", "activeProfile"), "memory");
   } finally {
+    configureAgentAppRuntime();
+  }
+});
+
+test("workspace listing accepts gateway id payloads", async () => {
+  const storage = createMemoryStorage();
+  const originalFetch = globalThis.fetch;
+  configureAgentAppRuntime({ appName: "workspace-list-test", legacyAppName: null, storage });
+  globalThis.fetch = async (url, init) => {
+    assert.equal(String(url), "https://api.test/v1/workspaces");
+    assert.equal(new Headers(init?.headers).get("authorization"), "Bearer sk-workspaces");
+    return new Response(JSON.stringify({
+      object: "list",
+      data: [
+        {
+          id: "wrk_gateway",
+          name: "Gateway Workspace",
+          role: "owner",
+          status: "active",
+          membership_status: "active",
+        },
+        {
+          workspace_id: "wrk_legacy",
+          name: "Legacy Workspace",
+          role: "member",
+          status: "active",
+          membership_status: "active",
+        },
+      ],
+    }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  try {
+    await loginWithAPIKey({ profile: "workspaces", baseURL: "https://api.test", apiKey: "sk-workspaces" });
+    const workspaces = await listProfileWorkspaces("workspaces");
+    assert.deepEqual(workspaces.map((workspace) => workspace.id), ["wrk_gateway", "wrk_legacy"]);
+    assert.deepEqual(workspaces.map((workspace) => workspace.name), ["Gateway Workspace", "Legacy Workspace"]);
+  } finally {
+    globalThis.fetch = originalFetch;
     configureAgentAppRuntime();
   }
 });

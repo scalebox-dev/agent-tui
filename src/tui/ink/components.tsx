@@ -90,26 +90,22 @@ export function InkWorkbenchScreen({
         selection={conversationSelection}
         title="Conversation"
       />
-      <Box marginTop={renderModel.layout === "wide" ? 1 : 0}>
-        <InfoPanel
-          cursor={workdirCursor}
-          focused={focusedPanel === "workdir"}
-          height={renderModel.workdirHeight}
-          lines={renderModel.workdir.lines}
-          selection={workdirSelection}
-          title="Workdir"
-        />
-      </Box>
-      <Box marginTop={renderModel.layout === "wide" ? 1 : 0}>
-        <InfoPanel
-          cursor={workspaceCursor}
-          focused={focusedPanel === "workspace"}
-          height={renderModel.workspaceHeight}
-          lines={renderModel.workspace.lines}
-          selection={workspaceSelection}
-          title="Workspace"
-        />
-      </Box>
+      <InfoPanel
+        cursor={workdirCursor}
+        focused={focusedPanel === "workdir"}
+        height={renderModel.workdirHeight}
+        lines={renderModel.workdir.lines}
+        selection={workdirSelection}
+        title="Workdir"
+      />
+      <InfoPanel
+        cursor={workspaceCursor}
+        focused={focusedPanel === "workspace"}
+        height={renderModel.workspaceHeight}
+        lines={renderModel.workspace.lines}
+        selection={workspaceSelection}
+        title="Workspace"
+      />
     </Box>
   );
   return (
@@ -459,6 +455,9 @@ function InfoPanel({
   selection: WorkbenchPanelSelection | null;
   title: string;
 }) {
+  const visibleCount = Math.max(0, height - 2);
+  const startLine = panelWindowStart(cursor.line, lines.length, visibleCount);
+  const visibleLines = lines.slice(startLine, startLine + visibleCount);
   return (
     <Box
       borderStyle="round"
@@ -468,18 +467,26 @@ function InfoPanel({
       paddingX={1}
     >
       <Text bold color={focused ? "cyan" : undefined} wrap="truncate">{title}</Text>
-      {lines.slice(0, Math.max(0, height - 2)).map((line, index) => (
-        <Text bold={focused && index === cursor.line} color="gray" key={`${title}:${index}`} wrap="truncate">
-          {focused && index === cursor.line ? <Text color="cyan">› </Text> : <Text>  </Text>}
+      {visibleLines.map((line, index) => {
+        const absoluteLine = startLine + index;
+        return (
+        <Text bold={focused && absoluteLine === cursor.line} color="gray" key={`${title}:${absoluteLine}`} wrap="truncate">
+          {focused && absoluteLine === cursor.line ? <Text color="cyan">› </Text> : <Text>  </Text>}
           <SelectableText
-            cursorColumn={focused && index === cursor.line && !selection ? cursor.column : null}
-            selection={lineSelection(index, selection)}
+            cursorColumn={focused && absoluteLine === cursor.line && !selection ? cursor.column : null}
+            selection={lineSelection(absoluteLine, selection)}
             text={line || " "}
           />
         </Text>
-      ))}
+        );
+      })}
     </Box>
   );
+}
+
+function panelWindowStart(cursorLine: number, lineCount: number, visibleCount: number) {
+  if (visibleCount <= 0 || lineCount <= visibleCount) return 0;
+  return Math.max(0, Math.min(cursorLine, lineCount - visibleCount));
 }
 
 function panelBorderColor(focused: boolean) {

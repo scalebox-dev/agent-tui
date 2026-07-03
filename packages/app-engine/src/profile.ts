@@ -319,7 +319,7 @@ function currentWorkspaceIdentityFromPayload(payload: Record<string, unknown> | 
 function workspaceInfoFromPayload(value: unknown): WorkspaceInfo | null {
   if (!value || typeof value !== "object") return null;
   const payload = value as Record<string, unknown>;
-  const id = stringPayload(payload.workspace_id);
+  const id = stringPayload(payload.workspace_id) || stringPayload(payload.id);
   if (!id) return null;
   return {
     id,
