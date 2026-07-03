@@ -44,6 +44,7 @@ import {
   defaultTranscriptExportPath,
   formatPresetList,
   formatTranscript,
+  helpText,
   installConfiguredIsolator,
   localShellIsolationOptions,
   localShellIsolationOptions as localShellIsolationOptionsFromBoundary,
@@ -3339,6 +3340,24 @@ test("workbench view model renders markdown transcript lines", () => {
   assert.equal(lines[3].color, "gray");
 });
 
+test("workbench help transcript styles command names", () => {
+  const lines = buildTranscriptLines([
+    { id: "1", role: "system", text: helpText() },
+  ], {
+    activeAssistantMessageId: null,
+    busy: false,
+    renderMode: "markdown",
+    spinnerFrame: 0,
+    width: 96,
+  });
+
+  const authLine = lines.find((line) => line.text.includes("/auth"));
+  assert.ok(authLine);
+  assert.deepEqual(authLine.spans?.[0], { text: "/auth", bold: true });
+  assert.equal(authLine.spans?.[1]?.bold, undefined);
+  assert.match(authLine.spans?.[1]?.text ?? "", /show current auth profile/);
+});
+
 test("workbench view model labels local tool transcript messages distinctly", () => {
   const lines = buildTranscriptLines([
     { id: "1", kind: "tool", role: "system", text: "Local execution completed: local_shell.run." },
@@ -3464,6 +3483,8 @@ test("workbench engine routes submitted input into prompts and commands", () => 
 
   assert.deepEqual(engine.submit("  "), { kind: "handled" });
   assert.deepEqual(engine.submit("/help"), { kind: "command", command: { kind: "help" } });
+  assert.deepEqual(engine.submit("\\/help"), { kind: "prompt", prompt: "/help" });
+  assert.deepEqual(engine.submit("  \\/literal slash prompt  "), { kind: "prompt", prompt: "/literal slash prompt" });
   assert.deepEqual(engine.submit("hello agent"), { kind: "prompt", prompt: "hello agent" });
 });
 

@@ -355,6 +355,7 @@ export function createWorkbenchEngine(options: WorkbenchEngineOptions): Workbenc
       }
       const command = parseWorkbenchCommand(trimmed);
       if (command) return { kind: "command", command };
+      if (trimmed.startsWith("\\/")) return { kind: "prompt", prompt: trimmed.slice(1) };
       return { kind: "prompt", prompt: trimmed };
     },
   };
