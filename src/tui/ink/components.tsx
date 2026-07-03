@@ -17,6 +17,8 @@ import {
 export function InkWorkbenchScreen({
   activityCursor,
   activitySelection,
+  conversationCursor,
+  conversationSelection,
   focusedPanel,
   headerCursor,
   headerSelection,
@@ -24,16 +26,22 @@ export function InkWorkbenchScreen({
   spinnerFrame,
   transcriptCursor,
   transcriptSelection,
+  workspaceCursor,
+  workspaceSelection,
 }: {
   activityCursor: WorkbenchPanelPosition;
   activitySelection: WorkbenchPanelSelection | null;
-  focusedPanel: "activity" | "header" | "input" | "transcript";
+  conversationCursor: WorkbenchPanelPosition;
+  conversationSelection: WorkbenchPanelSelection | null;
+  focusedPanel: "activity" | "conversation" | "header" | "input" | "transcript" | "workspace";
   headerCursor: WorkbenchPanelPosition;
   headerSelection: WorkbenchPanelSelection | null;
   renderModel: WorkbenchRenderModel;
   spinnerFrame: number;
   transcriptCursor: WorkbenchPanelPosition;
   transcriptSelection: WorkbenchPanelSelection | null;
+  workspaceCursor: WorkbenchPanelPosition;
+  workspaceSelection: WorkbenchPanelSelection | null;
 }) {
   const activity = (
     <Box
@@ -63,6 +71,33 @@ export function InkWorkbenchScreen({
       })}
     </Box>
   );
+  const sidePanels = (
+    <Box
+      flexDirection="column"
+      flexShrink={0}
+      marginRight={renderModel.layout === "wide" ? 1 : 0}
+      width={renderModel.layout === "wide" ? renderModel.workspacePanelWidth : "100%"}
+    >
+      <InfoPanel
+        cursor={conversationCursor}
+        focused={focusedPanel === "conversation"}
+        height={renderModel.conversationHeight}
+        lines={renderModel.conversation.lines}
+        selection={conversationSelection}
+        title="Conversation"
+      />
+      <Box marginTop={renderModel.layout === "wide" ? 1 : 0}>
+        <InfoPanel
+          cursor={workspaceCursor}
+          focused={focusedPanel === "workspace"}
+          height={renderModel.workspaceHeight}
+          lines={renderModel.workspace.lines}
+          selection={workspaceSelection}
+          title="Workspace"
+        />
+      </Box>
+    </Box>
+  );
   return (
     <Box flexDirection="column">
       <Header
@@ -84,29 +119,35 @@ export function InkWorkbenchScreen({
         workdir={renderModel.header.workdir}
       />
       <Box height={renderModel.viewportHeight} flexDirection={renderModel.layout === "wide" ? "row" : "column"}>
-        <Box
-          borderStyle="round"
-          borderColor={panelBorderColor(focusedPanel === "transcript")}
-          flexGrow={renderModel.layout === "wide" ? 1 : 0}
-          flexDirection="column"
-          height={renderModel.transcript.viewportHeight + 2}
-          paddingX={1}
-          width={renderModel.layout === "wide" ? undefined : "100%"}
-        >
-          {renderModel.transcript.visibleLines.map((line, index) => (
-            <TranscriptText
-              cursorColumn={focusedPanel === "transcript" && renderModel.transcript.startLine + index - 1 === transcriptCursor.line && !transcriptSelection
-                ? transcriptCursor.column
-                : null}
-              key={line.id}
-              line={line}
-              lineSelection={lineSelection(renderModel.transcript.startLine + index - 1, transcriptSelection)}
-              lineCursor={focusedPanel === "transcript" && renderModel.transcript.startLine + index - 1 === transcriptCursor.line}
-            />
-          ))}
-          {renderModel.transcript.visibleLines.length === 0 && <Text color="gray">No transcript lines.</Text>}
+        {renderModel.layout === "wide" && sidePanels}
+        <Box flexDirection={renderModel.layout === "wide" ? "row" : "column"} flexGrow={1}>
+          <Box
+            borderStyle="round"
+            borderColor={panelBorderColor(focusedPanel === "transcript")}
+            flexGrow={renderModel.layout === "wide" ? 1 : 0}
+            flexDirection="column"
+            height={renderModel.transcript.viewportHeight + 2}
+            paddingX={1}
+            width={renderModel.layout === "wide" ? undefined : "100%"}
+          >
+            <Text bold color={renderModel.transcriptStatus.color} wrap="truncate">
+              Transcript · {renderModel.transcriptStatus.label}
+            </Text>
+            {renderModel.transcript.visibleLines.map((line, index) => (
+              <TranscriptText
+                cursorColumn={focusedPanel === "transcript" && renderModel.transcript.startLine + index - 1 === transcriptCursor.line && !transcriptSelection
+                  ? transcriptCursor.column
+                  : null}
+                key={line.id}
+                line={line}
+                lineSelection={lineSelection(renderModel.transcript.startLine + index - 1, transcriptSelection)}
+                lineCursor={focusedPanel === "transcript" && renderModel.transcript.startLine + index - 1 === transcriptCursor.line}
+              />
+            ))}
+            {renderModel.transcript.visibleLines.length === 0 && <Text color="gray">No transcript lines.</Text>}
+          </Box>
+          {activity}
         </Box>
-        {activity}
       </Box>
       <Box borderStyle="round" borderColor={panelBorderColor(focusedPanel === "input")} paddingX={1} flexDirection="column">
         <Box>
@@ -382,6 +423,44 @@ function Header({
             cursorColumn={focused && index === cursor.line && !selection ? cursor.column : null}
             selection={lineSelection(index, selection)}
             text={line.text}
+          />
+        </Text>
+      ))}
+    </Box>
+  );
+}
+
+function InfoPanel({
+  cursor,
+  focused,
+  height,
+  lines,
+  selection,
+  title,
+}: {
+  cursor: WorkbenchPanelPosition;
+  focused: boolean;
+  height: number;
+  lines: string[];
+  selection: WorkbenchPanelSelection | null;
+  title: string;
+}) {
+  return (
+    <Box
+      borderStyle="round"
+      borderColor={panelBorderColor(focused)}
+      flexDirection="column"
+      height={height}
+      paddingX={1}
+    >
+      <Text bold color={focused ? "cyan" : undefined} wrap="truncate">{title}</Text>
+      {lines.slice(0, Math.max(0, height - 2)).map((line, index) => (
+        <Text bold={focused && index === cursor.line} color="gray" key={`${title}:${index}`} wrap="truncate">
+          {focused && index === cursor.line ? <Text color="cyan">› </Text> : <Text>  </Text>}
+          <SelectableText
+            cursorColumn={focused && index === cursor.line && !selection ? cursor.column : null}
+            selection={lineSelection(index, selection)}
+            text={line || " "}
           />
         </Text>
       ))}

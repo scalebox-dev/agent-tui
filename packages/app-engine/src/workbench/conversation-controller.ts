@@ -13,15 +13,19 @@ export interface WorkbenchConversationController {
   resolveConversation(name: string, profileName?: string): Promise<ConversationSelection>;
   startNewConversation(name: string | undefined, profileName?: string): Promise<ConversationSelection>;
   switchConversation(name: string, profileName?: string): Promise<ConversationSelection>;
+  listConversationSelections(profileName?: string): Promise<ConversationSelection[]>;
   listConversations(profileName?: string): Promise<string>;
   exportTranscript(input: { path?: string; transcript: string; conversation: string }): Promise<string>;
 }
 
 export interface ConversationSelection {
+  createdAt?: number;
   id: string;
   name: string;
   previousResponseId?: string;
+  profile?: string;
   status: "fresh" | "continued";
+  updatedAt?: number;
   message: string;
 }
 
@@ -77,6 +81,11 @@ export function createWorkbenchConversationController(
         : conversations.map(conversationSummary).join("\n");
     },
 
+    async listConversationSelections(profileName) {
+      const conversations = await listConversationsImpl(profileName);
+      return conversations.map((conversation) => conversationSelection(conversation, ""));
+    },
+
     async exportTranscript(input) {
       const file = input.path?.trim()
         ? path.resolve(process.cwd(), input.path.trim())
@@ -93,16 +102,22 @@ export function createWorkbenchConversationController(
 
 function conversationSelection(
   conversation: {
+    createdAt?: number;
     id: string;
     name: string;
     previousResponseId?: string;
+    profile?: string;
+    updatedAt?: number;
   },
   message: string,
 ): ConversationSelection {
   const selection: ConversationSelection = {
+    createdAt: conversation.createdAt,
     id: conversation.id,
     name: conversation.name,
+    profile: conversation.profile,
     status: conversation.previousResponseId ? "continued" : "fresh",
+    updatedAt: conversation.updatedAt,
     message,
   };
   if (conversation.previousResponseId) selection.previousResponseId = conversation.previousResponseId;

@@ -264,7 +264,7 @@ function WorkbenchApp({
     await agentEngine.submit(input);
   }
 
-  async function copyPanelText(target: "activity" | "header" | "page" | "transcript") {
+  async function copyPanelText(target: "activity" | "conversation" | "header" | "page" | "transcript" | "workspace") {
     const text = copyTextForTarget(target);
     if (!text) {
       dispatch({ type: "activity.add", level: "warning", text: `Nothing to copy: ${target}` });
@@ -307,7 +307,7 @@ function WorkbenchApp({
     }
   }
 
-  function copyTextForTarget(target: "activity" | "header" | "page" | "transcript") {
+  function copyTextForTarget(target: "activity" | "conversation" | "header" | "page" | "transcript" | "workspace") {
     if (target === "transcript" || target === "page") {
       const selection = selectedPanelRange(terminalState.transcriptSelectionAnchor, terminalState.transcriptCursor);
       if (selection) return copyTextFromTranscriptSelection(renderModel.transcript.lines, selection);
@@ -315,6 +315,14 @@ function WorkbenchApp({
     if (target === "header") {
       const selection = selectedPanelRange(terminalState.headerSelectionAnchor, terminalState.headerCursor);
       if (selection) return copyTextFromHeaderSelection(renderModel.header.lines, selection);
+    }
+    if (target === "conversation") {
+      const selection = selectedPanelRange(terminalState.conversationSelectionAnchor, terminalState.conversationCursor);
+      if (selection) return copyTextFromHeaderSelection(renderModel.conversation.lines, selection);
+    }
+    if (target === "workspace") {
+      const selection = selectedPanelRange(terminalState.workspaceSelectionAnchor, terminalState.workspaceCursor);
+      if (selection) return copyTextFromHeaderSelection(renderModel.workspace.lines, selection);
     }
     if (target === "activity") {
       const selection = selectedPanelRange(terminalState.activitySelectionAnchor, terminalState.activityCursor);
@@ -434,6 +442,9 @@ function WorkbenchApp({
         case "paste":
           void pasteClipboardIntoInput();
           break;
+        case "switch_conversation":
+          void submitInput(`/switch ${effect.name}`);
+          break;
       }
     }
   });
@@ -461,6 +472,8 @@ function WorkbenchApp({
     <InkWorkbenchScreen
       activityCursor={terminalState.activityCursor}
       activitySelection={selectedPanelRange(terminalState.activitySelectionAnchor, terminalState.activityCursor)}
+      conversationCursor={terminalState.conversationCursor}
+      conversationSelection={selectedPanelRange(terminalState.conversationSelectionAnchor, terminalState.conversationCursor)}
       focusedPanel={terminalState.focusedPanel}
       headerCursor={terminalState.headerCursor}
       headerSelection={selectedPanelRange(terminalState.headerSelectionAnchor, terminalState.headerCursor)}
@@ -468,6 +481,8 @@ function WorkbenchApp({
       spinnerFrame={spinnerFrame}
       transcriptCursor={terminalState.transcriptCursor}
       transcriptSelection={selectedPanelRange(terminalState.transcriptSelectionAnchor, terminalState.transcriptCursor)}
+      workspaceCursor={terminalState.workspaceCursor}
+      workspaceSelection={selectedPanelRange(terminalState.workspaceSelectionAnchor, terminalState.workspaceCursor)}
     />
   );
 }
@@ -561,6 +576,9 @@ function sameTerminalState(a: WorkbenchTerminalState, b: WorkbenchTerminalState)
   return a.activityCursor.line === b.activityCursor.line
     && a.activityCursor.column === b.activityCursor.column
     && samePositionOrNull(a.activitySelectionAnchor, b.activitySelectionAnchor)
+    && a.conversationCursor.line === b.conversationCursor.line
+    && a.conversationCursor.column === b.conversationCursor.column
+    && samePositionOrNull(a.conversationSelectionAnchor, b.conversationSelectionAnchor)
     && a.cursor === b.cursor
     && a.draft === b.draft
     && a.focusedPanel === b.focusedPanel
@@ -572,7 +590,10 @@ function sameTerminalState(a: WorkbenchTerminalState, b: WorkbenchTerminalState)
     && a.transcriptCursor.line === b.transcriptCursor.line
     && a.transcriptCursor.column === b.transcriptCursor.column
     && a.transcriptOffset === b.transcriptOffset
-    && samePositionOrNull(a.transcriptSelectionAnchor, b.transcriptSelectionAnchor);
+    && samePositionOrNull(a.transcriptSelectionAnchor, b.transcriptSelectionAnchor)
+    && a.workspaceCursor.line === b.workspaceCursor.line
+    && a.workspaceCursor.column === b.workspaceCursor.column
+    && samePositionOrNull(a.workspaceSelectionAnchor, b.workspaceSelectionAnchor);
 }
 
 function samePositionOrNull(

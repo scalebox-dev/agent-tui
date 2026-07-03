@@ -9,12 +9,16 @@ export function copyTextFromRenderModel(renderModel: WorkbenchRenderModel, targe
   switch (target) {
     case "activity":
       return copyTextFromActivities(renderModel.visibleActivities);
+    case "conversation":
+      return copyTextFromLines(renderModel.conversation.lines);
     case "header":
-      return copyTextFromHeaderLines(renderModel.header.lines);
+      return copyTextFromLines(renderModel.header.lines);
     case "transcript":
       return copyTextFromTranscriptLines(renderModel.transcript.lines);
     case "page":
       return copyTextFromTranscriptLines(renderModel.transcript.visibleLines);
+    case "workspace":
+      return copyTextFromLines(renderModel.workspace.lines);
   }
 }
 
@@ -30,6 +34,10 @@ export function copyTextFromActivities(activities: readonly WorkbenchRenderModel
 }
 
 export function copyTextFromHeaderLines(lines: readonly string[]) {
+  return copyTextFromLines(lines);
+}
+
+export function copyTextFromLines(lines: readonly string[]) {
   return lines.join("\n").trimEnd();
 }
 

@@ -4,7 +4,7 @@ import { createWorkbenchInputController } from "./input-controller.js";
 import type { WorkbenchRenderModel } from "./render-model.js";
 import { indexAtDisplayColumn } from "./text-layout.js";
 
-export type WorkbenchFocusedPanel = "header" | "input" | "transcript" | "activity";
+export type WorkbenchFocusedPanel = "activity" | "conversation" | "header" | "input" | "transcript" | "workspace";
 
 export interface WorkbenchPanelPosition {
   column: number;
@@ -30,6 +30,8 @@ export interface WorkbenchTerminalMouseEvent {
 export interface WorkbenchTerminalState {
   activityCursor: WorkbenchPanelPosition;
   activitySelectionAnchor: WorkbenchPanelPosition | null;
+  conversationCursor: WorkbenchPanelPosition;
+  conversationSelectionAnchor: WorkbenchPanelPosition | null;
   cursor: number;
   draft: string;
   focusedPanel: WorkbenchFocusedPanel;
@@ -40,12 +42,15 @@ export interface WorkbenchTerminalState {
   transcriptCursor: WorkbenchPanelPosition;
   transcriptOffset: number;
   transcriptSelectionAnchor: WorkbenchPanelPosition | null;
+  workspaceCursor: WorkbenchPanelPosition;
+  workspaceSelectionAnchor: WorkbenchPanelPosition | null;
 }
 
 export type WorkbenchTerminalEffect =
   | WorkbenchInputEffect
   | { type: "copy"; target: WorkbenchCopyTarget }
-  | { type: "paste" };
+  | { type: "paste" }
+  | { type: "switch_conversation"; name: string };
 
 export interface WorkbenchTerminalContext {
   busy: boolean;
@@ -75,6 +80,8 @@ export function initialWorkbenchTerminalState(): WorkbenchTerminalState {
   return {
     activityCursor: { column: 0, line: 0 },
     activitySelectionAnchor: null,
+    conversationCursor: { column: 0, line: 0 },
+    conversationSelectionAnchor: null,
     cursor: 0,
     draft: "",
     focusedPanel: "input",
@@ -85,6 +92,8 @@ export function initialWorkbenchTerminalState(): WorkbenchTerminalState {
     transcriptCursor: { column: 0, line: 0 },
     transcriptOffset: 0,
     transcriptSelectionAnchor: null,
+    workspaceCursor: { column: 0, line: 0 },
+    workspaceSelectionAnchor: null,
   };
 }
 
@@ -145,8 +154,15 @@ export function normalizeTerminalState(
 ): WorkbenchTerminalState {
   const maxTranscriptLine = Math.max(0, renderModel.transcript.totalLines - 1);
   const maxActivityIndex = Math.max(0, renderModel.visibleActivities.length - 1);
+  const maxConversationIndex = Math.max(0, renderModel.conversation.lines.length - 1);
   const maxHeaderIndex = Math.max(0, renderModel.header.lines.length - 1);
+  const maxWorkspaceIndex = Math.max(0, renderModel.workspace.lines.length - 1);
   const draftLength = state.draft.length;
+  const conversationCursor = normalizePanelPosition(
+    state.conversationCursor,
+    maxConversationIndex,
+    (line) => conversationLineText(renderModel, line),
+  );
   const headerCursor = normalizePanelPosition(
     state.headerCursor,
     maxHeaderIndex,
@@ -168,6 +184,10 @@ export function normalizeTerminalState(
     activitySelectionAnchor: state.activitySelectionAnchor == null
       ? null
       : normalizePanelPosition(state.activitySelectionAnchor, maxActivityIndex, (line) => activityLineText(renderModel, line)),
+    conversationCursor,
+    conversationSelectionAnchor: state.conversationSelectionAnchor == null
+      ? null
+      : normalizePanelPosition(state.conversationSelectionAnchor, maxConversationIndex, (line) => conversationLineText(renderModel, line)),
     cursor: clamp(state.cursor, 0, draftLength),
     headerCursor,
     headerSelectionAnchor: state.headerSelectionAnchor == null
@@ -179,6 +199,14 @@ export function normalizeTerminalState(
     transcriptSelectionAnchor: state.transcriptSelectionAnchor == null
       ? null
       : normalizePanelPosition(state.transcriptSelectionAnchor, maxTranscriptLine, (line) => transcriptLineText(renderModel, line)),
+    workspaceCursor: normalizePanelPosition(
+      state.workspaceCursor,
+      maxWorkspaceIndex,
+      (line) => workspaceLineText(renderModel, line),
+    ),
+    workspaceSelectionAnchor: state.workspaceSelectionAnchor == null
+      ? null
+      : normalizePanelPosition(state.workspaceSelectionAnchor, maxWorkspaceIndex, (line) => workspaceLineText(renderModel, line)),
   };
 }
 
@@ -195,29 +223,84 @@ function handleReadOnlyPanel(
     if (state.focusedPanel === "activity" && state.activitySelectionAnchor !== null) {
       return stateResult({ ...state, activitySelectionAnchor: null });
     }
+    if (state.focusedPanel === "conversation" && state.conversationSelectionAnchor !== null) {
+      return stateResult({ ...state, conversationSelectionAnchor: null });
+    }
     if (state.focusedPanel === "header" && state.headerSelectionAnchor !== null) {
       return stateResult({ ...state, headerSelectionAnchor: null });
+    }
+    if (state.focusedPanel === "workspace" && state.workspaceSelectionAnchor !== null) {
+      return stateResult({ ...state, workspaceSelectionAnchor: null });
     }
     return stateResult({ ...state, focusedPanel: "input" });
   }
   if (key.ctrl && input === "a") {
     if (state.focusedPanel === "transcript") return stateResult(selectTranscriptAll(state, renderModel));
     if (state.focusedPanel === "activity") return stateResult(selectActivityAll(state, renderModel));
+    if (state.focusedPanel === "conversation") return stateResult(selectConversationAll(state, renderModel));
     if (state.focusedPanel === "header") return stateResult(selectHeaderAll(state, renderModel));
+    if (state.focusedPanel === "workspace") return stateResult(selectWorkspaceAll(state, renderModel));
   }
   if (key.meta && input.toLowerCase() === "c") {
     const target: WorkbenchCopyTarget = state.focusedPanel === "activity"
       ? "activity"
-      : state.focusedPanel === "header"
-        ? "header"
-        : "page";
+      : state.focusedPanel === "conversation"
+        ? "conversation"
+        : state.focusedPanel === "header"
+          ? "header"
+          : state.focusedPanel === "workspace"
+            ? "workspace"
+            : "page";
     return { state, effects: [{ type: "copy", target }] };
+  }
+  if (state.focusedPanel === "conversation" && key.return) {
+    const item = renderModel.conversation.items[state.conversationCursor.line];
+    if (item && item.name !== renderModel.header.conversation) {
+      return stateResult(state, { type: "switch_conversation", name: item.name });
+    }
+    return stateResult(state);
   }
   if (state.focusedPanel === "transcript") {
     return stateResult(handleTranscriptPanelKey(key, state, renderModel));
   }
+  if (state.focusedPanel === "conversation") return stateResult(handleConversationPanelKey(key, state, renderModel));
   if (state.focusedPanel === "header") return stateResult(handleHeaderPanelKey(key, state, renderModel));
+  if (state.focusedPanel === "workspace") return stateResult(handleWorkspacePanelKey(key, state, renderModel));
   return stateResult(handleActivityPanelKey(key, state, renderModel));
+}
+
+function handleConversationPanelKey(
+  key: WorkbenchTerminalKey,
+  state: WorkbenchTerminalState,
+  renderModel: WorkbenchRenderModel,
+): WorkbenchTerminalState {
+  if (key.home) return setConversationCursor(state, renderModel, 0, 0, Boolean(key.shift));
+  if (key.end) {
+    const line = Math.max(0, renderModel.conversation.lines.length - 1);
+    return setConversationCursor(state, renderModel, line, conversationLineText(renderModel, line).length, Boolean(key.shift));
+  }
+  if (key.leftArrow) return moveConversationColumn(state, renderModel, -1, Boolean(key.shift));
+  if (key.rightArrow) return moveConversationColumn(state, renderModel, 1, Boolean(key.shift));
+  if (key.upArrow) return moveConversationCursor(state, renderModel, -1, Boolean(key.shift));
+  if (key.downArrow) return moveConversationCursor(state, renderModel, 1, Boolean(key.shift));
+  return state;
+}
+
+function handleWorkspacePanelKey(
+  key: WorkbenchTerminalKey,
+  state: WorkbenchTerminalState,
+  renderModel: WorkbenchRenderModel,
+): WorkbenchTerminalState {
+  if (key.home) return setWorkspaceCursor(state, renderModel, 0, 0, Boolean(key.shift));
+  if (key.end) {
+    const line = Math.max(0, renderModel.workspace.lines.length - 1);
+    return setWorkspaceCursor(state, renderModel, line, workspaceLineText(renderModel, line).length, Boolean(key.shift));
+  }
+  if (key.leftArrow) return moveWorkspaceColumn(state, renderModel, -1, Boolean(key.shift));
+  if (key.rightArrow) return moveWorkspaceColumn(state, renderModel, 1, Boolean(key.shift));
+  if (key.upArrow) return moveWorkspaceCursor(state, renderModel, -1, Boolean(key.shift));
+  if (key.downArrow) return moveWorkspaceCursor(state, renderModel, 1, Boolean(key.shift));
+  return state;
 }
 
 function handleHeaderPanelKey(
@@ -299,7 +382,7 @@ function cycleFocusedPanel(
   renderModel: WorkbenchRenderModel,
   direction: 1 | -1,
 ): WorkbenchTerminalState {
-  const panels: WorkbenchFocusedPanel[] = ["input", "header", "transcript", "activity"];
+  const panels: WorkbenchFocusedPanel[] = ["input", "header", "conversation", "workspace", "transcript", "activity"];
   const index = panels.indexOf(state.focusedPanel);
   const focusedPanel = panels[(index + direction + panels.length) % panels.length] ?? "input";
   const next = {
@@ -314,8 +397,14 @@ function cycleFocusedPanel(
   if (focusedPanel === "activity") {
     return setActivityCursor(next, renderModel, next.activityCursor.line, next.activityCursor.column, false);
   }
+  if (focusedPanel === "conversation") {
+    return setConversationCursor(next, renderModel, next.conversationCursor.line, next.conversationCursor.column, false);
+  }
   if (focusedPanel === "header") {
     return setHeaderCursor(next, renderModel, next.headerCursor.line, next.headerCursor.column, false);
+  }
+  if (focusedPanel === "workspace") {
+    return setWorkspaceCursor(next, renderModel, next.workspaceCursor.line, next.workspaceCursor.column, false);
   }
   return next;
 }
@@ -412,6 +501,15 @@ function moveActivityCursor(
   return setActivityCursor(state, renderModel, state.activityCursor.line + delta, state.activityCursor.column, selecting);
 }
 
+function moveConversationCursor(
+  state: WorkbenchTerminalState,
+  renderModel: WorkbenchRenderModel,
+  delta: number,
+  selecting: boolean,
+) {
+  return setConversationCursor(state, renderModel, state.conversationCursor.line + delta, state.conversationCursor.column, selecting);
+}
+
 function moveHeaderCursor(
   state: WorkbenchTerminalState,
   renderModel: WorkbenchRenderModel,
@@ -419,6 +517,34 @@ function moveHeaderCursor(
   selecting: boolean,
 ) {
   return setHeaderCursor(state, renderModel, state.headerCursor.line + delta, state.headerCursor.column, selecting);
+}
+
+function moveWorkspaceCursor(
+  state: WorkbenchTerminalState,
+  renderModel: WorkbenchRenderModel,
+  delta: number,
+  selecting: boolean,
+) {
+  return setWorkspaceCursor(state, renderModel, state.workspaceCursor.line + delta, state.workspaceCursor.column, selecting);
+}
+
+function setConversationCursor(
+  state: WorkbenchTerminalState,
+  renderModel: WorkbenchRenderModel,
+  next: number,
+  columnOrSelecting: number | boolean,
+  selecting: boolean,
+): WorkbenchTerminalState {
+  const nextColumn = typeof columnOrSelecting === "number" ? columnOrSelecting : state.conversationCursor.column;
+  const shouldSelect = typeof columnOrSelecting === "number" ? selecting : columnOrSelecting;
+  const current = state.conversationCursor;
+  const clamped = clamp(next, 0, Math.max(0, renderModel.conversation.lines.length - 1));
+  const cursor = normalizePanelPosition({ line: clamped, column: nextColumn }, clamped, (line) => conversationLineText(renderModel, line));
+  return {
+    ...state,
+    conversationCursor: cursor,
+    conversationSelectionAnchor: shouldSelect ? state.conversationSelectionAnchor ?? current : null,
+  };
 }
 
 function setHeaderCursor(
@@ -440,6 +566,40 @@ function setHeaderCursor(
   };
 }
 
+function setWorkspaceCursor(
+  state: WorkbenchTerminalState,
+  renderModel: WorkbenchRenderModel,
+  next: number,
+  columnOrSelecting: number | boolean,
+  selecting: boolean,
+): WorkbenchTerminalState {
+  const nextColumn = typeof columnOrSelecting === "number" ? columnOrSelecting : state.workspaceCursor.column;
+  const shouldSelect = typeof columnOrSelecting === "number" ? selecting : columnOrSelecting;
+  const current = state.workspaceCursor;
+  const clamped = clamp(next, 0, Math.max(0, renderModel.workspace.lines.length - 1));
+  const cursor = normalizePanelPosition({ line: clamped, column: nextColumn }, clamped, (line) => workspaceLineText(renderModel, line));
+  return {
+    ...state,
+    workspaceCursor: cursor,
+    workspaceSelectionAnchor: shouldSelect ? state.workspaceSelectionAnchor ?? current : null,
+  };
+}
+
+function moveConversationColumn(
+  state: WorkbenchTerminalState,
+  renderModel: WorkbenchRenderModel,
+  delta: -1 | 1,
+  selecting: boolean,
+) {
+  const cursor = movePanelColumn(
+    state.conversationCursor,
+    delta,
+    Math.max(0, renderModel.conversation.lines.length - 1),
+    (line) => conversationLineText(renderModel, line),
+  );
+  return setConversationCursor(state, renderModel, cursor.line, cursor.column, selecting);
+}
+
 function moveHeaderColumn(
   state: WorkbenchTerminalState,
   renderModel: WorkbenchRenderModel,
@@ -453,6 +613,21 @@ function moveHeaderColumn(
     (line) => headerLineText(renderModel, line),
   );
   return setHeaderCursor(state, renderModel, cursor.line, cursor.column, selecting);
+}
+
+function moveWorkspaceColumn(
+  state: WorkbenchTerminalState,
+  renderModel: WorkbenchRenderModel,
+  delta: -1 | 1,
+  selecting: boolean,
+) {
+  const cursor = movePanelColumn(
+    state.workspaceCursor,
+    delta,
+    Math.max(0, renderModel.workspace.lines.length - 1),
+    (line) => workspaceLineText(renderModel, line),
+  );
+  return setWorkspaceCursor(state, renderModel, cursor.line, cursor.column, selecting);
 }
 
 function setActivityCursor(
@@ -515,6 +690,19 @@ function selectActivityAll(
   };
 }
 
+function selectConversationAll(
+  state: WorkbenchTerminalState,
+  renderModel: WorkbenchRenderModel,
+): WorkbenchTerminalState {
+  if (renderModel.conversation.lines.length === 0) return state;
+  const line = renderModel.conversation.lines.length - 1;
+  return {
+    ...state,
+    conversationSelectionAnchor: { column: 0, line: 0 },
+    conversationCursor: { column: conversationLineText(renderModel, line).length, line },
+  };
+}
+
 function selectHeaderAll(
   state: WorkbenchTerminalState,
   renderModel: WorkbenchRenderModel,
@@ -525,6 +713,19 @@ function selectHeaderAll(
     ...state,
     headerSelectionAnchor: { column: 0, line: 0 },
     headerCursor: { column: headerLineText(renderModel, line).length, line },
+  };
+}
+
+function selectWorkspaceAll(
+  state: WorkbenchTerminalState,
+  renderModel: WorkbenchRenderModel,
+): WorkbenchTerminalState {
+  if (renderModel.workspace.lines.length === 0) return state;
+  const line = renderModel.workspace.lines.length - 1;
+  return {
+    ...state,
+    workspaceSelectionAnchor: { column: 0, line: 0 },
+    workspaceCursor: { column: workspaceLineText(renderModel, line).length, line },
   };
 }
 
@@ -571,6 +772,14 @@ function handleMouseEvent(
         target.column,
         false,
       ));
+    case "conversation":
+      return stateResult(setConversationCursor(
+        { ...state, focusedPanel: "conversation", conversationSelectionAnchor: null },
+        renderModel,
+        target.line,
+        target.column,
+        false,
+      ));
     case "input":
       return stateResult({
         ...state,
@@ -587,6 +796,14 @@ function handleMouseEvent(
         target.column,
         false,
       ));
+    case "workspace":
+      return stateResult(setWorkspaceCursor(
+        { ...state, focusedPanel: "workspace", workspaceSelectionAnchor: null },
+        renderModel,
+        target.line,
+        target.column,
+        false,
+      ));
   }
 }
 
@@ -597,12 +814,16 @@ function handleRightClick(
   switch (target.panel) {
     case "activity":
       return rightClickCopyIfSelected({ ...state, focusedPanel: "activity" }, "activity");
+    case "conversation":
+      return rightClickCopyIfSelected({ ...state, focusedPanel: "conversation" }, "conversation");
     case "header":
       return rightClickCopyIfSelected({ ...state, focusedPanel: "header" }, "header");
     case "input":
       return stateResult({ ...state, cursor: target.inputCursor, focusedPanel: "input" }, { type: "paste" });
     case "transcript":
       return rightClickCopyIfSelected({ ...state, focusedPanel: "transcript" }, "page");
+    case "workspace":
+      return rightClickCopyIfSelected({ ...state, focusedPanel: "workspace" }, "workspace");
   }
 }
 
@@ -613,10 +834,16 @@ function rightClickCopyIfSelected(
   if (state.focusedPanel === "activity" && selectedPanelRange(state.activitySelectionAnchor, state.activityCursor)) {
     return stateResult(state, { type: "copy", target });
   }
+  if (state.focusedPanel === "conversation" && selectedPanelRange(state.conversationSelectionAnchor, state.conversationCursor)) {
+    return stateResult(state, { type: "copy", target });
+  }
   if (state.focusedPanel === "header" && selectedPanelRange(state.headerSelectionAnchor, state.headerCursor)) {
     return stateResult(state, { type: "copy", target });
   }
   if (state.focusedPanel === "transcript" && selectedPanelRange(state.transcriptSelectionAnchor, state.transcriptCursor)) {
+    return stateResult(state, { type: "copy", target });
+  }
+  if (state.focusedPanel === "workspace" && selectedPanelRange(state.workspaceSelectionAnchor, state.workspaceCursor)) {
     return stateResult(state, { type: "copy", target });
   }
   return stateResult(state);
@@ -627,6 +854,9 @@ function endMouseDrag(state: WorkbenchTerminalState): WorkbenchTerminalState {
   if (samePositionOrNull(next.activitySelectionAnchor, next.activityCursor)) {
     next.activitySelectionAnchor = null;
   }
+  if (samePositionOrNull(next.conversationSelectionAnchor, next.conversationCursor)) {
+    next.conversationSelectionAnchor = null;
+  }
   if (next.selectionAnchor === next.cursor) {
     next.selectionAnchor = null;
   }
@@ -636,14 +866,19 @@ function endMouseDrag(state: WorkbenchTerminalState): WorkbenchTerminalState {
   if (samePositionOrNull(next.transcriptSelectionAnchor, next.transcriptCursor)) {
     next.transcriptSelectionAnchor = null;
   }
+  if (samePositionOrNull(next.workspaceSelectionAnchor, next.workspaceCursor)) {
+    next.workspaceSelectionAnchor = null;
+  }
   return next;
 }
 
 type MouseTarget =
   | { panel: "activity"; column: number; line: number }
+  | { panel: "conversation"; column: number; line: number }
   | { panel: "header"; column: number; line: number }
   | { inputCursor: number; panel: "input" }
-  | { panel: "transcript"; column: number; line: number };
+  | { panel: "transcript"; column: number; line: number }
+  | { panel: "workspace"; column: number; line: number };
 
 function mouseTarget(event: WorkbenchTerminalMouseEvent, renderModel: WorkbenchRenderModel): MouseTarget | null {
   const layout = mouseLayout(renderModel);
@@ -655,6 +890,22 @@ function mouseTarget(event: WorkbenchTerminalMouseEvent, renderModel: WorkbenchR
       panel: "header",
       line,
       column: textIndexAtMouseColumn(headerLineText(renderModel, line), column - layout.header.textLeft),
+    };
+  }
+  if (renderModel.layout === "wide" && column <= layout.side.right && row >= layout.side.top && row <= layout.side.bottom) {
+    if (row <= layout.conversation.bottom) {
+      const line = clamp(row - layout.conversation.textTop, 0, Math.max(0, renderModel.conversation.lines.length - 1));
+      return {
+        panel: "conversation",
+        line,
+        column: textIndexAtMouseColumn(conversationLineText(renderModel, line), column - layout.conversation.textLeft),
+      };
+    }
+    const line = clamp(row - layout.workspace.textTop, 0, Math.max(0, renderModel.workspace.lines.length - 1));
+    return {
+      panel: "workspace",
+      line,
+      column: textIndexAtMouseColumn(workspaceLineText(renderModel, line), column - layout.workspace.textLeft),
     };
   }
   if (row >= layout.transcript.top && row <= layout.transcript.bottom) {
@@ -711,6 +962,14 @@ function mouseTargetForPanel(
         column: textIndexAtMouseColumn(activityLineText(renderModel, line), event.column - layout.activity.textLeft),
       };
     }
+    case "conversation": {
+      const line = clamp(event.row - layout.conversation.textTop, 0, Math.max(0, renderModel.conversation.lines.length - 1));
+      return {
+        panel,
+        line,
+        column: textIndexAtMouseColumn(conversationLineText(renderModel, line), event.column - layout.conversation.textLeft),
+      };
+    }
     case "input": {
       const row = clamp(event.row, layout.input.textTop, layout.input.textBottom);
       const line = renderModel.input.lines[row - layout.input.textTop];
@@ -742,6 +1001,14 @@ function mouseTargetForPanel(
         column: textIndexAtMouseColumn(transcriptLineText(renderModel, line), event.column - layout.transcript.textLeft),
       };
     }
+    case "workspace": {
+      const line = clamp(event.row - layout.workspace.textTop, 0, Math.max(0, renderModel.workspace.lines.length - 1));
+      return {
+        panel,
+        line,
+        column: textIndexAtMouseColumn(workspaceLineText(renderModel, line), event.column - layout.workspace.textLeft),
+      };
+    }
   }
 }
 
@@ -751,12 +1018,18 @@ function mouseLayout(renderModel: WorkbenchRenderModel) {
   const transcriptBottom = transcriptTop + renderModel.transcript.viewportHeight + 1;
   const inputTop = transcriptBottom + 1;
   const inputBottom = inputTop + renderModel.input.height + 2;
+  const sidePanelWidth = renderModel.layout === "wide" ? renderModel.workspacePanelWidth + 1 : 0;
   const transcriptPanelWidth = renderModel.layout === "wide"
-    ? Math.max(1, Math.floor(renderModel.terminalColumns * 0.72))
+    ? Math.max(1, renderModel.terminalColumns - sidePanelWidth - Math.floor(renderModel.terminalColumns * 0.27) - 1)
     : renderModel.terminalColumns;
-  const activityLeft = renderModel.layout === "wide" ? transcriptPanelWidth + 1 : 1;
+  const transcriptLeft = renderModel.layout === "wide" ? sidePanelWidth + 1 : 1;
+  const activityLeft = renderModel.layout === "wide" ? sidePanelWidth + transcriptPanelWidth + 1 : 1;
   const activityTop = renderModel.layout === "wide" ? transcriptTop : transcriptBottom + 1;
   const activityBottom = renderModel.layout === "wide" ? transcriptBottom : activityTop + renderModel.activityHeight - 1;
+  const conversationTop = transcriptTop;
+  const conversationBottom = conversationTop + renderModel.conversationHeight - 1;
+  const workspaceTop = conversationBottom + 1;
+  const workspaceBottom = transcriptBottom;
   return {
     header: {
       bottom: headerHeight,
@@ -770,6 +1043,12 @@ function mouseLayout(renderModel: WorkbenchRenderModel) {
       textLeft: activityLeft + 4,
       top: activityTop,
     },
+    conversation: {
+      bottom: conversationBottom,
+      textLeft: 4,
+      textTop: conversationTop + 2,
+      top: conversationTop,
+    },
     input: {
       bottom: inputBottom,
       textBottom: inputTop + renderModel.input.height + 1,
@@ -779,8 +1058,19 @@ function mouseLayout(renderModel: WorkbenchRenderModel) {
     },
     transcript: {
       bottom: transcriptBottom,
-      textLeft: 3,
+      textLeft: transcriptLeft + 2,
       top: transcriptTop,
+    },
+    side: {
+      bottom: workspaceBottom,
+      right: renderModel.workspacePanelWidth,
+      top: conversationTop,
+    },
+    workspace: {
+      bottom: workspaceBottom,
+      textLeft: 4,
+      textTop: workspaceTop + 2,
+      top: workspaceTop,
     },
   };
 }
@@ -846,6 +1136,14 @@ function activityLineText(renderModel: WorkbenchRenderModel, line: number) {
   return activity ? `${new Date(activity.timestamp).toLocaleTimeString()} ${activity.text}` : "";
 }
 
+function conversationLineText(renderModel: WorkbenchRenderModel, line: number) {
+  return renderModel.conversation.lines[line] ?? "";
+}
+
 function headerLineText(renderModel: WorkbenchRenderModel, line: number) {
   return renderModel.header.lines[line] ?? "";
+}
+
+function workspaceLineText(renderModel: WorkbenchRenderModel, line: number) {
+  return renderModel.workspace.lines[line] ?? "";
 }

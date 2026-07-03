@@ -30,6 +30,17 @@ export interface WorkbenchWorkdirStatus {
   scanTruncated: boolean;
 }
 
+export interface WorkbenchConversationSummary {
+  id: string;
+  latestSnippet: string;
+  messageCount: number;
+  name: string;
+  previousResponseId?: string;
+  status: "fresh" | "continued";
+  titleSnippet: string;
+  updatedAt?: number;
+}
+
 export interface LocalToolApproval extends LocalToolApprovalRequest {
   id: string;
   createdAt: number;
@@ -47,7 +58,7 @@ export interface PendingUpdate {
 }
 
 export type RenderMode = "markdown" | "raw";
-export type WorkbenchCopyTarget = "page" | "transcript" | "activity" | "header";
+export type WorkbenchCopyTarget = "page" | "transcript" | "activity" | "conversation" | "header" | "workspace";
 const maxWorkbenchMessages = 200;
 const maxWorkbenchMessageCharacters = 256_000;
 
@@ -63,6 +74,7 @@ export interface WorkbenchState {
   pendingUpdate: PendingUpdate | null;
   accessMode: WorkdirAccessMode;
   conversationId?: string;
+  conversationSummaries: WorkbenchConversationSummary[];
   conversationPreviousResponseId?: string;
   conversationStatus: "fresh" | "continued" | "unknown";
   currentConversation: string;
@@ -110,6 +122,7 @@ export type WorkbenchAction =
   | { type: "update.pending.clear" }
   | { type: "access.set"; mode: WorkdirAccessMode }
   | { type: "conversation.set"; id?: string; name: string; previousResponseId?: string; status?: "fresh" | "continued" | "unknown" }
+  | { type: "conversations.set"; conversations: WorkbenchConversationSummary[] }
   | { type: "settings.set"; settings: Partial<Pick<WorkbenchState, "runPreset" | "runModel" | "memoryRead" | "memoryWrite" | "memoryTenantSearch" | "localSkillsEnabled" | "workspaceSkillsEnabled" | "renderMode" | "defaultPreset" | "automaticContinuationLimit" | "shellIsolation">> };
 
 export type WorkbenchCommand =
@@ -181,6 +194,7 @@ export function createInitialWorkbenchState(options: {
     pendingUpdate: null,
     accessMode,
     conversationId: undefined,
+    conversationSummaries: [],
     conversationPreviousResponseId: undefined,
     conversationStatus: "unknown",
     currentConversation: options.conversation || "default",
@@ -386,6 +400,11 @@ export function workbenchReducer(state: WorkbenchState, action: WorkbenchAction)
         conversationStatus: action.status ?? (action.previousResponseId ? "continued" : "fresh"),
         automaticContinuationUnlocked: false,
         activities: [...state.activities, newActivity("info", conversationActivityText(action))].slice(-20),
+      };
+    case "conversations.set":
+      return {
+        ...state,
+        conversationSummaries: action.conversations,
       };
     case "settings.set":
       return {

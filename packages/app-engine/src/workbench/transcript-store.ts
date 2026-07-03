@@ -7,10 +7,18 @@ export interface WorkbenchTranscriptStore {
   appendMessageDelta(conversationId: string, messageId: string, delta: string): Promise<void>;
   clearConversation(conversationId: string): Promise<void>;
   exportConversation(conversationId: string): Promise<string>;
+  getConversationSummary(conversationId: string): Promise<WorkbenchTranscriptSummary>;
   loadAfterMessages(conversationId: string, afterSeq: number, limit: number): Promise<WorkbenchMessage[]>;
   loadBeforeMessages(conversationId: string, beforeSeq: number, limit: number): Promise<WorkbenchMessage[]>;
   loadRecentMessages(conversationId: string, limit: number): Promise<WorkbenchMessage[]>;
   dispose?(): void;
+}
+
+export interface WorkbenchTranscriptSummary {
+  latestSnippet: string;
+  messageCount: number;
+  titleSnippet: string;
+  updatedAt?: number;
 }
 
 export function createMemoryTranscriptStore(): WorkbenchTranscriptStore {
@@ -37,6 +45,9 @@ export function createMemoryTranscriptStore(): WorkbenchTranscriptStore {
     },
     async exportConversation(conversationId) {
       return formatTranscript(messagesFor(conversationId));
+    },
+    async getConversationSummary(conversationId) {
+      return summarizeMessages(messagesFor(conversationId));
     },
     async loadAfterMessages(conversationId, afterSeq, limit) {
       return messagesFor(conversationId)
@@ -87,6 +98,9 @@ export function createFileTranscriptStore(root: string): WorkbenchTranscriptStor
     async exportConversation(conversationId) {
       return formatTranscript(await loadMessages(root, conversationId));
     },
+    async getConversationSummary(conversationId) {
+      return summarizeMessages(await loadMessages(root, conversationId));
+    },
     async loadAfterMessages(conversationId, afterSeq, limit) {
       return (await loadMessages(root, conversationId))
         .filter((message) => (message.transcriptSeq ?? 0) > afterSeq)
@@ -107,8 +121,31 @@ export function shouldPersistTranscriptMessage(message: WorkbenchMessage) {
   return message.role === "user" || message.role === "assistant" || message.kind === "tool";
 }
 
+export function summarizeMessages(
+  messages: readonly WorkbenchMessage[],
+  options: { updatedAt?: number } = {},
+): WorkbenchTranscriptSummary {
+  const meaningful = messages.filter((message) => message.role === "user" || message.role === "assistant");
+  const firstUser = meaningful.find((message) => message.role === "user" && snippetText(message.text));
+  const latest = [...meaningful].reverse().find((message) => snippetText(message.text));
+  return {
+    latestSnippet: snippetText(latest?.text) || "",
+    messageCount: messages.length,
+    titleSnippet: snippetText(firstUser?.text) || snippetText(latest?.text) || "",
+    updatedAt: options.updatedAt,
+  };
+}
+
 function cloneMessage(message: WorkbenchMessage): WorkbenchMessage {
   return { ...message };
+}
+
+function snippetText(text?: string) {
+  const normalized = (text ?? "")
+    .replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return normalized.length > 180 ? `${normalized.slice(0, 177)}...` : normalized;
 }
 
 async function loadMessages(root: string, conversationId: string): Promise<WorkbenchMessage[]> {

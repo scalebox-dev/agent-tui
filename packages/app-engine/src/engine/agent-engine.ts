@@ -4,12 +4,14 @@ import {
   createWorkbenchCommandController,
   type WorkbenchCommandController,
 } from "../workbench/command-controller.js";
+import type { ConversationSelection } from "../workbench/conversation-controller.js";
 import {
   createWorkbenchSession,
   type WorkbenchSession,
 } from "../workbench/session.js";
 import type { WorkbenchLifecycleEffect } from "../workbench/lifecycle-controller.js";
-import type { WorkbenchAction, WorkbenchState } from "../workbench/state.js";
+import type { WorkbenchAction, WorkbenchConversationSummary, WorkbenchState } from "../workbench/state.js";
+import type { WorkbenchTranscriptStore } from "../workbench/transcript-store.js";
 import type { AgentEngineServices } from "./services.js";
 
 export interface AgentEngineApp {
@@ -20,6 +22,7 @@ export interface AgentEngineApp {
   dispatch(action: WorkbenchAction): void;
   maybeCheckForUpdate(options?: AgentEngineLifecycleOptions): Promise<void>;
   loadInitialConversation(options?: AgentEngineLifecycleOptions): Promise<void>;
+  refreshConversationSummaries(options?: AgentEngineLifecycleOptions): Promise<void>;
   loadOlderTranscript(limit?: number): Promise<number>;
   loadNewerTranscript(limit?: number): Promise<number>;
   loadInitialSettings(options?: AgentEngineLifecycleOptions): Promise<void>;
@@ -75,10 +78,12 @@ export function createAgentEngine(options: AgentEngineAppOptions): AgentEngineAp
     const submission = session.engine.submit(input);
     if (submission.kind === "command") {
       await commands.run(submission.command);
+      await refreshConversationSummaries();
       return;
     }
     if (submission.kind === "prompt") {
       await session.turn.startPrompt(submission.prompt);
+      await refreshConversationSummaries();
     }
   }
 
@@ -114,12 +119,29 @@ export function createAgentEngine(options: AgentEngineAppOptions): AgentEngineAp
           text: `Continuing conversation "${conversation.name}" from ${conversation.previousResponseId}. Use /new to start without prior context.`,
         });
       }
+      await refreshConversationSummaries(lifecycleOptions);
     } catch (error) {
       if (lifecycleOptions.isMounted && !lifecycleOptions.isMounted()) return;
       session.engine.dispatch({
         type: "activity.add",
         level: "warning",
         text: `Conversation state unavailable: ${userFacingError(error)}`,
+      });
+    }
+  }
+
+  async function refreshConversationSummaries(lifecycleOptions: AgentEngineLifecycleOptions = {}) {
+    try {
+      const conversations = await session.conversation.listConversationSelections(options.baseOptions.profile);
+      const summaries = await buildConversationSummaries(conversations, options.services?.transcriptStore);
+      if (lifecycleOptions.isMounted && !lifecycleOptions.isMounted()) return;
+      session.engine.dispatch({ type: "conversations.set", conversations: summaries });
+    } catch (error) {
+      if (lifecycleOptions.isMounted && !lifecycleOptions.isMounted()) return;
+      session.engine.dispatch({
+        type: "activity.add",
+        level: "warning",
+        text: `Conversation list unavailable: ${userFacingError(error)}`,
       });
     }
   }
@@ -263,6 +285,7 @@ export function createAgentEngine(options: AgentEngineAppOptions): AgentEngineAp
     dispatch: session.engine.dispatch,
     maybeCheckForUpdate,
     loadInitialConversation,
+    refreshConversationSummaries,
     loadOlderTranscript,
     loadNewerTranscript,
     loadInitialSettings,
@@ -292,6 +315,27 @@ function lastStoredTranscriptSeq(messages: WorkbenchState["messages"]) {
     if (typeof message.transcriptSeq === "number") return message.transcriptSeq;
   }
   return null;
+}
+
+async function buildConversationSummaries(
+  conversations: readonly ConversationSelection[],
+  transcriptStore?: WorkbenchTranscriptStore,
+): Promise<WorkbenchConversationSummary[]> {
+  return Promise.all(conversations.map(async (conversation) => {
+    const transcript = transcriptStore
+      ? await transcriptStore.getConversationSummary(conversation.id)
+      : { latestSnippet: "", messageCount: 0, titleSnippet: "" };
+    return {
+      id: conversation.id,
+      latestSnippet: transcript.latestSnippet,
+      messageCount: transcript.messageCount,
+      name: conversation.name,
+      previousResponseId: conversation.previousResponseId,
+      status: conversation.status,
+      titleSnippet: transcript.titleSnippet,
+      updatedAt: transcript.updatedAt ?? conversation.updatedAt,
+    };
+  }));
 }
 
 function userFacingError(error: unknown) {

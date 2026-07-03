@@ -49,6 +49,7 @@ import {
   parsePendingApprovalCommand,
   parseWorkbenchCommand,
   sessionState,
+  summarizeMessages,
   UnknownPresetError,
   updateNoticeEffects,
   workbenchReducer,
@@ -1754,6 +1755,14 @@ test("workbench render model extracts panel-scoped copy text", () => {
   let state = createInitialWorkbenchState({});
   state = workbenchReducer(state, { type: "message.add", role: "assistant", text: "First transcript line\nSecond transcript line" });
   state = workbenchReducer(state, { type: "activity.add", level: "success", text: "Copied safely" });
+  state = workbenchReducer(state, { type: "conversation.set", id: "conv_current", name: "default", status: "fresh" });
+  state = workbenchReducer(state, {
+    type: "conversations.set",
+    conversations: [
+      { id: "conv_current", latestSnippet: "Current task", messageCount: 2, name: "default", status: "fresh", titleSnippet: "Current task" },
+      { id: "conv_other", latestSnippet: "Fix transcript OOM", messageCount: 7, name: "oom", status: "continued", titleSnippet: "Fix transcript OOM" },
+    ],
+  });
   const model = buildWorkbenchRenderModel({
     draft: "",
     profileName: "default",
@@ -1769,12 +1778,21 @@ test("workbench render model extracts panel-scoped copy text", () => {
   assert.doesNotMatch(copyTextFromRenderModel(model, "transcript"), /Copied safely/);
   assert.match(copyTextFromRenderModel(model, "activity"), /Copied safely/);
   assert.doesNotMatch(copyTextFromRenderModel(model, "activity"), /Second transcript line/);
+  assert.match(copyTextFromRenderModel(model, "conversation"), /Fix transcript OOM/);
 });
 
 test("workbench terminal controller routes focused panel operations", () => {
   const controller = createWorkbenchTerminalController();
   let workbenchState = createInitialWorkbenchState({});
   workbenchState = workbenchReducer(workbenchState, { type: "message.add", role: "assistant", text: "First transcript line\nSecond transcript line" });
+  workbenchState = workbenchReducer(workbenchState, { type: "conversation.set", id: "conv_current", name: "default", status: "fresh" });
+  workbenchState = workbenchReducer(workbenchState, {
+    type: "conversations.set",
+    conversations: [
+      { id: "conv_current", latestSnippet: "Current task", messageCount: 2, name: "default", status: "fresh", titleSnippet: "Current task" },
+      { id: "conv_other", latestSnippet: "Fix transcript OOM", messageCount: 7, name: "oom", status: "continued", titleSnippet: "Fix transcript OOM" },
+    ],
+  });
   let terminalState = initialWorkbenchTerminalState();
   const model = () => buildWorkbenchRenderModel({
     cursor: terminalState.cursor,
@@ -1803,6 +1821,14 @@ test("workbench terminal controller routes focused panel operations", () => {
     terminalState = result.state;
     return result;
   };
+  const inputTextRow = () => {
+    const currentModel = model();
+    const headerHeight = 6;
+    const transcriptTop = headerHeight + 1;
+    const transcriptBottom = transcriptTop + currentModel.transcript.viewportHeight + 1;
+    const inputTop = transcriptBottom + 1;
+    return inputTop + 2;
+  };
 
   applyMouse({ button: "left", column: 5, kind: "press", row: 2 });
   assert.equal(terminalState.focusedPanel, "header");
@@ -1823,12 +1849,17 @@ test("workbench terminal controller routes focused panel operations", () => {
   assert.deepEqual(inactiveRightClickCopyHeader.effects, []);
 
   applyMouse({ button: "left", column: 5, kind: "press", row: 7 });
+  assert.equal(terminalState.focusedPanel, "conversation");
+  applyMouse({ button: "left", column: 5, kind: "press", row: 13 });
+  assert.equal(terminalState.focusedPanel, "workspace");
+
+  applyMouse({ button: "left", column: 32, kind: "press", row: 7 });
   assert.equal(terminalState.focusedPanel, "transcript");
   assert.equal(terminalState.mouseDragPanel, null);
   assert.deepEqual(terminalState.transcriptCursor, { column: 1, line: 0 });
-  applyMouse({ button: "left", column: 9, kind: "motion", row: 7 });
+  applyMouse({ button: "left", column: 36, kind: "motion", row: 7 });
   assert.equal(terminalState.transcriptSelectionAnchor, null);
-  applyMouse({ button: "left", column: 9, kind: "release", row: 7 });
+  applyMouse({ button: "left", column: 36, kind: "release", row: 7 });
   assert.equal(terminalState.mouseDragPanel, null);
   assert.equal(terminalState.transcriptSelectionAnchor, null);
 
@@ -1837,22 +1868,29 @@ test("workbench terminal controller routes focused panel operations", () => {
   assert.ok(terminalState.transcriptOffset >= beforeWheel);
 
   terminalState = { ...terminalState, cursor: 0, draft: "abc", selectionAnchor: null };
-  applyMouse({ button: "left", column: 5, kind: "press", row: 22 });
+  applyMouse({ button: "left", column: 5, kind: "press", row: inputTextRow() });
   assert.equal(terminalState.focusedPanel, "input");
   assert.equal(terminalState.cursor, 1);
   assert.equal(terminalState.mouseDragPanel, null);
-  applyMouse({ button: "left", column: 7, kind: "motion", row: 22 });
+  applyMouse({ button: "left", column: 7, kind: "motion", row: inputTextRow() });
   assert.equal(terminalState.cursor, 1);
   assert.equal(terminalState.selectionAnchor, null);
-  applyMouse({ button: "left", column: 7, kind: "release", row: 22 });
+  applyMouse({ button: "left", column: 7, kind: "release", row: inputTextRow() });
   assert.equal(terminalState.mouseDragPanel, null);
   assert.equal(terminalState.selectionAnchor, null);
-  const rightClickPaste = applyMouse({ button: "right", column: 7, kind: "press", row: 22 });
+  const rightClickPaste = applyMouse({ button: "right", column: 7, kind: "press", row: inputTextRow() });
   assert.deepEqual(rightClickPaste.effects, [{ type: "paste" }]);
   terminalState = { ...terminalState, cursor: 0, draft: "", selectionAnchor: null };
 
   apply("", { tab: true });
   assert.equal(terminalState.focusedPanel, "header");
+  apply("", { tab: true });
+  assert.equal(terminalState.focusedPanel, "conversation");
+  apply("", { downArrow: true });
+  assert.deepEqual(apply("", { return: true }).effects, [{ type: "switch_conversation", name: "oom" }]);
+  apply("", { upArrow: true });
+  apply("", { tab: true });
+  assert.equal(terminalState.focusedPanel, "workspace");
   apply("", { tab: true });
   assert.equal(terminalState.focusedPanel, "transcript");
 
@@ -1885,6 +1923,10 @@ test("workbench terminal controller routes focused panel operations", () => {
   assert.deepEqual(pasted.effects, [{ type: "paste" }]);
   terminalState = beforePasteShortcut;
 
+  apply("", { tab: true, shift: true });
+  assert.equal(terminalState.focusedPanel, "workspace");
+  apply("", { tab: true, shift: true });
+  assert.equal(terminalState.focusedPanel, "conversation");
   apply("", { tab: true, shift: true });
   assert.equal(terminalState.focusedPanel, "header");
   apply("", { tab: true, shift: true });
@@ -2503,18 +2545,34 @@ test("workbench conversation controller manages handles and transcript export", 
   });
 
   assert.deepEqual(await controller.startNewConversation(undefined, "dev"), {
+    createdAt: 1782131696,
     id: "conv_new",
     name: "thread-20260622-123456",
+    profile: "dev",
     status: "fresh",
+    updatedAt: 1782131696,
     message: 'Started fresh conversation "thread-20260622-123456" (conv_new).',
   });
   assert.deepEqual(await controller.switchConversation("release", "dev"), {
+    createdAt: 4102444700,
     id: "conv_release",
     name: "release",
+    profile: "dev",
     previousResponseId: "resp_test",
     status: "continued",
+    updatedAt: 4102444800,
     message: 'Switched to conversation "release" (conv_release). Continuing from resp_test.',
   });
+  assert.deepEqual(await controller.listConversationSelections("dev"), [{
+    createdAt: 4102444700,
+    id: "conv_release",
+    name: "release",
+    profile: "dev",
+    previousResponseId: "resp_test",
+    status: "continued",
+    updatedAt: 4102444800,
+    message: "",
+  }]);
   assert.match(await controller.listConversations("dev"), /release\tdev\t2100-01-01T00:00:00\.000Z\tconv_release response=resp_test/);
 
   const exported = await controller.exportTranscript({
@@ -2527,6 +2585,7 @@ test("workbench conversation controller manages handles and transcript export", 
     ["delete", "thread-20260622-123456", "dev"],
     ["fresh", "thread-20260622-123456", "dev"],
     ["ensure", "release", "dev"],
+    ["list", "dev"],
     ["list", "dev"],
   ]);
 });
@@ -2914,6 +2973,21 @@ test("workbench transcript store persists recent messages and deltas", async () 
   assert.deepEqual(await store.loadAfterMessages("conv_1", 1, 1), [
     { id: "assistant-1", role: "assistant", text: "Hi", transcriptSeq: 2 },
   ]);
+  assert.deepEqual(await store.getConversationSummary("conv_1"), {
+    latestSnippet: "Hi",
+    messageCount: 3,
+    titleSnippet: "Hello",
+    updatedAt: undefined,
+  });
+  assert.deepEqual(summarizeMessages([
+    { id: "u", role: "user", text: "  Multi\n\nline\trequest  " },
+    { id: "a", role: "assistant", text: "Done" },
+  ]), {
+    latestSnippet: "Done",
+    messageCount: 2,
+    titleSnippet: "Multi line request",
+    updatedAt: undefined,
+  });
   assert.equal(await store.exportConversation("conv_1"), [
     "You:",
     "Hello",

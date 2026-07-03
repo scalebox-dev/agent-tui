@@ -1,4 +1,4 @@
-import type { RenderMode, WorkbenchState } from "../workbench/state.js";
+import { formatBytes, type RenderMode, type WorkbenchState } from "../workbench/state.js";
 import {
   buildTranscriptViewModel,
   elapsedDots,
@@ -14,6 +14,14 @@ export interface WorkbenchRendererViewport {
 
 export interface WorkbenchRenderModel {
   activityHeight: number;
+  conversation: {
+    items: {
+      id: string;
+      name: string;
+    }[];
+    lines: string[];
+  };
+  conversationHeight: number;
   footerText: string;
   header: {
     accessMode: string;
@@ -46,9 +54,19 @@ export interface WorkbenchRenderModel {
   terminalColumns: number;
   terminalRows: number;
   transcript: TranscriptViewModel;
+  transcriptStatus: {
+    color: "cyan" | "green" | "yellow";
+    label: string;
+    mode: "history" | "live";
+  };
   transcriptWidth: number;
   viewportHeight: number;
   visibleActivities: WorkbenchState["activities"];
+  workspace: {
+    lines: string[];
+  };
+  workspaceHeight: number;
+  workspacePanelWidth: number;
 }
 
 export interface WorkbenchInputLine {
@@ -94,10 +112,19 @@ export function buildWorkbenchRenderModel(input: BuildWorkbenchRenderModelInput)
   const reservedRows = 10 + inputView.height;
   const viewportHeight = Math.max(3, terminalRows - reservedRows);
   const activityHeight = layout === "wide" ? viewportHeight : Math.min(4, Math.max(2, Math.floor(viewportHeight / 3)));
+  const workspacePanelWidth = layout === "wide"
+    ? clamp(Math.floor(terminalColumns * 0.22), 24, 34)
+    : terminalColumns;
+  const conversationHeight = layout === "wide"
+    ? clamp(Math.floor((viewportHeight - 1) / 2), 4, Math.max(4, viewportHeight - 5))
+    : Math.min(4, Math.max(3, Math.floor(viewportHeight / 4)));
+  const workspaceHeight = layout === "wide"
+    ? Math.max(4, viewportHeight - conversationHeight - 1)
+    : Math.min(4, Math.max(3, Math.floor(viewportHeight / 4)));
   const transcriptOuterHeight = layout === "wide" ? viewportHeight : Math.max(3, viewportHeight - activityHeight);
-  const transcriptHeight = Math.max(1, transcriptOuterHeight - 2);
+  const transcriptHeight = Math.max(1, transcriptOuterHeight - 3);
   const transcriptWidth = layout === "wide"
-    ? Math.max(28, Math.floor(terminalColumns * 0.72) - 4)
+    ? Math.max(28, terminalColumns - workspacePanelWidth - Math.floor(terminalColumns * 0.27) - 8)
     : Math.max(20, terminalColumns - 4);
   const transcript = buildTranscriptViewModel({
     activeAssistantMessageId: input.state.activeAssistantMessageId,
@@ -130,15 +157,41 @@ export function buildWorkbenchRenderModel(input: BuildWorkbenchRenderModelInput)
     `conversation_state=${header.conversationStatus}${header.conversationPreviousResponseId ? ` previous=${header.conversationPreviousResponseId}` : ""}`,
     `workdir=${header.workdir} access=${header.accessMode} local_tools=${header.contextEnabled ? "on" : "off"} render=${header.renderMode} pending=${header.pendingLocalLabel}`,
   ];
+  const conversationItems = input.state.conversationSummaries.slice(0, 8).map((conversation) => ({
+    id: conversation.id,
+    name: conversation.name,
+  }));
+  const conversationLines = conversationPanelLines(input.state, header);
+  const workspaceLines = workspacePanelLines(input.state, header);
+  const transcriptStatus = transcript.offset > 0
+    ? {
+      color: "yellow" as const,
+      label: `History · ${transcript.offset} rows from live`,
+      mode: "history" as const,
+    }
+    : input.state.messages.some((message) => typeof message.transcriptSeq === "number")
+      ? {
+        color: "green" as const,
+        label: "Live · local history",
+        mode: "live" as const,
+      }
+      : {
+        color: "cyan" as const,
+        label: "Live",
+        mode: "live" as const,
+      };
 
   return {
     activityHeight,
+    conversation: { items: conversationItems, lines: conversationLines },
+    conversationHeight,
     footerText: [
       "PgUp/PgDn page",
       "Shift+↑/↓ row",
       "End live",
       "Alt+C copy",
       "Alt+V paste",
+      transcriptStatus.mode === "history" ? "End back to live" : "PgUp history",
       "/copy page",
       "/export save",
       "/transcript preview",
@@ -163,10 +216,68 @@ export function buildWorkbenchRenderModel(input: BuildWorkbenchRenderModelInput)
     terminalColumns,
     terminalRows,
     transcript,
+    transcriptStatus,
     transcriptWidth,
     viewportHeight,
     visibleActivities: input.state.activities.slice(-Math.max(1, activityHeight - 2)),
+    workspace: { lines: workspaceLines },
+    workspaceHeight,
+    workspacePanelWidth,
   };
+}
+
+function conversationPanelLines(
+  state: WorkbenchState,
+  header: {
+    conversation: string;
+    conversationId: string;
+    conversationPreviousResponseId: string;
+    conversationStatus: "fresh" | "continued" | "unknown";
+  },
+) {
+  if (state.conversationSummaries.length > 0) {
+    return state.conversationSummaries.slice(0, 8).map((conversation) => {
+      const current = conversation.id === state.conversationId || conversation.name === state.currentConversation;
+      const snippet = conversation.latestSnippet || conversation.titleSnippet || "New conversation";
+      const count = conversation.messageCount > 0 ? ` · ${conversation.messageCount}` : "";
+      return `${current ? "*" : " "} ${shortId(conversation.id)} ${snippet}${count}`;
+    });
+  }
+  return [
+    `name=${header.conversation}`,
+    `id=${header.conversationId}`,
+    `status=${header.conversationStatus}`,
+    `previous=${header.conversationPreviousResponseId || "none"}`,
+    `messages=${state.messages.length}`,
+    `history=${state.messages.some((message) => typeof message.transcriptSeq === "number") ? "local" : "live"}`,
+  ];
+}
+
+function shortId(id: string) {
+  if (id.length <= 12) return id;
+  return `${id.slice(0, 9)}...`;
+}
+
+function workspacePanelLines(
+  state: WorkbenchState,
+  header: {
+    accessMode: string;
+    contextEnabled: boolean;
+    pendingLocalLabel: string;
+    renderMode: RenderMode;
+    workdir: string;
+  },
+) {
+  const workdir = state.workdir;
+  return [
+    workdir ? `root=${workdir.root}` : `workdir=${header.workdir}`,
+    workdir ? `files=${workdir.fileCount} size=${formatBytes(workdir.totalBytes)}` : "files=loading",
+    workdir ? `truncated=${workdir.scanTruncated ? "yes" : "no"}` : "truncated=unknown",
+    `access=${header.accessMode}`,
+    `local_tools=${header.contextEnabled ? "on" : "off"}`,
+    `pending=${header.pendingLocalLabel}`,
+    `render=${header.renderMode}`,
+  ];
 }
 
 export function pendingLocalLabel(state: WorkbenchState) {

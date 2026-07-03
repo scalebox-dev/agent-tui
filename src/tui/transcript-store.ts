@@ -7,6 +7,7 @@ import {
 import {
   createFileTranscriptStore,
   formatTranscript,
+  summarizeMessages,
   type WorkbenchMessage,
   type WorkbenchTranscriptStore,
 } from "@agent-api/app-engine/workbench";
@@ -86,6 +87,11 @@ export function createSQLiteTranscriptStore(file: string): WorkbenchTranscriptSt
     WHERE conversation_id = ?
     ORDER BY seq ASC
   `);
+  const conversationUpdatedAt = db.prepare(`
+    SELECT COUNT(*) AS count, MAX(updated_at) AS updated_at
+    FROM transcript_messages
+    WHERE conversation_id = ?
+  `);
   const deleteConversation = db.prepare("DELETE FROM transcript_messages WHERE conversation_id = ?");
 
   return {
@@ -112,6 +118,12 @@ export function createSQLiteTranscriptStore(file: string): WorkbenchTranscriptSt
     },
     async exportConversation(conversationId) {
       return formatTranscript(rowsToMessages(allMessages.all(conversationId)));
+    },
+    async getConversationSummary(conversationId) {
+      const stats = conversationUpdatedAt.get(conversationId) as Record<string, unknown> | undefined;
+      return summarizeMessages(rowsToMessages(allMessages.all(conversationId)), {
+        updatedAt: typeof stats?.updated_at === "number" ? stats.updated_at : undefined,
+      });
     },
     async loadAfterMessages(conversationId, afterSeq, limit) {
       return rowsToMessages(afterMessages.all(conversationId, afterSeq, Math.max(0, limit)));
