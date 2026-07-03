@@ -1,4 +1,5 @@
 import { createLocalShellToolRegistry, createLocalWorkdirToolRegistry } from "@agent-api/sdk/local";
+import { formatDisplayPreview, localToolDisplayArguments } from "../local-display.js";
 import { openWorkdir, type WorkdirService } from "../workdir/index.js";
 import type { WorkbenchState, WorkbenchWorkdirStatus } from "./state.js";
 import { localShellIsolationOptions } from "./shell-isolation.js";
@@ -110,7 +111,7 @@ function formatLocalToolApproval(approval: {
   return [
     `Local approval requested: ${approval.name}${approval.action ? `.${approval.action}` : ""}`,
     formatLocalToolArgumentPreview(approval.name, approval.arguments),
-    approval.preview ? ["Preview:", JSON.stringify(approval.preview, null, 2)].join("\n") : "",
+    approval.preview ? ["Preview:", formatPreview(approval.preview)].join("\n") : "",
     "",
     "Use /apply to execute this action once, /apply-all to allow future local actions, or /reject to discard it.",
   ].filter(Boolean).join("\n");
@@ -132,7 +133,11 @@ function formatLocalToolArgumentPreview(name: string, args: Record<string, unkno
       ].filter(Boolean).join("\n");
     }
   }
-  return ["Arguments:", JSON.stringify(args, null, 2)].join("\n");
+  return ["Arguments:", formatPreview(localToolDisplayArguments(name, args))].join("\n");
+}
+
+function formatPreview(preview: unknown) {
+  return formatDisplayPreview(preview);
 }
 
 function stringArg(args: Record<string, unknown> | undefined, key: string) {

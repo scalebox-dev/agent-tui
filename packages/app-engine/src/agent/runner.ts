@@ -30,6 +30,7 @@ import {
   type LocalWorkdirToolRegistry,
 } from "@agent-api/sdk/local";
 import { resolvePreviousResponseID, updateConversation } from "../conversation/index.js";
+import { localToolDisplayArguments, localToolDisplayResult } from "../local-display.js";
 import { resolveRuntimeProfile } from "../profile.js";
 import { runtime } from "../runtime/index.js";
 import { buildWorkdirContextBlock, openWorkdir } from "../workdir/index.js";
@@ -122,7 +123,7 @@ export type AgentTurnEvent =
   | { type: "reasoning.fetch_url_results"; count: number }
   | { type: "tool.completed"; name: string; status?: string }
   | { type: "local_tool.started"; name: string; action?: string; arguments?: Record<string, unknown> }
-  | { type: "local_tool.completed"; name: string; action?: string; requiresApproval?: boolean }
+  | { type: "local_tool.completed"; name: string; action?: string; arguments?: Record<string, unknown>; result?: Record<string, unknown>; requiresApproval?: boolean }
   | ({ type: "local_tool.approval_requested" } & LocalToolApprovalRequest)
   | ({ type: "automatic_continuation.paused" } & AutomaticContinuationPause)
   | { type: "model.requested"; model?: string; provider?: string }
@@ -870,6 +871,9 @@ async function executeLocalFunctionCalls(
 }> {
   const outputs: FunctionCallOutputInput[] = [];
   for (const call of pendingFunctionCalls(response)) {
+    // Yield before each tool call so render timers, resize/input listeners,
+    // and other event-loop observers can run between tight local batches.
+    await yieldToEventLoop();
     throwIfAborted(abortSignal);
     if (skipCallIDs.has(call.call_id)) {
       continue;
@@ -885,7 +889,7 @@ async function executeLocalFunctionCalls(
         type: "local_tool.started",
         name: call.name,
         action: typeof args.action === "string" ? args.action : undefined,
-        arguments: args,
+        arguments: localToolDisplayArguments(call.name, args),
       });
       result = await registry.execute(call.name, args, abortSignal);
     } catch (error) {
@@ -918,6 +922,8 @@ async function executeLocalFunctionCalls(
       type: "local_tool.completed",
       name: call.name,
       action,
+      arguments: localToolDisplayArguments(call.name, args),
+      result: localToolDisplayResult(call.name, result),
       requiresApproval: false,
     });
   }
@@ -966,6 +972,14 @@ export function localToolExecutionErrorResult(
 function throwIfAborted(signal?: AbortSignal) {
   if (!signal?.aborted) return;
   throw new Error("Agent turn aborted.");
+}
+
+/**
+ * Yields control back to the Node.js event loop by scheduling a macrotask
+ * continuation via setImmediate.
+ */
+function yieldToEventLoop(): Promise<void> {
+  return new Promise<void>((resolve) => setImmediate(resolve));
 }
 
 function userFacingError(error: unknown) {

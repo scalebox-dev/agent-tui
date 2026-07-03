@@ -13,6 +13,7 @@ import {
   type WorkbenchState,
 } from "./state.js";
 import type { AgentTurnEvent, WorkdirAccessMode } from "../agent.js";
+import { formatDisplayPreview, localToolDisplayArguments } from "../local-display.js";
 
 export interface WorkbenchEngineOptions {
   contextEnabled: boolean;
@@ -265,6 +266,9 @@ export function createWorkbenchEngine(options: WorkbenchEngineOptions): Workbenc
             level: event.requiresApproval ? "warning" : "success",
             text: `Local tool: ${event.name}${event.action ? `.${event.action}` : ""}${event.requiresApproval ? " (approval required)" : ""}`,
           });
+          if (!event.requiresApproval && (event.arguments || event.result)) {
+            dispatch({ type: "message.add", role: "system", kind: "tool", text: formatLocalToolCompleted(event) });
+          }
           return eventResult();
         case "local_tool.approval_requested":
           dispatch({
@@ -515,6 +519,15 @@ function formatLocalToolApproval(event: Extract<AgentTurnEvent, { type: "local_t
   ].filter(Boolean).join("\n\n");
 }
 
+function formatLocalToolCompleted(event: Extract<AgentTurnEvent, { type: "local_tool.completed" }>) {
+  const label = `${event.name}${event.action ? `.${event.action}` : ""}`;
+  return [
+    `Local execution completed: ${label}.`,
+    event.arguments ? formatLocalToolArgumentPreview(event.name, event.arguments) : undefined,
+    event.result ? `Result:\n${formatPreview(event.result)}` : undefined,
+  ].filter(Boolean).join("\n\n");
+}
+
 function formatLocalToolStartedActivity(event: Extract<AgentTurnEvent, { type: "local_tool.started" }>) {
   const label = `${event.name}${event.action ? `.${event.action}` : ""}`;
   if (event.name === "local_shell") {
@@ -542,16 +555,11 @@ function formatLocalToolArgumentPreview(name: string, args: Record<string, unkno
       ].filter(Boolean).join("\n");
     }
   }
-  return `Arguments:\n${formatPreview(args)}`;
+  return `Arguments:\n${formatPreview(localToolDisplayArguments(name, args))}`;
 }
 
 function formatPreview(preview: unknown) {
-  if (typeof preview === "string") return preview;
-  try {
-    return JSON.stringify(preview, null, 2);
-  } catch {
-    return String(preview);
-  }
+  return formatDisplayPreview(preview);
 }
 
 function stringArg(args: Record<string, unknown> | undefined, key: string) {

@@ -83,16 +83,18 @@ export function buildTranscriptLines(
     const waiting = message.role === "assistant" && options.busy && message.id === options.activeAssistantMessageId && !message.text;
     lines.push({
       id: `${message.id}:role`,
-      text: roleLabel(message.role),
-      color: roleColor(message.role),
+      text: messageLabel(message),
+      color: messageColor(message),
+      bold: message.kind === "tool",
     });
     const content = message.text || (waiting ? `${spinnerGlyph(options.spinnerFrame)} thinking ${elapsedDots(options.spinnerFrame)}` : "");
     const rendered = options.renderMode === "raw"
       ? rawTranscriptLines(content, options.width)
       : markdownTranscriptLines(content, options.width);
     rendered.forEach((line, index) => {
+      const displayLine = message.kind === "tool" ? tintToolLine(line) : line;
       lines.push({
-        ...line,
+        ...displayLine,
         id: `${message.id}:line:${index}`,
       });
     });
@@ -225,6 +227,14 @@ function sliceSpans(spans: TranscriptSpan[], offset: number, length: number): Tr
   return output;
 }
 
+function tintToolLine(line: Omit<TranscriptLine, "id">): Omit<TranscriptLine, "id"> {
+  return {
+    ...line,
+    color: line.color ?? "yellow",
+    spans: line.spans?.map((span) => ({ ...span, color: span.color ?? "yellow" })),
+  };
+}
+
 function wrapTranscriptText(text: string, width: number, options: { trimStart?: boolean } = {}): string[] {
   const max = Math.max(12, width);
   if (text.length === 0) return [""];
@@ -311,14 +321,16 @@ function isWideCodePoint(code: number) {
   );
 }
 
-function roleLabel(role: WorkbenchMessage["role"]) {
-  if (role === "user") return "You";
-  if (role === "assistant") return "Agent";
+function messageLabel(message: WorkbenchMessage) {
+  if (message.kind === "tool") return "Tool";
+  if (message.role === "user") return "You";
+  if (message.role === "assistant") return "Agent";
   return "System";
 }
 
-function roleColor(role: WorkbenchMessage["role"]) {
-  if (role === "user") return "green";
-  if (role === "assistant") return "cyan";
+function messageColor(message: WorkbenchMessage) {
+  if (message.kind === "tool") return "yellow";
+  if (message.role === "user") return "green";
+  if (message.role === "assistant") return "cyan";
   return "gray";
 }

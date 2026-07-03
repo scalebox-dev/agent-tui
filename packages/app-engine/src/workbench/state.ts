@@ -3,9 +3,11 @@ import type { UpdateCheckResult } from "../update.js";
 import type { ShellIsolationPreferences } from "../workbench/shell-isolation.js";
 
 export type WorkbenchRole = "user" | "assistant" | "system";
+export type WorkbenchMessageKind = "tool";
 
 export interface WorkbenchMessage {
   id: string;
+  kind?: WorkbenchMessageKind;
   role: WorkbenchRole;
   text: string;
 }
@@ -84,7 +86,7 @@ export interface InputHistory {
 }
 
 export type WorkbenchAction =
-  | { type: "message.add"; role: WorkbenchRole; text: string; id?: string }
+  | { type: "message.add"; role: WorkbenchRole; text: string; id?: string; kind?: WorkbenchMessageKind }
   | { type: "message.append"; id: string; delta: string }
   | { type: "messages.clear" }
   | { type: "activity.add"; level?: ActivityLevel; text: string }
@@ -242,7 +244,7 @@ export function workbenchReducer(state: WorkbenchState, action: WorkbenchAction)
     case "message.add":
       return {
         ...state,
-        messages: [...state.messages, newMessage(action.role, action.text, action.id)],
+        messages: [...state.messages, newMessage(action.role, action.text, action.id, action.kind)],
       };
     case "message.append":
       return {
@@ -609,7 +611,7 @@ export function formatTranscript(messages: WorkbenchMessage[]) {
   return messages
     .map((message) => {
       const body = message.text.trimEnd();
-      return body ? `${roleLabel(message.role)}:\n${body}` : `${roleLabel(message.role)}:`;
+      return body ? `${messageLabel(message)}:\n${body}` : `${messageLabel(message)}:`;
     })
     .join("\n\n")
     .trimEnd() + "\n";
@@ -651,14 +653,19 @@ export function formatBytes(bytes: number) {
   return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
 }
 
-function newMessage(role: WorkbenchRole, text: string, id = randomId()): WorkbenchMessage {
-  return { id, role, text };
+function newMessage(role: WorkbenchRole, text: string, id = randomId(), kind?: WorkbenchMessageKind): WorkbenchMessage {
+  return { id, kind, role, text };
 }
 
 function roleLabel(role: WorkbenchRole) {
   if (role === "user") return "You";
   if (role === "assistant") return "Agent";
   return "System";
+}
+
+function messageLabel(message: WorkbenchMessage) {
+  if (message.kind === "tool") return "Tool";
+  return roleLabel(message.role);
 }
 
 function newActivity(level: ActivityLevel, text: string): WorkbenchActivity {

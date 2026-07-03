@@ -2889,9 +2889,10 @@ test("workbench input controller supports visual-row movement and selected delet
 test("workbench transcript formatter produces readable plain text", () => {
   assert.equal(formatTranscript([
     { id: "1", role: "system", text: "Ready." },
+    { id: "4", kind: "tool", role: "system", text: "Local execution completed." },
     { id: "2", role: "user", text: "Hello" },
     { id: "3", role: "assistant", text: "Hi there\n" },
-  ]), "System:\nReady.\n\nYou:\nHello\n\nAgent:\nHi there\n");
+  ]), "System:\nReady.\n\nTool:\nLocal execution completed.\n\nYou:\nHello\n\nAgent:\nHi there\n");
 });
 
 test("workbench view model renders markdown transcript lines", () => {
@@ -2916,6 +2917,23 @@ test("workbench view model renders markdown transcript lines", () => {
     { text: " (https://example.test)", color: "gray" },
   ]);
   assert.equal(lines[3].color, "gray");
+});
+
+test("workbench view model labels local tool transcript messages distinctly", () => {
+  const lines = buildTranscriptLines([
+    { id: "1", kind: "tool", role: "system", text: "Local execution completed: local_shell.run." },
+  ], {
+    activeAssistantMessageId: null,
+    busy: false,
+    renderMode: "markdown",
+    spinnerFrame: 0,
+    width: 60,
+  });
+
+  assert.equal(lines[0].text, "Tool");
+  assert.equal(lines[0].color, "yellow");
+  assert.equal(lines[0].bold, true);
+  assert.equal(lines[1].color, "yellow");
 });
 
 test("workbench view model wraps wide final-answer text by display columns", () => {
@@ -3134,6 +3152,34 @@ test("workbench engine maps agent events into state and runtime effects", () => 
   assert.match(engine.snapshot().messages.at(-1).text, /Local action requires approval/);
   assert.match(engine.snapshot().messages.at(-1).text, /Command:\n  pwd/);
   assert.match(engine.snapshot().messages.at(-1).text, /Working directory: \/tmp\/project/);
+
+  const largeContent = "x".repeat(10_000);
+  assert.deepEqual(engine.handleAgentEvent({
+    type: "local_tool.approval_requested",
+    name: "local_workdir",
+    action: "write",
+    arguments: { action: "write", path: "large.txt", content: largeContent },
+    callID: "call_large",
+    responseID: "resp_large",
+  }).effects, []);
+  const approvalMessage = engine.snapshot().messages.at(-1).text;
+  assert.match(approvalMessage, /"object": "text_summary"/);
+  assert.match(approvalMessage, /"bytes": 10000/);
+  assert.doesNotMatch(approvalMessage, new RegExp(`x{${largeContent.length}}`));
+
+  assert.deepEqual(engine.handleAgentEvent({
+    type: "local_tool.completed",
+    name: "local_shell",
+    action: "run",
+    arguments: { action: "run", command: "printf x", description: "Print a byte" },
+    result: { ok: true, action: "run", stdout: "x", stderr: "", exit_code: 0 },
+    requiresApproval: false,
+  }).effects, []);
+  const toolMessage = engine.snapshot().messages.at(-1);
+  assert.equal(toolMessage.kind, "tool");
+  assert.match(toolMessage.text, /Local execution completed: local_shell\.run/);
+  assert.match(toolMessage.text, /Command:\n  printf x/);
+  assert.match(toolMessage.text, /"stdout": "x"/);
 });
 
 test("workbench local controller loads, summarizes, and searches a workdir", async () => {
@@ -3183,8 +3229,8 @@ test("workbench local controller loads, summarizes, and searches a workdir", asy
   assert.match(controller.approvalPreview({
     name: "local_workdir",
     action: "write",
-    arguments: { action: "write", path: "NOTES.md" },
-  }), /Local approval requested: local_workdir\.write/);
+    arguments: { action: "write", path: "NOTES.md", content: "y".repeat(10_000) },
+  }), /"object": "text_summary"/);
   assert.match(controller.approvalPreview({
     name: "local_shell",
     action: "run",
