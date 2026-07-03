@@ -535,6 +535,7 @@ export function parseWorkbenchCommand(input: string): WorkbenchCommand | null {
       if (target === "activity" || target === "activities") return { kind: "copy", target: "activity" };
       if (target === "header") return { kind: "copy", target: "header" };
       if (target === "conversation" || target === "conversations") return { kind: "copy", target: "conversation" };
+      if (target === "workspace" || target === "workspaces") return { kind: "copy", target: "workspace" };
       if (target === "workdir") return { kind: "copy", target: "workdir" };
       return { kind: "invalid", command: `copy ${target}` };
     }

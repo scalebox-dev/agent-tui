@@ -121,17 +121,19 @@ export function buildWorkbenchRenderModel(input: BuildWorkbenchRenderModelInput)
   const reservedRows = 10 + inputView.height;
   const viewportHeight = Math.max(3, terminalRows - reservedRows);
   const activityHeight = layout === "wide" ? viewportHeight : Math.min(4, Math.max(2, Math.floor(viewportHeight / 3)));
+  const sidePanelGap = layout === "wide" ? 1 : 0;
   const workdirPanelWidth = layout === "wide"
     ? clamp(Math.floor(terminalColumns * 0.22), 24, 34)
     : terminalColumns;
   const workspaceHeight = layout === "wide"
     ? clamp(Math.floor(viewportHeight * 0.25), 3, Math.min(5, Math.max(3, viewportHeight - 8)))
     : Math.min(4, Math.max(3, Math.floor(viewportHeight / 5)));
+  const sidePanelContentHeight = Math.max(3, viewportHeight - sidePanelGap * 2);
   const conversationHeight = layout === "wide"
-    ? clamp(Math.floor((viewportHeight - workspaceHeight - 2) / 2), 3, Math.max(3, viewportHeight - workspaceHeight - 5))
+    ? clamp(Math.floor((sidePanelContentHeight - workspaceHeight) / 2), 3, Math.max(3, sidePanelContentHeight - workspaceHeight - 3))
     : Math.min(4, Math.max(3, Math.floor(viewportHeight / 4)));
   const workdirHeight = layout === "wide"
-    ? Math.max(3, viewportHeight - conversationHeight - workspaceHeight - 2)
+    ? Math.max(3, sidePanelContentHeight - conversationHeight - workspaceHeight)
     : Math.min(4, Math.max(3, Math.floor(viewportHeight / 4)));
   const transcriptOuterHeight = layout === "wide" ? viewportHeight : Math.max(3, viewportHeight - activityHeight);
   const transcriptHeight = Math.max(1, transcriptOuterHeight - 3);
@@ -251,7 +253,10 @@ function workspacePanelLines(state: WorkbenchState) {
     return state.workspaceSummaries.slice(0, 6).map((workspace) => {
       const current = workspace.id === state.currentWorkspaceId;
       const role = workspace.role ? ` · ${workspace.role}` : "";
-      return `${current ? "*" : " "} ${shortId(workspace.id)} ${workspace.name}${role}`;
+      const membership = workspace.membershipStatus && workspace.membershipStatus !== "active"
+        ? ` · ${workspace.membershipStatus}`
+        : "";
+      return `${current ? "*" : " "} ${shortId(workspace.id)} ${workspace.name}${role}${membership}`;
     });
   }
   return [

@@ -61,11 +61,24 @@ export function createWorkbenchWorkspaceController(
       if (authType !== "browser") {
         throw new Error("API key profiles are bound to one workspace. Switch profile or use a browser-auth profile to change workspace.");
       }
+      const workspacesBeforeSwitch = await listProfileWorkspacesImpl(profileName);
+      const target = workspacesBeforeSwitch.find((workspace) => workspace.id === workspaceId);
+      if (!target) {
+        throw new Error(`Workspace not found for this profile: ${workspaceId}`);
+      }
+      if (!isActiveMembership(target)) {
+        const status = target.membershipStatus || "unknown";
+        throw new Error(`Workspace switch requires active membership. ${target.name} is ${status}.`);
+      }
       const current = await switchBrowserWorkspaceImpl(profileName, workspaceId);
       const workspaces = await listProfileWorkspacesImpl(profileName);
       return workspaceSnapshot(current, workspaces);
     },
   };
+}
+
+function isActiveMembership(workspace: WorkspaceInfo) {
+  return !workspace.membershipStatus || workspace.membershipStatus.toLowerCase() === "active";
 }
 
 function workspaceSnapshot(

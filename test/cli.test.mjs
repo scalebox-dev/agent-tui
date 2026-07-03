@@ -809,7 +809,7 @@ test("workbench command parser and reducer handle local workflow state", () => {
   assert.deepEqual(parseWorkbenchCommand("/copy header"), { kind: "copy", target: "header" });
   assert.deepEqual(parseWorkbenchCommand("/copy conversation"), { kind: "copy", target: "conversation" });
   assert.deepEqual(parseWorkbenchCommand("/copy workdir"), { kind: "copy", target: "workdir" });
-  assert.deepEqual(parseWorkbenchCommand("/copy workspace"), { kind: "invalid", command: "copy workspace" });
+  assert.deepEqual(parseWorkbenchCommand("/copy workspace"), { kind: "copy", target: "workspace" });
   assert.deepEqual(parseWorkbenchCommand("/copy activity"), { kind: "copy", target: "activity" });
   assert.deepEqual(parseWorkbenchCommand("/copy activities"), { kind: "copy", target: "activity" });
   assert.deepEqual(parseWorkbenchCommand("/copy sidebar"), { kind: "invalid", command: "copy sidebar" });
@@ -1982,7 +1982,7 @@ test("workbench terminal controller routes focused panel operations", () => {
     const currentModel = model();
     const headerHeight = 6;
     const transcriptTop = headerHeight + 1;
-    const transcriptBottom = transcriptTop + currentModel.transcript.viewportHeight + 1;
+    const transcriptBottom = transcriptTop + currentModel.transcript.viewportHeight + 2;
     const inputTop = transcriptBottom + 1;
     return inputTop + 2;
   };
@@ -2042,8 +2042,6 @@ test("workbench terminal controller routes focused panel operations", () => {
   apply("", { tab: true });
   assert.equal(terminalState.focusedPanel, "header");
   apply("", { tab: true });
-  assert.equal(terminalState.focusedPanel, "workspace");
-  apply("", { tab: true });
   assert.equal(terminalState.focusedPanel, "conversation");
   apply("", { downArrow: true });
   assert.deepEqual(apply("", { return: true }).effects, [{ type: "switch_conversation", name: "oom" }]);
@@ -2051,6 +2049,36 @@ test("workbench terminal controller routes focused panel operations", () => {
   apply("", { tab: true });
   assert.equal(terminalState.focusedPanel, "workdir");
   apply("", { tab: true });
+  assert.equal(terminalState.focusedPanel, "workspace");
+  apply("", { tab: true });
+  assert.equal(terminalState.focusedPanel, "transcript");
+
+  apply("A", {});
+  assert.equal(terminalState.focusedPanel, "conversation");
+  apply("D", {});
+  assert.equal(terminalState.focusedPanel, "transcript");
+  apply("S", {});
+  assert.equal(terminalState.focusedPanel, "input");
+  const inputAfterPanelShortcut = terminalState;
+  apply("W", {});
+  assert.equal(terminalState.focusedPanel, "input");
+  assert.equal(terminalState.draft, "W");
+  terminalState = { ...inputAfterPanelShortcut };
+  apply("", { tab: true, shift: true });
+  assert.equal(terminalState.focusedPanel, "activity");
+  apply("W", {});
+  assert.equal(terminalState.focusedPanel, "header");
+  apply("S", {});
+  assert.equal(terminalState.focusedPanel, "conversation");
+  apply("D", {});
+  assert.equal(terminalState.focusedPanel, "transcript");
+  apply("D", {});
+  assert.equal(terminalState.focusedPanel, "activity");
+  apply("S", {});
+  assert.equal(terminalState.focusedPanel, "input");
+  apply("", { tab: true, shift: true });
+  assert.equal(terminalState.focusedPanel, "activity");
+  apply("A", {});
   assert.equal(terminalState.focusedPanel, "transcript");
 
   apply("", { home: true });
@@ -2083,11 +2111,11 @@ test("workbench terminal controller routes focused panel operations", () => {
   terminalState = beforePasteShortcut;
 
   apply("", { tab: true, shift: true });
+  assert.equal(terminalState.focusedPanel, "workspace");
+  apply("", { tab: true, shift: true });
   assert.equal(terminalState.focusedPanel, "workdir");
   apply("", { tab: true, shift: true });
   assert.equal(terminalState.focusedPanel, "conversation");
-  apply("", { tab: true, shift: true });
-  assert.equal(terminalState.focusedPanel, "workspace");
   apply("", { tab: true, shift: true });
   assert.equal(terminalState.focusedPanel, "header");
   apply("", { tab: true, shift: true });

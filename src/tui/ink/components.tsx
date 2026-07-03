@@ -140,7 +140,7 @@ export function InkWorkbenchScreen({
             borderColor={panelBorderColor(focusedPanel === "transcript")}
             flexGrow={renderModel.layout === "wide" ? 1 : 0}
             flexDirection="column"
-            height={renderModel.transcript.viewportHeight + 2}
+            height={renderModel.transcript.viewportHeight + 3}
             paddingX={1}
             width={renderModel.layout === "wide" ? undefined : "100%"}
           >

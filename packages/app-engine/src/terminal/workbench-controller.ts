@@ -114,6 +114,10 @@ export function createWorkbenchTerminalController(): WorkbenchTerminalController
       if (key.meta && input.toLowerCase() === "v") {
         return stateResult({ ...normalized, focusedPanel: "input" }, { type: "paste" });
       }
+      const direction = directionalPanelShortcut(input, key);
+      if (direction && normalized.focusedPanel !== "input") {
+        return stateResult(focusDirectionalPanel(normalized, context.renderModel, direction));
+      }
       if (normalized.focusedPanel !== "input") {
         return handleReadOnlyPanel(input, key, normalized, context.renderModel);
       }
@@ -425,9 +429,104 @@ function cycleFocusedPanel(
   renderModel: WorkbenchRenderModel,
   direction: 1 | -1,
 ): WorkbenchTerminalState {
-  const panels: WorkbenchFocusedPanel[] = ["input", "header", "workspace", "conversation", "workdir", "transcript", "activity"];
+  const panels: WorkbenchFocusedPanel[] = ["input", "header", "conversation", "workdir", "workspace", "transcript", "activity"];
   const index = panels.indexOf(state.focusedPanel);
   const focusedPanel = panels[(index + direction + panels.length) % panels.length] ?? "input";
+  return focusPanel(state, renderModel, focusedPanel);
+}
+
+type PanelDirection = "down" | "left" | "right" | "up";
+
+function directionalPanelShortcut(input: string, key: WorkbenchTerminalKey): PanelDirection | null {
+  if (key.ctrl || key.meta) return null;
+  const ch = input.length === 1 ? input : "";
+  const shifted = key.shift || (ch >= "A" && ch <= "Z");
+  if (!shifted) return null;
+  switch (ch.toLowerCase()) {
+    case "w":
+      return "up";
+    case "a":
+      return "left";
+    case "s":
+      return "down";
+    case "d":
+      return "right";
+    default:
+      return null;
+  }
+}
+
+function focusDirectionalPanel(
+  state: WorkbenchTerminalState,
+  renderModel: WorkbenchRenderModel,
+  direction: PanelDirection,
+) {
+  const wide = renderModel.layout === "wide";
+  const nextPanel = directionalPanelTarget(state.focusedPanel, direction, wide);
+  return nextPanel === state.focusedPanel
+    ? state
+    : cycleToPanel(state, renderModel, nextPanel);
+}
+
+function directionalPanelTarget(
+  panel: WorkbenchFocusedPanel,
+  direction: PanelDirection,
+  wide: boolean,
+): WorkbenchFocusedPanel {
+  if (!wide) {
+    const order: WorkbenchFocusedPanel[] = ["header", "conversation", "workdir", "workspace", "transcript", "activity", "input"];
+    const index = order.indexOf(panel);
+    if (index < 0) return panel;
+    if (direction === "up" || direction === "left") return order[Math.max(0, index - 1)] ?? panel;
+    return order[Math.min(order.length - 1, index + 1)] ?? panel;
+  }
+  switch (panel) {
+    case "header":
+      return direction === "down" ? "conversation" : panel;
+    case "conversation":
+      if (direction === "down") return "workdir";
+      if (direction === "right") return "transcript";
+      if (direction === "up") return "header";
+      return panel;
+    case "workdir":
+      if (direction === "up") return "conversation";
+      if (direction === "down") return "workspace";
+      if (direction === "right") return "transcript";
+      return panel;
+    case "workspace":
+      if (direction === "up") return "workdir";
+      if (direction === "right") return "transcript";
+      if (direction === "down") return "input";
+      return panel;
+    case "transcript":
+      if (direction === "left") return "conversation";
+      if (direction === "right") return "activity";
+      if (direction === "up") return "header";
+      if (direction === "down") return "input";
+      return panel;
+    case "activity":
+      if (direction === "left") return "transcript";
+      if (direction === "down") return "input";
+      if (direction === "up") return "header";
+      return panel;
+    case "input":
+      return direction === "up" ? "transcript" : panel;
+  }
+}
+
+function cycleToPanel(
+  state: WorkbenchTerminalState,
+  renderModel: WorkbenchRenderModel,
+  panel: WorkbenchFocusedPanel,
+) {
+  return focusPanel(state, renderModel, panel);
+}
+
+function focusPanel(
+  state: WorkbenchTerminalState,
+  renderModel: WorkbenchRenderModel,
+  focusedPanel: WorkbenchFocusedPanel,
+): WorkbenchTerminalState {
   const next = {
     ...state,
     focusedPanel,
@@ -1150,7 +1249,7 @@ function mouseTargetForPanel(
 function mouseLayout(renderModel: WorkbenchRenderModel) {
   const headerHeight = 6;
   const transcriptTop = headerHeight + 1;
-  const transcriptBottom = transcriptTop + renderModel.transcript.viewportHeight + 1;
+  const transcriptBottom = transcriptTop + renderModel.transcript.viewportHeight + 2;
   const inputTop = transcriptBottom + 1;
   const inputBottom = inputTop + renderModel.input.height + 2;
   const sidePanelWidth = renderModel.layout === "wide" ? renderModel.workdirPanelWidth + 1 : 0;
@@ -1163,9 +1262,9 @@ function mouseLayout(renderModel: WorkbenchRenderModel) {
   const activityBottom = renderModel.layout === "wide" ? transcriptBottom : activityTop + renderModel.activityHeight - 1;
   const conversationTop = transcriptTop;
   const conversationBottom = conversationTop + renderModel.conversationHeight - 1;
-  const workdirTop = conversationBottom + 1;
+  const workdirTop = conversationBottom + 2;
   const workdirBottom = workdirTop + renderModel.workdirHeight - 1;
-  const workspaceTop = workdirBottom + 1;
+  const workspaceTop = workdirBottom + 2;
   const workspaceBottom = transcriptBottom;
   return {
     header: {
