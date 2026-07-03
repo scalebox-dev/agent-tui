@@ -10,6 +10,7 @@ export interface WorkbenchMessage {
   kind?: WorkbenchMessageKind;
   role: WorkbenchRole;
   text: string;
+  transcriptSeq?: number;
 }
 
 export type ActivityLevel = "info" | "success" | "warning" | "error";
@@ -47,6 +48,8 @@ export interface PendingUpdate {
 
 export type RenderMode = "markdown" | "raw";
 export type WorkbenchCopyTarget = "page" | "transcript" | "activity" | "header";
+const maxWorkbenchMessages = 200;
+const maxWorkbenchMessageCharacters = 256_000;
 
 export interface WorkbenchState {
   messages: WorkbenchMessage[];
@@ -89,6 +92,9 @@ export type WorkbenchAction =
   | { type: "message.add"; role: WorkbenchRole; text: string; id?: string; kind?: WorkbenchMessageKind }
   | { type: "message.append"; id: string; delta: string }
   | { type: "messages.clear" }
+  | { type: "messages.appendPage"; messages: WorkbenchMessage[] }
+  | { type: "messages.prepend"; messages: WorkbenchMessage[] }
+  | { type: "messages.restore"; messages: WorkbenchMessage[] }
   | { type: "activity.add"; level?: ActivityLevel; text: string }
   | { type: "busy.set"; busy: boolean }
   | { type: "context.toggle" }
@@ -244,19 +250,36 @@ export function workbenchReducer(state: WorkbenchState, action: WorkbenchAction)
     case "message.add":
       return {
         ...state,
-        messages: [...state.messages, newMessage(action.role, action.text, action.id, action.kind)],
+        messages: limitMessages([...state.messages, newMessage(action.role, action.text, action.id, action.kind)]),
       };
     case "message.append":
       return {
         ...state,
-        messages: state.messages.map((message) =>
-          message.id === action.id ? { ...message, text: message.text + action.delta } : message,
-        ),
+        messages: limitMessages(state.messages.map((message) =>
+          message.id === action.id ? { ...message, text: limitMessageText(message.text + action.delta) } : message,
+        )),
       };
     case "messages.clear":
       return {
         ...state,
         messages: [newMessage("system", "Cleared. Type /help for commands.")],
+      };
+    case "messages.prepend":
+      return {
+        ...state,
+        messages: [...action.messages.map(normalizeStoredMessage), ...state.messages].slice(0, maxWorkbenchMessages),
+      };
+    case "messages.appendPage":
+      return {
+        ...state,
+        messages: limitMessages([...state.messages, ...action.messages.map(normalizeStoredMessage)]),
+      };
+    case "messages.restore":
+      return {
+        ...state,
+        messages: action.messages.length > 0
+          ? limitMessages(action.messages.map(normalizeStoredMessage))
+          : [newMessage("system", "No local transcript history for this conversation yet.")],
       };
     case "activity.add":
       return {
@@ -654,7 +677,22 @@ export function formatBytes(bytes: number) {
 }
 
 function newMessage(role: WorkbenchRole, text: string, id = randomId(), kind?: WorkbenchMessageKind): WorkbenchMessage {
-  return { id, kind, role, text };
+  return { id, kind, role, text: limitMessageText(text) };
+}
+
+function normalizeStoredMessage(message: WorkbenchMessage): WorkbenchMessage {
+  return { ...message, text: limitMessageText(message.text) };
+}
+
+function limitMessages(messages: WorkbenchMessage[]) {
+  if (messages.length <= maxWorkbenchMessages) return messages;
+  return messages.slice(-maxWorkbenchMessages);
+}
+
+function limitMessageText(text: string) {
+  if (text.length <= maxWorkbenchMessageCharacters) return text;
+  const marker = "\n\n[Earlier local transcript text trimmed from the live view; use /export for persisted history.]\n\n";
+  return `${marker}${text.slice(-(maxWorkbenchMessageCharacters - marker.length))}`;
 }
 
 function roleLabel(role: WorkbenchRole) {

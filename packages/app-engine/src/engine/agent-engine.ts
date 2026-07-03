@@ -20,6 +20,8 @@ export interface AgentEngineApp {
   dispatch(action: WorkbenchAction): void;
   maybeCheckForUpdate(options?: AgentEngineLifecycleOptions): Promise<void>;
   loadInitialConversation(options?: AgentEngineLifecycleOptions): Promise<void>;
+  loadOlderTranscript(limit?: number): Promise<number>;
+  loadNewerTranscript(limit?: number): Promise<number>;
   loadInitialSettings(options?: AgentEngineLifecycleOptions): Promise<void>;
   loadWorkdir(path?: string, options?: AgentEngineLifecycleOptions): Promise<void>;
   refreshAuth(profile?: string, options?: AgentEngineLifecycleOptions): Promise<void>;
@@ -60,6 +62,7 @@ export function createAgentEngine(options: AgentEngineAppOptions): AgentEngineAp
     options: options.baseOptions,
     profileName: options.profileName,
     settingsController: session.settings,
+    transcriptStore: options.services?.transcriptStore,
     turnController: session.turn,
     onDeleteProfile: options.onDeleteProfile,
     onExit: options.onExit,
@@ -96,6 +99,14 @@ export function createAgentEngine(options: AgentEngineAppOptions): AgentEngineAp
         previousResponseId: conversation.previousResponseId,
         status: conversation.status,
       });
+      if (options.services?.transcriptStore) {
+        const messages = await options.services.transcriptStore.loadRecentMessages(conversation.id, 80);
+        if (lifecycleOptions.isMounted && !lifecycleOptions.isMounted()) return;
+        if (messages.length > 0) {
+          session.engine.dispatch({ type: "messages.restore", messages });
+          session.engine.dispatch({ type: "activity.add", level: "success", text: `Loaded ${messages.length} local transcript message${messages.length === 1 ? "" : "s"}` });
+        }
+      }
       if (conversation.previousResponseId) {
         session.engine.dispatch({
           type: "message.add",
@@ -139,6 +150,54 @@ export function createAgentEngine(options: AgentEngineAppOptions): AgentEngineAp
         level: "warning",
         text: `Config preferences unavailable: ${userFacingError(error)}`,
       });
+    }
+  }
+
+  async function loadOlderTranscript(limit = 80): Promise<number> {
+    const store = options.services?.transcriptStore;
+    const state = session.engine.snapshot();
+    const firstSeq = firstStoredTranscriptSeq(state.messages);
+    if (!store || !state.conversationId || firstSeq == null) return 0;
+    try {
+      const messages = await store.loadBeforeMessages(state.conversationId, firstSeq, limit);
+      if (messages.length > 0) {
+        session.engine.dispatch({ type: "messages.prepend", messages });
+        session.engine.dispatch({ type: "activity.add", level: "success", text: `Loaded ${messages.length} older transcript message${messages.length === 1 ? "" : "s"}` });
+      } else {
+        session.engine.dispatch({ type: "activity.add", text: "Reached start of local transcript history" });
+      }
+      return messages.length;
+    } catch (error) {
+      session.engine.dispatch({
+        type: "activity.add",
+        level: "warning",
+        text: `Transcript history unavailable: ${userFacingError(error)}`,
+      });
+      return 0;
+    }
+  }
+
+  async function loadNewerTranscript(limit = 80): Promise<number> {
+    const store = options.services?.transcriptStore;
+    const state = session.engine.snapshot();
+    const lastSeq = lastStoredTranscriptSeq(state.messages);
+    if (!store || !state.conversationId || lastSeq == null) return 0;
+    try {
+      const messages = await store.loadAfterMessages(state.conversationId, lastSeq, limit);
+      if (messages.length > 0) {
+        session.engine.dispatch({ type: "messages.appendPage", messages });
+        session.engine.dispatch({ type: "activity.add", level: "success", text: `Loaded ${messages.length} newer transcript message${messages.length === 1 ? "" : "s"}` });
+      } else {
+        session.engine.dispatch({ type: "activity.add", text: "Reached latest local transcript history" });
+      }
+      return messages.length;
+    } catch (error) {
+      session.engine.dispatch({
+        type: "activity.add",
+        level: "warning",
+        text: `Transcript history unavailable: ${userFacingError(error)}`,
+      });
+      return 0;
     }
   }
 
@@ -204,6 +263,8 @@ export function createAgentEngine(options: AgentEngineAppOptions): AgentEngineAp
     dispatch: session.engine.dispatch,
     maybeCheckForUpdate,
     loadInitialConversation,
+    loadOlderTranscript,
+    loadNewerTranscript,
     loadInitialSettings,
     loadWorkdir,
     refreshAuth,
@@ -213,8 +274,24 @@ export function createAgentEngine(options: AgentEngineAppOptions): AgentEngineAp
     runLifecycleEffects,
     dispose() {
       session.runtime.dispose();
+      options.services?.transcriptStore?.dispose?.();
     },
   };
+}
+
+function firstStoredTranscriptSeq(messages: WorkbenchState["messages"]) {
+  for (const message of messages) {
+    if (typeof message.transcriptSeq === "number") return message.transcriptSeq;
+  }
+  return null;
+}
+
+function lastStoredTranscriptSeq(messages: WorkbenchState["messages"]) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (typeof message.transcriptSeq === "number") return message.transcriptSeq;
+  }
+  return null;
 }
 
 function userFacingError(error: unknown) {

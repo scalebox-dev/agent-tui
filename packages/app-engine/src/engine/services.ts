@@ -5,6 +5,7 @@ import type { WorkbenchLifecycleController } from "../workbench/lifecycle-contro
 import type { WorkbenchLocalController } from "../workbench/local-controller.js";
 import type { WorkbenchRuntimeController } from "../workbench/runtime-controller.js";
 import type { WorkbenchSettingsController } from "../workbench/settings-controller.js";
+import type { WorkbenchTranscriptStore } from "../workbench/transcript-store.js";
 import type { WorkbenchTurnController } from "../workbench/turn-controller.js";
 
 export interface AgentEngineServices {
@@ -15,5 +16,6 @@ export interface AgentEngineServices {
   local?: WorkbenchLocalController;
   runtime?: WorkbenchRuntimeController;
   settings?: WorkbenchSettingsController;
+  transcriptStore?: WorkbenchTranscriptStore;
   turn?: WorkbenchTurnController;
 }

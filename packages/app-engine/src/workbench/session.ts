@@ -37,6 +37,7 @@ export function createWorkbenchSession(options: WorkbenchSessionOptions): Workbe
     memoryWrite: Boolean(options.baseOptions.memory?.write),
     model: options.baseOptions.model,
     preset: options.baseOptions.preset,
+    transcriptStore: options.services?.transcriptStore,
     workspaceSkillsEnabled: Boolean(options.baseOptions.skillTool?.tenant_search),
   });
   const local = options.services?.local ?? createWorkbenchLocalController({

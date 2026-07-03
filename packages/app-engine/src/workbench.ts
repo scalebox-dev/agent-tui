@@ -69,6 +69,12 @@ export {
   formatPresetList,
   UnknownPresetError,
 } from "./workbench/settings-controller.js";
+export type { WorkbenchTranscriptStore } from "./workbench/transcript-store.js";
+export {
+  createFileTranscriptStore,
+  createMemoryTranscriptStore,
+  shouldPersistTranscriptMessage,
+} from "./workbench/transcript-store.js";
 export type {
   ShellIsolationMode,
   ShellIsolationPreferences,

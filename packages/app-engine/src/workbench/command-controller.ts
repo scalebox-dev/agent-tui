@@ -7,6 +7,7 @@ import type { WorkbenchEffect, WorkbenchEngine } from "./engine.js";
 import type { WorkbenchLocalController } from "./local-controller.js";
 import { UnknownPresetError } from "./settings-controller.js";
 import type { WorkbenchSettingsController } from "./settings-controller.js";
+import type { WorkbenchTranscriptStore } from "./transcript-store.js";
 import type { WorkbenchTurnController } from "./turn-controller.js";
 
 export interface WorkbenchCommandController {
@@ -22,6 +23,7 @@ export interface WorkbenchCommandControllerOptions {
   options: AgentRunOptions;
   profileName: string;
   settingsController: WorkbenchSettingsController;
+  transcriptStore?: WorkbenchTranscriptStore;
   turnController: WorkbenchTurnController;
   checkForUpdateImpl?: typeof checkForUpdate;
   formatUpdateNoticeImpl?: typeof formatUpdateNotice;
@@ -321,7 +323,11 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
 
   async function exportTranscript(effect: Extract<WorkbenchEffect, { type: "export_transcript" }>) {
     try {
-      const file = await options.conversationController.exportTranscript(effect);
+      const state = options.engine.snapshot();
+      const transcript = options.transcriptStore && state.conversationId
+        ? await options.transcriptStore.exportConversation(state.conversationId)
+        : effect.transcript;
+      const file = await options.conversationController.exportTranscript({ ...effect, transcript });
       dispatch({ type: "message.add", role: "system", text: `Transcript exported:\n${file}` });
       dispatch({ type: "activity.add", level: "success", text: "Transcript exported" });
     } catch (error) {
@@ -354,6 +360,7 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
 
   async function startNewConversation(name?: string) {
     const conversation = await options.conversationController.startNewConversation(name, options.options.profile);
+    await options.transcriptStore?.clearConversation(conversation.id);
     dispatch({ type: "messages.clear" });
     dispatch({
       type: "conversation.set",
@@ -371,7 +378,8 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
 
   async function switchConversation(name: string) {
     const conversation = await options.conversationController.switchConversation(name, options.options.profile);
-    dispatch({ type: "messages.clear" });
+    const restored = await options.transcriptStore?.loadRecentMessages(conversation.id, 80) ?? [];
+    dispatch(restored.length > 0 ? { type: "messages.restore", messages: restored } : { type: "messages.clear" });
     dispatch({
       type: "conversation.set",
       id: conversation.id,
@@ -382,7 +390,9 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
     dispatch({
       type: "message.add",
       role: "system",
-      text: conversation.message,
+      text: restored.length > 0
+        ? `${conversation.message}\nLoaded ${restored.length} local transcript message${restored.length === 1 ? "" : "s"}.`
+        : conversation.message,
     });
   }
 

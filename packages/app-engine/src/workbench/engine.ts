@@ -14,6 +14,7 @@ import {
 } from "./state.js";
 import type { AgentTurnEvent, WorkdirAccessMode } from "../agent.js";
 import { formatDisplayPreview, localToolDisplayArguments } from "../local-display.js";
+import { shouldPersistTranscriptMessage, type WorkbenchTranscriptStore } from "./transcript-store.js";
 
 export interface WorkbenchEngineOptions {
   contextEnabled: boolean;
@@ -28,6 +29,7 @@ export interface WorkbenchEngineOptions {
   workspaceSkillsEnabled?: boolean;
   renderMode?: RenderMode;
   defaultPreset?: string | null;
+  transcriptStore?: WorkbenchTranscriptStore;
 }
 
 export interface WorkbenchEngine {
@@ -71,6 +73,7 @@ export interface WorkbenchEventResult {
 export function createWorkbenchEngine(options: WorkbenchEngineOptions): WorkbenchEngine {
   let state = createInitialWorkbenchState(options);
   let pendingApprovalInvalidInputs = 0;
+  let transcriptPersistQueue = Promise.resolve();
   const listeners = new Set<() => void>();
   const notify = () => {
     for (const listener of listeners) listener();
@@ -89,6 +92,9 @@ export function createWorkbenchEngine(options: WorkbenchEngineOptions): Workbenc
     const next = workbenchReducer(state, action);
     if (Object.is(next, state)) return;
     state = next;
+    transcriptPersistQueue = transcriptPersistQueue.then(() =>
+      persistTranscriptAction(options.transcriptStore, state, action, dispatch),
+    );
     notify();
   };
 
@@ -504,9 +510,49 @@ function eventResult(...effects: WorkbenchRuntimeEffect[]): WorkbenchEventResult
   return { effects };
 }
 
+async function persistTranscriptAction(
+  store: WorkbenchTranscriptStore | undefined,
+  state: WorkbenchState,
+  action: WorkbenchAction,
+  dispatch: (action: WorkbenchAction) => void,
+) {
+  if (!store || !state.conversationId) return;
+  try {
+    if (action.type === "message.add") {
+      const message = {
+        id: action.id ?? state.messages.at(-1)?.id ?? "",
+        kind: action.kind,
+        role: action.role,
+        text: action.text,
+      };
+      if (message && shouldPersistTranscriptMessage(message)) {
+        await store.appendMessage(state.conversationId, message);
+      }
+      return;
+    }
+    if (action.type === "message.append") {
+      const message = state.messages.find((item) => item.id === action.id);
+      if (message && shouldPersistTranscriptMessage(message)) {
+        await store.appendMessageDelta(state.conversationId, action.id, action.delta);
+      }
+    }
+  } catch (error) {
+    dispatch({
+      type: "activity.add",
+      level: "warning",
+      text: `Transcript persistence unavailable: ${userFacingError(error)}`,
+    });
+  }
+}
+
 function modelLabel(model?: string, provider?: string) {
   if (model && provider) return `${provider}/${model}`;
   return model || provider || "unknown";
+}
+
+function userFacingError(error: unknown) {
+  if (error instanceof Error) return error.message;
+  return String(error);
 }
 
 function formatLocalToolApproval(event: Extract<AgentTurnEvent, { type: "local_tool.approval_requested" }>) {

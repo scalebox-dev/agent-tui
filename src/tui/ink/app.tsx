@@ -13,6 +13,7 @@ import {
   type AuthGateState,
   type WorkbenchAuthController,
   type WorkbenchAuthGateController,
+  type WorkbenchTranscriptStore,
 } from "@agent-api/app-engine/workbench";
 import {
   buildWorkbenchRenderModel,
@@ -38,6 +39,7 @@ import {
   type ClipboardCapabilities,
 } from "../clipboard.js";
 import { disableMouseReporting, parseMouseEvent } from "../mouse.js";
+import { createDefaultTranscriptStore } from "../transcript-store.js";
 
 export function ChatApp({ options }: { options: AgentRunOptions }) {
   return <AuthenticatedChatApp options={options} />;
@@ -199,11 +201,20 @@ function WorkbenchApp({
   const [terminalState, setTerminalState] = useState<WorkbenchTerminalState>(() => initialWorkbenchTerminalState());
   const [spinnerFrame, setSpinnerFrame] = useState(0);
   const agentEngineRef = useRef<AgentEngineApp | null>(null);
+  const transcriptStoreRef = useRef<WorkbenchTranscriptStore | null | undefined>(undefined);
+  if (transcriptStoreRef.current === undefined) {
+    try {
+      transcriptStoreRef.current = createDefaultTranscriptStore();
+    } catch {
+      transcriptStoreRef.current = null;
+    }
+  }
   if (!agentEngineRef.current) {
     agentEngineRef.current = createAgentEngine({
       authController,
       baseOptions: options,
       profileName,
+      services: transcriptStoreRef.current ? { transcriptStore: transcriptStoreRef.current } : undefined,
       onDeleteProfile,
       onExit: app.exit,
       onLogin,
@@ -373,6 +384,20 @@ function WorkbenchApp({
       renderModel,
     });
     if (!sameTerminalState(result.state, terminalState)) setTerminalState(result.state);
+    if (shouldLoadOlderTranscript(normalizedKey, result.state, renderModel)) {
+      void agentEngine.loadOlderTranscript().then((count) => {
+        if (count > 0) {
+          setTerminalState((current) => ({ ...current, focusedPanel: "transcript", transcriptOffset: Number.MAX_SAFE_INTEGER }));
+        }
+      });
+    }
+    if (shouldLoadNewerTranscript(normalizedKey, result.state)) {
+      void agentEngine.loadNewerTranscript().then((count) => {
+        if (count > 0) {
+          setTerminalState((current) => ({ ...current, focusedPanel: "transcript", transcriptOffset: 0 }));
+        }
+      });
+    }
     for (const effect of result.effects) {
       switch (effect.type) {
         case "exit":
@@ -444,6 +469,30 @@ function WorkbenchApp({
       transcriptCursor={terminalState.transcriptCursor}
       transcriptSelection={selectedPanelRange(terminalState.transcriptSelectionAnchor, terminalState.transcriptCursor)}
     />
+  );
+}
+
+function shouldLoadOlderTranscript(
+  key: WorkbenchTerminalKey,
+  state: WorkbenchTerminalState,
+  renderModel: ReturnType<typeof buildWorkbenchRenderModel>,
+) {
+  return Boolean(
+    key.pageUp &&
+    state.focusedPanel === "transcript" &&
+    renderModel.transcript.maxOffset > 0 &&
+    state.transcriptOffset >= renderModel.transcript.maxOffset,
+  );
+}
+
+function shouldLoadNewerTranscript(
+  key: WorkbenchTerminalKey,
+  state: WorkbenchTerminalState,
+) {
+  return Boolean(
+    key.pageDown &&
+    state.focusedPanel === "transcript" &&
+    state.transcriptOffset <= 0,
   );
 }
 
