@@ -111,7 +111,7 @@ export function createWorkbenchTerminalController(): WorkbenchTerminalController
       if (key.tab) {
         return stateResult(cycleFocusedPanel(normalized, context.renderModel, key.shift ? -1 : 1));
       }
-      if (key.meta && input === " ") {
+      if (key.meta && input.toLowerCase() === "i") {
         return stateResult({ ...normalized, focusedPanel: "input" });
       }
       if (key.meta && input.toLowerCase() === "t") {

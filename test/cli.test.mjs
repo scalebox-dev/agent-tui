@@ -2089,7 +2089,10 @@ test("workbench terminal controller routes focused panel operations", () => {
   terminalState = { ...inputAfterPanelShortcut };
   apply("w", { meta: true });
   assert.equal(terminalState.focusedPanel, "transcript");
-  const directInputFocus = apply(" ", { meta: true });
+  const ignoredAltSpace = apply(" ", { meta: true });
+  assert.equal(terminalState.focusedPanel, "transcript");
+  assert.deepEqual(ignoredAltSpace.effects, []);
+  const directInputFocus = apply("i", { meta: true });
   assert.equal(terminalState.focusedPanel, "input");
   assert.deepEqual(directInputFocus.effects, []);
   terminalState = { ...inputAfterPanelShortcut };
