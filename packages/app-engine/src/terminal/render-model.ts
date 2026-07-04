@@ -282,7 +282,8 @@ function conversationPanelLines(
       const current = conversation.id === state.conversationId || conversation.name === state.currentConversation;
       const snippet = conversation.latestSnippet || conversation.titleSnippet || "New conversation";
       const count = conversation.messageCount > 0 ? ` · ${conversation.messageCount}` : "";
-      return `${current ? "*" : " "} ${shortId(conversation.id)} ${snippet}${count}`;
+      const settings = current ? conversationSettingsLabel(state) : "";
+      return `${current ? "*" : " "} ${shortId(conversation.id)} ${snippet}${count}${settings}`;
     });
   }
   return [
@@ -290,9 +291,14 @@ function conversationPanelLines(
     `id=${header.conversationId}`,
     `status=${header.conversationStatus}`,
     `previous=${header.conversationPreviousResponseId || "none"}`,
+    conversationSettingsLabel(state).replace(/^ · /, ""),
     `messages=${state.messages.length}`,
     `history=${state.messages.some((message) => typeof message.transcriptSeq === "number") ? "local" : "live"}`,
   ];
+}
+
+function conversationSettingsLabel(state: WorkbenchState) {
+  return ` · preset=${state.runPreset || "none"} model=${state.runModel || "auto"}`;
 }
 
 function shortId(id: string) {

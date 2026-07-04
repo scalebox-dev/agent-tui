@@ -1,5 +1,5 @@
 import { formatTranscript, type WorkbenchMessage } from "./state.js";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 
 export interface WorkbenchTranscriptStore {
@@ -78,19 +78,18 @@ export function createMemoryTranscriptStore(): WorkbenchTranscriptStore {
 export function createFileTranscriptStore(root: string): WorkbenchTranscriptStore {
   return {
     async appendMessage(conversationId, message) {
-      const messages = await loadMessages(root, conversationId);
-      const index = messages.findIndex((item) => item.id === message.id);
-      if (index >= 0) messages[index] = cloneMessage(message);
-      else messages.push(cloneMessage(message));
-      await saveMessages(root, conversationId, messages);
+      await appendTranscriptEvent(root, conversationId, {
+        type: "message",
+        message: cloneMessage(message),
+      });
     },
     async appendMessageDelta(conversationId, messageId, delta) {
-      const messages = await loadMessages(root, conversationId);
-      const index = messages.findIndex((item) => item.id === messageId);
-      if (index >= 0) {
-        messages[index] = { ...messages[index], text: messages[index].text + delta };
-        await saveMessages(root, conversationId, messages);
-      }
+      if (!delta) return;
+      await appendTranscriptEvent(root, conversationId, {
+        type: "delta",
+        delta,
+        messageId,
+      });
     },
     async clearConversation(conversationId) {
       await rm(transcriptFile(root, conversationId), { force: true });
@@ -157,15 +156,52 @@ async function loadMessages(root: string, conversationId: string): Promise<Workb
   }
 }
 
-async function saveMessages(root: string, conversationId: string, messages: WorkbenchMessage[]) {
+type FileTranscriptEvent =
+  | { type: "delta"; delta: string; messageId: string }
+  | { type: "message"; message: WorkbenchMessage };
+
+async function appendTranscriptEvent(root: string, conversationId: string, event: FileTranscriptEvent) {
   await mkdir(root, { recursive: true });
-  await writeFile(transcriptFile(root, conversationId), `${messages.map((message) => JSON.stringify(message)).join("\n")}\n`, "utf8");
+  await appendFile(transcriptFile(root, conversationId), `${JSON.stringify(event)}\n`, "utf8");
 }
 
 function parseTranscriptLines(text: string): WorkbenchMessage[] {
-  return text.split(/\r?\n/)
-    .filter(Boolean)
-    .map((line, index) => ({ ...normalizeMessage(JSON.parse(line)), transcriptSeq: index + 1 }));
+  const messages: WorkbenchMessage[] = [];
+  for (const line of text.split(/\r?\n/).filter(Boolean)) {
+    const record = JSON.parse(line) as unknown;
+    const event = normalizeFileTranscriptEvent(record);
+    if (event.type === "message") {
+      const message = normalizeMessage(event.message);
+      const index = messages.findIndex((item) => item.id === message.id);
+      if (index >= 0) messages[index] = message;
+      else messages.push(message);
+    } else if (event.type === "delta") {
+      const index = messages.findIndex((item) => item.id === event.messageId);
+      if (index >= 0) messages[index] = { ...messages[index], text: messages[index].text + event.delta };
+    }
+  }
+  return messages.map((message, index) => ({ ...message, transcriptSeq: index + 1 }));
+}
+
+function normalizeFileTranscriptEvent(value: unknown): FileTranscriptEvent {
+  const record = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  if (record.type === "delta") {
+    return {
+      type: "delta",
+      delta: typeof record.delta === "string" ? record.delta : "",
+      messageId: typeof record.messageId === "string" ? record.messageId : "",
+    };
+  }
+  if (record.type === "message") {
+    return {
+      type: "message",
+      message: normalizeMessage(record.message),
+    };
+  }
+  return {
+    type: "message",
+    message: normalizeMessage(record),
+  };
 }
 
 function normalizeMessage(value: unknown): WorkbenchMessage {

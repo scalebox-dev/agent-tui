@@ -3383,6 +3383,26 @@ test("workbench transcript store persists recent messages and deltas", async () 
   ].join("\n"));
 });
 
+test("workbench engine keeps transcript store independent from the visible window", async () => {
+  const store = createMemoryTranscriptStore();
+  const engine = createWorkbenchEngine({ contextEnabled: false, transcriptStore: store });
+  const fullText = "x".repeat(70_000);
+  engine.dispatch({ type: "conversation.set", id: "conv_window", name: "window", status: "fresh" });
+  engine.dispatch({ type: "message.add", id: "assistant-window", role: "assistant", text: fullText });
+  engine.dispatch({ type: "message.append", id: "assistant-window", delta: "tail" });
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  const visible = engine.snapshot().messages.find((message) => message.id === "assistant-window");
+  assert.ok(visible);
+  assert.ok(visible.text.length < fullText.length);
+  assert.match(visible.text, /trimmed from the live view/);
+
+  const persisted = await store.loadRecentMessages("conv_window", 1);
+  assert.equal(persisted.length, 1);
+  assert.equal(persisted[0].text, `${fullText}tail`);
+});
+
 test("workbench file transcript store persists messages on disk", async () => {
   const root = await mkdtemp(join(tmpdir(), "agent-tui-file-transcript-"));
   const store = createFileTranscriptStore(root);

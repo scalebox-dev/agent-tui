@@ -537,8 +537,7 @@ function focusPanel(
     selectionAnchor: focusedPanel === "input" ? state.selectionAnchor : null,
   };
   if (focusedPanel === "transcript") {
-    const preferred = renderModel.transcript.endLine ? renderModel.transcript.endLine - 1 : 0;
-    return setTranscriptCursor(next, renderModel, next.transcriptCursor.line || preferred, next.transcriptCursor.column, false);
+    return focusTranscriptWithoutScrolling(next, renderModel);
   }
   if (focusedPanel === "activity") {
     return setActivityCursor(next, renderModel, next.activityCursor.line, next.activityCursor.column, false);
@@ -556,6 +555,26 @@ function focusPanel(
     return setWorkdirCursor(next, renderModel, next.workdirCursor.line, next.workdirCursor.column, false);
   }
   return next;
+}
+
+function focusTranscriptWithoutScrolling(
+  state: WorkbenchTerminalState,
+  renderModel: WorkbenchRenderModel,
+): WorkbenchTerminalState {
+  const start = Math.max(0, renderModel.transcript.startLine - 1);
+  const end = Math.max(start, renderModel.transcript.endLine - 1);
+  const current = state.transcriptCursor.line;
+  const line = current >= start && current <= end ? current : end;
+  return {
+    ...state,
+    transcriptCursor: normalizePanelPosition(
+      { line, column: state.transcriptCursor.column },
+      Math.max(0, renderModel.transcript.totalLines - 1),
+      (nextLine) => transcriptLineText(renderModel, nextLine),
+    ),
+    transcriptSelectionAnchor: null,
+    transcriptOffset: clamp(state.transcriptOffset, 0, renderModel.transcript.maxOffset),
+  };
 }
 
 function scrollTranscript(

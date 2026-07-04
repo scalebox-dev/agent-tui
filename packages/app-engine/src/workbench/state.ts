@@ -70,10 +70,11 @@ export interface PendingUpdate {
 
 export type RenderMode = "markdown" | "raw";
 export type WorkbenchCopyTarget = "page" | "transcript" | "activity" | "conversation" | "header" | "workspace" | "workdir";
-const maxWorkbenchMessages = 200;
-const maxWorkbenchMessageCharacters = 256_000;
+const maxTranscriptWindowMessages = 80;
+const maxTranscriptWindowMessageCharacters = 64_000;
 
 export interface WorkbenchState {
+  /** Bounded transcript viewport buffer. Full transcript bodies live in WorkbenchTranscriptStore. */
   messages: WorkbenchMessage[];
   activities: WorkbenchActivity[];
   busy: boolean;
@@ -310,7 +311,7 @@ export function workbenchReducer(state: WorkbenchState, action: WorkbenchAction)
     case "messages.prepend":
       return {
         ...state,
-        messages: [...action.messages.map(normalizeStoredMessage), ...state.messages].slice(0, maxWorkbenchMessages),
+        messages: [...action.messages.map(normalizeStoredMessage), ...state.messages].slice(0, maxTranscriptWindowMessages),
       };
     case "messages.appendPage":
       return {
@@ -752,10 +753,10 @@ export function formatTranscript(messages: WorkbenchMessage[]) {
 export function formatTranscriptPreview(messages: WorkbenchMessage[], maxLines = 80) {
   const lines = formatTranscript(messages).trimEnd().split(/\r?\n/);
   if (lines.length <= maxLines) {
-    return ["Transcript preview:", "", ...lines].join("\n");
+    return ["Transcript preview: visible window", "", ...lines].join("\n");
   }
   return [
-    `Transcript preview: showing last ${maxLines} lines of ${lines.length}. Use /export [file] for the full transcript.`,
+    `Transcript preview: showing last ${maxLines} lines of ${lines.length} visible-window lines. Use /export [file] for the full persisted transcript.`,
     "",
     ...lines.slice(-maxLines),
   ].join("\n");
@@ -794,14 +795,14 @@ function normalizeStoredMessage(message: WorkbenchMessage): WorkbenchMessage {
 }
 
 function limitMessages(messages: WorkbenchMessage[]) {
-  if (messages.length <= maxWorkbenchMessages) return messages;
-  return messages.slice(-maxWorkbenchMessages);
+  if (messages.length <= maxTranscriptWindowMessages) return messages;
+  return messages.slice(-maxTranscriptWindowMessages);
 }
 
 function limitMessageText(text: string) {
-  if (text.length <= maxWorkbenchMessageCharacters) return text;
+  if (text.length <= maxTranscriptWindowMessageCharacters) return text;
   const marker = "\n\n[Earlier local transcript text trimmed from the live view; use /export for persisted history.]\n\n";
-  return `${marker}${text.slice(-(maxWorkbenchMessageCharacters - marker.length))}`;
+  return `${marker}${text.slice(-(maxTranscriptWindowMessageCharacters - marker.length))}`;
 }
 
 function roleLabel(role: WorkbenchRole) {

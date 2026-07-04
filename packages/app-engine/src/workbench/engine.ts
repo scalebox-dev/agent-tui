@@ -532,10 +532,7 @@ async function persistTranscriptAction(
       return;
     }
     if (action.type === "message.append") {
-      const message = state.messages.find((item) => item.id === action.id);
-      if (message && shouldPersistTranscriptMessage(message)) {
-        await store.appendMessageDelta(state.conversationId, action.id, action.delta);
-      }
+      await store.appendMessageDelta(state.conversationId, action.id, action.delta);
     }
   } catch (error) {
     dispatch({
