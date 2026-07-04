@@ -168,7 +168,7 @@ export function buildWorkbenchRenderModel(input: BuildWorkbenchRenderModelInput)
   const headerLines = [
     "Agent API Workbench",
     `profile=${header.profile} workspace=${header.workspace} conversation=${header.conversation} id=${header.conversationId}`,
-    `conversation_state=${header.conversationStatus}${header.conversationPreviousResponseId ? ` previous=${header.conversationPreviousResponseId}` : ""}`,
+    `conversation_state=${header.conversationStatus}${header.conversationPreviousResponseId ? ` previous=${header.conversationPreviousResponseId}` : ""} preset=${header.preset} model=${header.model}`,
     `workdir=${header.workdir} access=${header.accessMode} local_tools=${header.contextEnabled ? "on" : "off"} render=${header.renderMode} pending=${header.pendingLocalLabel}`,
   ];
   const conversationItems = input.state.conversationSummaries.slice(0, 8).map((conversation) => ({
@@ -280,10 +280,10 @@ function conversationPanelLines(
   if (state.conversationSummaries.length > 0) {
     return state.conversationSummaries.slice(0, 8).map((conversation) => {
       const current = conversation.id === state.conversationId || conversation.name === state.currentConversation;
-      const snippet = conversation.latestSnippet || conversation.titleSnippet || "New conversation";
+      const snippet = conversation.latestSnippet || conversation.titleSnippet;
       const count = conversation.messageCount > 0 ? ` · ${conversation.messageCount}` : "";
       const settings = current ? conversationSettingsLabel(state) : "";
-      return `${current ? "*" : " "} ${shortId(conversation.id)} ${snippet}${count}${settings}`;
+      return `${current ? "*" : " "} ${conversation.name}${snippet ? ` · ${snippet}` : " · empty"}${count}${settings}`;
     });
   }
   return [
