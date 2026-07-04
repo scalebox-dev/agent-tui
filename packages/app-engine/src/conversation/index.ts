@@ -1,4 +1,4 @@
-import type { ConversationState } from "../config.js";
+import type { ConversationRunSettings, ConversationState } from "../config.js";
 import {
   activeProfile,
   createConversationID,
@@ -32,6 +32,7 @@ export async function updateConversation(options: {
   conversation?: string;
   workspaceId?: string;
   workspaceName?: string;
+  runSettings?: ConversationRunSettings;
 }, responseID: string) {
   if (!options.conversation) return;
   const profile = await activeProfile(options.profile);
@@ -46,8 +47,28 @@ export async function updateConversation(options: {
     workspaceId: options.workspaceId,
     workspaceName: options.workspaceName,
     previousResponseId: responseID,
+    runSettings: options.runSettings ?? existing?.runSettings,
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
+  };
+  await saveConversationConfiguration(config);
+}
+
+export async function updateConversationRunSettings(options: {
+  profile?: string;
+  conversation?: string;
+  workspaceId?: string;
+}, runSettings: ConversationRunSettings) {
+  if (!options.conversation) return;
+  const profile = await activeProfile(options.profile);
+  const config = await loadConversationConfiguration();
+  const key = conversationKey(profile.name, options.conversation, options.workspaceId);
+  const existing = config.conversations[key];
+  if (!existing) return;
+  config.conversations[key] = {
+    ...existing,
+    runSettings,
+    updatedAt: Math.floor(Date.now() / 1000),
   };
   await saveConversationConfiguration(config);
 }

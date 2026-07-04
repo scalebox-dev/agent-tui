@@ -125,6 +125,7 @@ function stubConversationController() {
     async listConversations() {
       return "No conversations.";
     },
+    async updateRunSettings() {},
     async exportTranscript() {
       return "/tmp/transcript.txt";
     },
@@ -366,6 +367,13 @@ test("agent engine restores latest saved conversation when conversation is impli
             id: name === "latest" ? "conv_latest" : "conv_default",
             name,
             previousResponseId: "resp_latest",
+            runSettings: {
+              accessMode: "full",
+              memoryRead: true,
+              model: "provider/saved",
+              preset: "saved-preset",
+              workspaceSkillsEnabled: true,
+            },
             status: "continued",
             message: "Continuing.",
           };
@@ -422,6 +430,11 @@ test("agent engine restores latest saved conversation when conversation is impli
   assert.equal(resolvedName, "latest");
   assert.equal(app.snapshot().currentConversation, "latest");
   assert.equal(app.snapshot().conversationId, "conv_latest");
+  assert.equal(app.snapshot().accessMode, "full");
+  assert.equal(app.snapshot().memoryRead, true);
+  assert.equal(app.snapshot().runModel, "provider/saved");
+  assert.equal(app.snapshot().runPreset, "saved-preset");
+  assert.equal(app.snapshot().workspaceSkillsEnabled, true);
   assert.deepEqual(loadedTranscripts, ["conv_latest"]);
   assert.equal(app.snapshot().messages.some((message) => message.text === "latest transcript"), true);
   app.dispose();
@@ -1527,9 +1540,16 @@ test("workbench runtime controller buffers and flushes text deltas", () => {
 
 test("workbench command controller applies renderer-neutral preset commands", async () => {
   const engine = createWorkbenchEngine({ contextEnabled: false });
+  const runSettingsUpdates = [];
+  engine.dispatch({ type: "conversation.set", id: "conv_default", name: "default", status: "fresh" });
   const controller = createWorkbenchCommandController({
     authController: stubAuthController(),
-    conversationController: stubConversationController(),
+    conversationController: {
+      ...stubConversationController(),
+      async updateRunSettings(name, runSettings, profile, workspaceId) {
+        runSettingsUpdates.push({ name, runSettings, profile, workspaceId });
+      },
+    },
     engine,
     localController: stubLocalController(),
     options: { promptParts: [], profile: "default" },
@@ -1562,6 +1582,9 @@ test("workbench command controller applies renderer-neutral preset commands", as
   await controller.run({ kind: "preset", value: "analysis" });
   assert.equal(engine.snapshot().runPreset, "analysis");
   assert.match(engine.snapshot().messages.at(-1).text, /Preset set to analysis/);
+  assert.equal(runSettingsUpdates.at(-1).name, "default");
+  assert.equal(runSettingsUpdates.at(-1).profile, "default");
+  assert.equal(runSettingsUpdates.at(-1).runSettings.preset, "analysis");
 
   await controller.run({ kind: "preset", value: "missing" });
   assert.equal(engine.snapshot().runPreset, "analysis");

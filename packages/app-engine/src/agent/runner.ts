@@ -36,6 +36,7 @@ import { runtime } from "../runtime/index.js";
 import { buildWorkdirContextBlock, openWorkdir } from "../workdir/index.js";
 import { localShellIsolationOptions } from "../workbench/shell-isolation.js";
 import type { ShellIsolationPreferences } from "../workbench/shell-isolation.js";
+import type { ConversationRunSettings } from "../config.js";
 
 export interface AgentRunOptions {
   profile?: string;
@@ -225,13 +226,13 @@ export async function runAgentTurn(options: AgentRunOptions, onEvent?: (event: A
       }
     }
     if (finalResponseID) {
-      await updateConversation(options, finalResponseID);
+      await persistConversation(options, finalResponseID);
     }
     return { text, responseID: finalResponseID || undefined };
   }
 
   const response = await runtimeProfile.client.agent.create({ ...params, stream: false }, requestAbortOptions(options.abortSignal));
-  await updateConversation(options, response.id);
+  await persistConversation(options, response.id);
   return { text: response.output_text || "", responseID: response.id };
 }
 
@@ -390,7 +391,7 @@ async function runAgentTurnWithLocalTools(
         responseID: continuationResponseID,
       };
       onEvent?.({ type: "automatic_continuation.paused", ...pause });
-      await updateConversation(options, continuationResponseID);
+      await persistConversation(options, continuationResponseID);
       return {
         text: message,
         responseID: continuationResponseID,
@@ -430,7 +431,7 @@ async function runAgentTurnWithLocalTools(
       if (initialParams.stream === false) {
         onEvent?.({ type: "response.completed", responseID: response.id });
       }
-      await updateConversation(options, response.id);
+      await persistConversation(options, response.id);
       return { text: response.output_text || "", responseID: response.id };
     }
 
@@ -445,7 +446,7 @@ async function runAgentTurnWithLocalTools(
       if (initialParams.stream === false) {
         onEvent?.({ type: "response.completed", responseID: response.id });
       }
-      await updateConversation(options, response.id);
+      await persistConversation(options, response.id);
       return {
         text: message,
         responseID: response.id,
@@ -474,6 +475,28 @@ function automaticContinuationPauseMessage(count: number, limit: number, respons
 function isAutomaticContinuationInput(input: Input, previousResponseID: string | undefined) {
   if (!previousResponseID || !Array.isArray(input)) return false;
   return input.some((item) => item && typeof item === "object" && "type" in item && item.type === "function_call_output");
+}
+
+async function persistConversation(options: AgentRunOptions, responseID: string) {
+  await updateConversation({
+    ...options,
+    runSettings: conversationRunSettingsFromOptions(options),
+  }, responseID);
+}
+
+function conversationRunSettingsFromOptions(options: AgentRunOptions): ConversationRunSettings {
+  return {
+    accessMode: options.accessMode,
+    automaticContinuationLimit: options.automaticContinuationLimit ?? null,
+    contextEnabled: Boolean(options.includeLocalContext),
+    localSkillsEnabled: options.discoverLocalSkills !== false,
+    memoryRead: Boolean(options.memory?.read || options.memory?.enabled || options.memory?.tenant_search),
+    memoryTenantSearch: Boolean(options.memory?.tenant_search),
+    memoryWrite: Boolean(options.memory?.write),
+    model: options.model || null,
+    preset: options.preset || null,
+    workspaceSkillsEnabled: Boolean(options.skillTool?.tenant_search),
+  };
 }
 
 async function createAgentResponseWithOptionalStream(

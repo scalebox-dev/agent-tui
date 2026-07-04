@@ -45,6 +45,7 @@ export type { AgentEngineServices } from "./engine/services.js";
 export { defaultBaseURL } from "./config.js";
 export type {
   AuthProfile,
+  ConversationRunSettings,
   ConversationState,
   Profile,
   WorkbenchPreferences,

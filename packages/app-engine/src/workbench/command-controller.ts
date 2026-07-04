@@ -1,4 +1,5 @@
 import type { AgentRunOptions } from "../agent.js";
+import type { ConversationRunSettings } from "../config.js";
 import type { WorkbenchCommand } from "./state.js";
 import { checkForUpdate, formatUpdateNotice, installUpdate, type UpdateCheckResult, type UpdateInstallResult } from "../update.js";
 import type { WorkbenchAuthController } from "./auth-controller.js";
@@ -48,6 +49,7 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
       const commandResult = options.engine.handleCommand(command);
       if (commandResult.handled) {
         await runEffects(commandResult.effects);
+        if (handledCommandUpdatesRunSettings(command)) await persistCurrentRunSettings();
         return;
       }
       switch (command.kind) {
@@ -196,6 +198,7 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
           text: settings.message,
         });
         dispatch({ type: "activity.add", level: "success", text: settings.activity });
+        await persistCurrentRunSettings();
       } catch (error) {
         if (error instanceof UnknownPresetError) {
           dispatch({
@@ -225,6 +228,7 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
         dispatch({ type: "settings.set", settings: { automaticContinuationLimit: settings.automaticContinuationLimit } });
         dispatch({ type: "message.add", role: "system", text: settings.message });
         dispatch({ type: "activity.add", level: "success", text: settings.activity });
+        await persistCurrentRunSettings();
       } catch (error) {
         dispatch({ type: "message.add", role: "system", text: `Could not save automatic continuation limit: ${userFacingError(error)}` });
         dispatch({ type: "activity.add", level: "error", text: "Automatic continuation limit save failed" });
@@ -297,6 +301,7 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
     dispatch({ type: "settings.set", settings: { runPreset: normalized } });
     dispatch({ type: "message.add", role: "system", text: `Preset set to ${normalized || "none"}.` });
     dispatch({ type: "activity.add", text: `Preset: ${normalized || "none"}` });
+    await persistCurrentRunSettings();
   }
 
   async function validatePresetName(preset: string) {
@@ -387,8 +392,10 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
       id: conversation.id,
       name: conversation.name,
       previousResponseId: conversation.previousResponseId,
+      runSettings: conversation.runSettings,
       status: conversation.status,
     });
+    await persistCurrentRunSettings();
     dispatch({
       type: "message.add",
       role: "system",
@@ -411,6 +418,7 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
       id: conversation.id,
       name: conversation.name,
       previousResponseId: conversation.previousResponseId,
+      runSettings: conversation.runSettings,
       status: conversation.status,
     });
     dispatch({
@@ -442,6 +450,7 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
         id: conversation.id,
         name: conversation.name,
         previousResponseId: conversation.previousResponseId,
+        runSettings: conversation.runSettings,
         status: conversation.status,
       });
       dispatch({ type: "message.add", role: "system", text: conversation.message });
@@ -479,6 +488,7 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
           id: next.id,
           name: next.name,
           previousResponseId: next.previousResponseId,
+          runSettings: next.runSettings,
           status: next.status,
         });
         dispatch({
@@ -572,6 +582,7 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
         id: conversation.id,
         name: conversation.name,
         previousResponseId: conversation.previousResponseId,
+        runSettings: conversation.runSettings,
         status: conversation.status,
       });
       dispatch({
@@ -615,6 +626,42 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
         text: userFacingError(error),
       });
     }
+  }
+
+  async function persistCurrentRunSettings() {
+    const state = options.engine.snapshot();
+    if (!state.conversationId) return;
+    await options.conversationController.updateRunSettings(
+      state.currentConversation,
+      conversationRunSettingsFromState(state),
+      options.options.profile,
+      state.currentWorkspaceId,
+    );
+  }
+
+  function handledCommandUpdatesRunSettings(command: WorkbenchCommand) {
+    if (command.kind === "access") return Boolean(command.mode);
+    if (command.kind === "context") return true;
+    if (command.kind === "memory") return Boolean(command.field) || command.enabled === false;
+    if (command.kind === "model") return Boolean(command.value);
+    if (command.kind === "skills") return Boolean(command.field) || command.enabled !== undefined;
+    if (command.kind === "workdir") return command.enabled !== undefined;
+    return false;
+  }
+
+  function conversationRunSettingsFromState(state: ReturnType<WorkbenchEngine["snapshot"]>): ConversationRunSettings {
+    return {
+      accessMode: state.accessMode,
+      automaticContinuationLimit: state.automaticContinuationLimit ?? null,
+      contextEnabled: state.contextEnabled,
+      localSkillsEnabled: state.localSkillsEnabled,
+      memoryRead: state.memoryRead,
+      memoryTenantSearch: state.memoryTenantSearch,
+      memoryWrite: state.memoryWrite,
+      model: state.runModel || null,
+      preset: state.runPreset || null,
+      workspaceSkillsEnabled: state.workspaceSkillsEnabled,
+    };
   }
 
   function showEditPreview() {

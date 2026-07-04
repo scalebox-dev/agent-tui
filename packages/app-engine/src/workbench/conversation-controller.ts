@@ -7,8 +7,10 @@ import {
   listConversations,
   renameConversation,
   startFreshConversation,
+  updateConversationRunSettings,
 } from "../agent.js";
 import { runtime } from "../runtime/index.js";
+import type { ConversationRunSettings } from "../config.js";
 
 export interface WorkbenchConversationController {
   resolveConversation(name: string, profileName?: string, workspaceId?: string, workspaceName?: string): Promise<ConversationSelection>;
@@ -18,6 +20,7 @@ export interface WorkbenchConversationController {
   deleteConversation(name: string, profileName?: string, workspaceId?: string): Promise<ConversationDeletion>;
   listConversationSelections(profileName?: string, workspaceId?: string): Promise<ConversationSelection[]>;
   listConversations(profileName?: string, query?: string, workspaceId?: string): Promise<string>;
+  updateRunSettings(name: string, runSettings: ConversationRunSettings, profileName?: string, workspaceId?: string): Promise<void>;
   exportTranscript(input: { path?: string; transcript: string; conversation: string }): Promise<string>;
 }
 
@@ -27,6 +30,7 @@ export interface ConversationSelection {
   name: string;
   previousResponseId?: string;
   profile?: string;
+  runSettings?: ConversationRunSettings;
   status: "fresh" | "continued";
   updatedAt?: number;
   workspaceId?: string;
@@ -49,6 +53,7 @@ export interface WorkbenchConversationControllerOptions {
   ensureConversationImpl?: typeof ensureConversation;
   renameConversationImpl?: typeof renameConversation;
   startFreshConversationImpl?: typeof startFreshConversation;
+  updateConversationRunSettingsImpl?: typeof updateConversationRunSettings;
 }
 
 export function createWorkbenchConversationController(
@@ -59,6 +64,7 @@ export function createWorkbenchConversationController(
   const ensureConversationImpl = options.ensureConversationImpl ?? ensureConversation;
   const renameConversationImpl = options.renameConversationImpl ?? renameConversation;
   const startFreshConversationImpl = options.startFreshConversationImpl ?? startFreshConversation;
+  const updateConversationRunSettingsImpl = options.updateConversationRunSettingsImpl ?? updateConversationRunSettings;
   const mkdirImpl = options.mkdirImpl ?? mkdir;
   const writeFileImpl = options.writeFileImpl ?? writeFile;
   const now = options.now ?? (() => new Date());
@@ -117,6 +123,10 @@ export function createWorkbenchConversationController(
       return conversations.map((conversation) => conversationSelection(conversation, ""));
     },
 
+    async updateRunSettings(name, runSettings, profileName, workspaceId) {
+      await updateConversationRunSettingsImpl({ conversation: name, profile: profileName, workspaceId }, runSettings);
+    },
+
     async exportTranscript(input) {
       const file = input.path?.trim()
         ? path.resolve(process.cwd(), input.path.trim())
@@ -163,6 +173,7 @@ function conversationSelection(
     name: string;
     previousResponseId?: string;
     profile?: string;
+    runSettings?: ConversationRunSettings;
     updatedAt?: number;
     workspaceId?: string;
     workspaceName?: string;
@@ -179,6 +190,7 @@ function conversationSelection(
     message,
   };
   if (conversation.previousResponseId) selection.previousResponseId = conversation.previousResponseId;
+  if (conversation.runSettings) selection.runSettings = conversation.runSettings;
   if (conversation.workspaceId) selection.workspaceId = conversation.workspaceId;
   if (conversation.workspaceName) selection.workspaceName = conversation.workspaceName;
   return selection;

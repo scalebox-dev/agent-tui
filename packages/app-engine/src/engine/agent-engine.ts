@@ -115,6 +115,7 @@ export function createAgentEngine(options: AgentEngineAppOptions): AgentEngineAp
         id: conversation.id,
         name: conversation.name,
         previousResponseId: conversation.previousResponseId,
+        runSettings: initialConversationRunSettings(conversation),
         status: conversation.status,
       });
       if (options.services?.transcriptStore) {
@@ -331,6 +332,18 @@ export function createAgentEngine(options: AgentEngineAppOptions): AgentEngineAp
       state.currentWorkspaceId,
     );
     return conversations[0]?.name || state.currentConversation;
+  }
+
+  function initialConversationRunSettings(conversation: ConversationSelection) {
+    if (!conversation.runSettings) return undefined;
+    const runSettings = { ...conversation.runSettings };
+    if (options.baseOptions.modelExplicit) {
+      delete runSettings.model;
+      delete runSettings.preset;
+    } else if (options.baseOptions.presetExplicit) {
+      delete runSettings.preset;
+    }
+    return runSettings;
   }
 
   return {

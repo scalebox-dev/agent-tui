@@ -41,8 +41,22 @@ export interface ConversationState {
   workspaceId?: string;
   workspaceName?: string;
   previousResponseId?: string;
+  runSettings?: ConversationRunSettings;
   createdAt: number;
   updatedAt: number;
+}
+
+export interface ConversationRunSettings {
+  accessMode?: "off" | "approval" | "full";
+  automaticContinuationLimit?: number | null;
+  contextEnabled?: boolean;
+  localSkillsEnabled?: boolean;
+  memoryRead?: boolean;
+  memoryTenantSearch?: boolean;
+  memoryWrite?: boolean;
+  model?: string | null;
+  preset?: string | null;
+  workspaceSkillsEnabled?: boolean;
 }
 
 export interface WorkbenchPreferences {
@@ -80,6 +94,18 @@ const conversationSchema = z.object({
   workspaceId: z.string().optional(),
   workspaceName: z.string().optional(),
   previousResponseId: z.string().optional(),
+  runSettings: z.object({
+    accessMode: z.enum(["off", "approval", "full"]).optional(),
+    automaticContinuationLimit: z.number().int().min(0).nullable().optional(),
+    contextEnabled: z.boolean().optional(),
+    localSkillsEnabled: z.boolean().optional(),
+    memoryRead: z.boolean().optional(),
+    memoryTenantSearch: z.boolean().optional(),
+    memoryWrite: z.boolean().optional(),
+    model: z.string().nullable().optional(),
+    preset: z.string().nullable().optional(),
+    workspaceSkillsEnabled: z.boolean().optional(),
+  }).optional(),
   createdAt: z.number().optional(),
   updatedAt: z.number(),
 });
@@ -232,6 +258,7 @@ function normalizeConversationConfiguration(config: {
       workspaceId: conversation.workspaceId,
       workspaceName: conversation.workspaceName,
       previousResponseId: conversation.previousResponseId,
+      runSettings: conversation.runSettings,
       createdAt,
       updatedAt: conversation.updatedAt,
     };

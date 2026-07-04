@@ -31,4 +31,5 @@ export {
   listConversations,
   renameConversation,
   startFreshConversation,
+  updateConversationRunSettings,
 } from "./conversation/index.js";

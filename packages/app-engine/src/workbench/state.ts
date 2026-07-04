@@ -1,4 +1,5 @@
 import type { AutomaticContinuationPause, LocalToolApprovalRequest, WorkdirAccessMode } from "../agent.js";
+import type { ConversationRunSettings } from "../config.js";
 import type { UpdateCheckResult } from "../update.js";
 import type { ShellIsolationPreferences } from "../workbench/shell-isolation.js";
 
@@ -137,7 +138,7 @@ export type WorkbenchAction =
   | { type: "update.pending.set"; result: UpdateCheckResult }
   | { type: "update.pending.clear" }
   | { type: "access.set"; mode: WorkdirAccessMode }
-  | { type: "conversation.set"; id?: string; name: string; previousResponseId?: string; status?: "fresh" | "continued" | "unknown" }
+  | { type: "conversation.set"; id?: string; name: string; previousResponseId?: string; runSettings?: ConversationRunSettings; status?: "fresh" | "continued" | "unknown" }
   | { type: "conversations.set"; conversations: WorkbenchConversationSummary[] }
   | { type: "workspace.set"; workspace: { authType?: "api_key" | "browser"; id: string; name: string; role?: string; switchable?: boolean } }
   | { type: "workspaces.set"; workspaces: WorkbenchWorkspaceSummary[] }
@@ -426,6 +427,7 @@ export function workbenchReducer(state: WorkbenchState, action: WorkbenchAction)
         currentConversation: action.name,
         conversationPreviousResponseId: action.previousResponseId,
         conversationStatus: action.status ?? (action.previousResponseId ? "continued" : "fresh"),
+        ...stateFromConversationRunSettings(action.runSettings),
         automaticContinuationUnlocked: false,
         activities: [...state.activities, newActivity("info", conversationActivityText(action))].slice(-20),
       };
@@ -456,6 +458,22 @@ export function workbenchReducer(state: WorkbenchState, action: WorkbenchAction)
     default:
       return state;
   }
+}
+
+function stateFromConversationRunSettings(runSettings?: ConversationRunSettings): Partial<WorkbenchState> {
+  if (!runSettings) return {};
+  const state: Partial<WorkbenchState> = {};
+  if (runSettings.accessMode) state.accessMode = runSettings.accessMode;
+  if ("automaticContinuationLimit" in runSettings) state.automaticContinuationLimit = runSettings.automaticContinuationLimit;
+  if (typeof runSettings.contextEnabled === "boolean") state.contextEnabled = runSettings.contextEnabled;
+  if (typeof runSettings.localSkillsEnabled === "boolean") state.localSkillsEnabled = runSettings.localSkillsEnabled;
+  if (typeof runSettings.memoryRead === "boolean") state.memoryRead = runSettings.memoryRead;
+  if (typeof runSettings.memoryTenantSearch === "boolean") state.memoryTenantSearch = runSettings.memoryTenantSearch;
+  if (typeof runSettings.memoryWrite === "boolean") state.memoryWrite = runSettings.memoryWrite;
+  if ("model" in runSettings) state.runModel = runSettings.model || undefined;
+  if ("preset" in runSettings) state.runPreset = runSettings.preset || undefined;
+  if (typeof runSettings.workspaceSkillsEnabled === "boolean") state.workspaceSkillsEnabled = runSettings.workspaceSkillsEnabled;
+  return state;
 }
 
 function conversationActivityText(action: Extract<WorkbenchAction, { type: "conversation.set" }>) {
