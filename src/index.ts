@@ -32,6 +32,7 @@ import {
   useProfile,
 } from "@agent-api/app-engine/core";
 import { ChatApp } from "./tui/chat.js";
+import { startEngineHost } from "./engine-host.js";
 import { cliAuthor, cliName, cliVersion, legacyCliName } from "./runtime.js";
 
 configureAgentAppRuntime({
@@ -167,6 +168,11 @@ program
     }, null, 2));
   });
 
+program
+  .command("engine")
+  .description("Low-level app-engine integration commands")
+  .addCommand(engineHostCommand());
+
 program.addHelpCommand("help [command]", "Display help for command");
 program.exitOverride();
 
@@ -240,6 +246,27 @@ function authLoginCommand() {
         baseURL: options.baseUrl,
         openBrowser: options.browser,
         clientName: options.clientName,
+      });
+    });
+}
+
+function engineHostCommand() {
+  return new Command("host")
+    .description("Run an Agent Engine Protocol host over newline-delimited JSON on stdio")
+    .option("-p, --profile <name>", "profile name")
+    .option("-w, --workdir <path>", "local workdir to open and expose to the agent")
+    .option("--conversation <name>", "conversation name", "default")
+    .option("--preset <name>", "agent preset")
+    .option("--model <name>", "model name")
+    .option("--access <mode>", "local workdir access mode: off, approval, or full")
+    .action(async (options) => {
+      startEngineHost({
+        profile: options.profile,
+        workdir: options.workdir ? await validateLaunchWorkdir(options.workdir) : undefined,
+        conversation: options.conversation,
+        preset: options.preset,
+        model: options.model,
+        access: options.access,
       });
     });
 }

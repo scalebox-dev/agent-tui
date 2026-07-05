@@ -68,6 +68,16 @@ The root `@agent-api/app-engine` entry is intentionally empty. Use an explicit s
 - Storage APIs are optional adapters. Host apps can use built-ins or provide their own implementation.
 - Renderers own widgets, native input controls, layout, keyboard mapping, and screen drawing.
 
+## External Renderers
+
+External renderers can integrate without importing terminal code by using the Agent Engine Protocol. The CLI exposes a low-level stdio host:
+
+```bash
+agent-tui engine host --profile default --workdir .
+```
+
+The host speaks newline-delimited JSON request/response/event envelopes over stdin/stdout. See [`docs/agent-engine-protocol.md`](docs/agent-engine-protocol.md) for the protocol, lifecycle, and renderer responsibilities.
+
 ## Local Development
 
 ```bash

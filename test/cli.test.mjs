@@ -3,16 +3,22 @@ import { createHash } from "node:crypto";
 import { chmod, mkdir, mkdtemp, readFile, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
+import { PassThrough } from "node:stream";
 import { promisify } from "node:util";
 import test from "node:test";
 import {
+  bindLineDelimitedAgentEngineRpcHandler,
   agentResponseFailureMessage,
   agentTurnEventFromStreamEvent,
   clearPresetToolCatalogCache,
   compareVersions,
   configureAgentAppRuntime,
   createAgentEngine,
+  createAgentEngineRpcClient,
+  createAgentEngineRpcHandler,
+  createInProcessAgentEngineClient,
+  createLineDelimitedAgentEngineRpcTransport,
   formatUpdateNotice,
   listProfileWorkspaces,
   loadConfig,
@@ -91,6 +97,30 @@ function isolatedEnv(root) {
     XDG_CONFIG_HOME: join(root, ".config"),
     XDG_DATA_HOME: join(root, ".local", "share"),
     XDG_CACHE_HOME: join(root, ".cache"),
+  };
+}
+
+function lineReader(stream) {
+  stream.setEncoding("utf8");
+  const lines = [];
+  const waiters = [];
+  let buffer = "";
+  stream.on("data", (chunk) => {
+    buffer += chunk;
+    while (true) {
+      const index = buffer.indexOf("\n");
+      if (index === -1) break;
+      const line = buffer.slice(0, index);
+      buffer = buffer.slice(index + 1);
+      const waiter = waiters.shift();
+      if (waiter) waiter(line);
+      else lines.push(line);
+    }
+  });
+  return () => {
+    const line = lines.shift();
+    if (line !== undefined) return Promise.resolve(line);
+    return new Promise((resolve) => waiters.push(resolve));
   };
 }
 
@@ -219,6 +249,9 @@ test("api-key login creates and selects profiles in isolated config", async () =
 
 test("agent engine boundary exports reusable workbench primitives", () => {
   assert.equal(typeof createAgentEngine, "function");
+  assert.equal(typeof createInProcessAgentEngineClient, "function");
+  assert.equal(typeof createAgentEngineRpcClient, "function");
+  assert.equal(typeof createAgentEngineRpcHandler, "function");
   assert.equal(createWorkbenchEngineFromBoundary, createWorkbenchEngine);
   assert.equal(createWorkbenchSessionFromBoundary, createWorkbenchSession);
   assert.equal(localShellIsolationOptionsFromBoundary, localShellIsolationOptions);
@@ -345,6 +378,145 @@ test("agent engine facade submits prompts and commands without renderer dependen
   await app.submit("/quit");
   assert.equal(exited, true);
   app.dispose();
+});
+
+test("agent engine RPC handler drives the in-process client boundary", async () => {
+  const client = createInProcessAgentEngineClient({
+    authController: stubAuthController(),
+    baseOptions: { accessMode: "off", conversation: "default", promptParts: [] },
+    profileName: "default",
+    services: {
+      workspace: stubWorkspaceController(),
+    },
+    async onDeleteProfile() {},
+    onExit() {},
+    onLogin() {},
+    onLogout() {},
+    onSwitchProfile() {},
+  });
+  const handler = createAgentEngineRpcHandler(client);
+  const events = [];
+  const unsubscribe = handler.subscribe((event) => events.push(event));
+
+  const dispatchResponse = await handler.handle({
+    id: 1,
+    method: "dispatch",
+    params: { action: { type: "activity.add", level: "success", text: "RPC activity" } },
+  });
+  assert.deepEqual(dispatchResponse, { id: 1, ok: true, result: null });
+  assert.equal(handler.snapshot().activities.at(-1)?.text, "RPC activity");
+  assert.equal(events.at(-1)?.type, "state");
+
+  const snapshotResponse = await handler.handle({ id: "snapshot", method: "snapshot" });
+  assert.equal(snapshotResponse.ok, true);
+  assert.equal(snapshotResponse.id, "snapshot");
+  assert.equal(snapshotResponse.result.activities.at(-1)?.text, "RPC activity");
+
+  const invalidResponse = await handler.handle({ id: 2, method: "submit", params: {} });
+  assert.equal(invalidResponse.ok, false);
+  assert.match(invalidResponse.error.message, /Missing RPC parameter: input/);
+
+  unsubscribe();
+  client.dispose();
+});
+
+test("agent engine RPC client consumes a transport-backed state stream", async () => {
+  const inProcessClient = createInProcessAgentEngineClient({
+    authController: stubAuthController(),
+    baseOptions: { accessMode: "off", conversation: "default", promptParts: [] },
+    profileName: "default",
+    services: {
+      workspace: stubWorkspaceController(),
+    },
+    async onDeleteProfile() {},
+    onExit() {},
+    onLogin() {},
+    onLogout() {},
+    onSwitchProfile() {},
+  });
+  const handler = createAgentEngineRpcHandler(inProcessClient);
+  const transportListeners = new Set();
+  const unsubscribeHandler = handler.subscribe((event) => {
+    for (const listener of transportListeners) listener(event);
+  });
+  let nextId = 1;
+  const transport = {
+    async request(method, params) {
+      const response = await handler.handle({ id: nextId++, method, params });
+      if (!response.ok) throw new Error(response.error.message);
+      return response.result;
+    },
+    subscribe(listener) {
+      transportListeners.add(listener);
+      return () => transportListeners.delete(listener);
+    },
+    dispose() {
+      unsubscribeHandler();
+    },
+  };
+  const rpcClient = createAgentEngineRpcClient(transport, handler.snapshot());
+  const updates = [];
+  const unsubscribeClient = rpcClient.subscribe(() => updates.push(rpcClient.snapshot()));
+
+  await rpcClient.dispatch({ type: "activity.add", level: "success", text: "Transport activity" });
+  assert.equal(rpcClient.snapshot().activities.at(-1)?.text, "Transport activity");
+  assert.equal(updates.at(-1)?.activities.at(-1)?.text, "Transport activity");
+
+  await assert.rejects(
+    () => rpcClient.submit(42),
+    /Invalid RPC parameter: input/,
+  );
+
+  unsubscribeClient();
+  rpcClient.dispose();
+  inProcessClient.dispose();
+});
+
+test("agent engine line transport carries requests, responses, and state events", async () => {
+  const inProcessClient = createInProcessAgentEngineClient({
+    authController: stubAuthController(),
+    baseOptions: { accessMode: "off", conversation: "default", promptParts: [] },
+    profileName: "default",
+    services: {
+      workspace: stubWorkspaceController(),
+    },
+    async onDeleteProfile() {},
+    onExit() {},
+    onLogin() {},
+    onLogout() {},
+    onSwitchProfile() {},
+  });
+  const handler = createAgentEngineRpcHandler(inProcessClient);
+  const clientToHost = new PassThrough();
+  const hostToClient = new PassThrough();
+  const errors = [];
+  const connection = bindLineDelimitedAgentEngineRpcHandler(handler, {
+    input: clientToHost,
+    output: hostToClient,
+    onError(error) {
+      errors.push(error);
+    },
+  });
+  const transport = createLineDelimitedAgentEngineRpcTransport({
+    input: hostToClient,
+    output: clientToHost,
+    onError(error) {
+      errors.push(error);
+    },
+  });
+  const rpcClient = createAgentEngineRpcClient(transport, handler.snapshot());
+  const updates = [];
+  const unsubscribe = rpcClient.subscribe(() => updates.push(rpcClient.snapshot()));
+
+  await rpcClient.dispatch({ type: "activity.add", level: "success", text: "Line transport activity" });
+  assert.equal(rpcClient.snapshot().activities.at(-1)?.text, "Line transport activity");
+  assert.equal(updates.at(-1)?.activities.at(-1)?.text, "Line transport activity");
+  assert.deepEqual(errors, []);
+
+  unsubscribe();
+  rpcClient.dispose();
+  connection.dispose();
+  inProcessClient.dispose();
 });
 
 test("agent engine restores latest saved conversation when conversation is implicit", async () => {
@@ -844,6 +1016,32 @@ test("version command mirrors version option", async () => {
   const { stdout: commandOut } = await execFileAsync("node", [bin, "version"]);
   const { stdout: optionOut } = await execFileAsync("node", [bin, "--version"]);
   assert.equal(commandOut, optionOut);
+});
+
+test("engine host command speaks newline-delimited Agent Engine Protocol", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-engine-host-"));
+  const env = isolatedEnv(root);
+  const child = spawn("node", [bin, "engine", "host", "--access", "off"], {
+    env,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  const stderr = [];
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk) => stderr.push(chunk));
+  const nextLine = lineReader(child.stdout);
+  const hello = JSON.parse(await nextLine());
+  assert.deepEqual(hello, { type: "hello", protocolVersion: 1 });
+
+  child.stdin.write(`${JSON.stringify({ id: 1, method: "snapshot", params: {} })}\n`);
+  const response = JSON.parse(await nextLine());
+  assert.equal(response.id, 1);
+  assert.equal(response.ok, true);
+  assert.equal(response.result.currentConversation, "default");
+
+  child.stdin.end();
+  const exitCode = await new Promise((resolve) => child.once("exit", resolve));
+  assert.equal(exitCode, 0);
+  assert.equal(stderr.join(""), "");
 });
 
 test("run and update command help describe their shortcuts", async () => {

@@ -7,6 +7,38 @@ export {
   createAgentEngine,
 } from "./engine/agent-engine.js";
 export type {
+  AgentEngineClient,
+} from "./engine/client.js";
+export {
+  agentEngineClientFromApp,
+  createInProcessAgentEngineClient,
+} from "./engine/client.js";
+export type {
+  AgentEngineLineTransportOptions,
+  AgentEngineRpcConnection,
+} from "./engine/line-transport.js";
+export {
+  bindLineDelimitedAgentEngineRpcHandler,
+  createLineDelimitedAgentEngineRpcTransport,
+} from "./engine/line-transport.js";
+export type {
+  AgentEngineRpcError,
+  AgentEngineRpcEvent,
+  AgentEngineRpcHandler,
+  AgentEngineRpcId,
+  AgentEngineRpcMethod,
+  AgentEngineRpcParamsByMethod,
+  AgentEngineRpcRequest,
+  AgentEngineRpcResponse,
+  AgentEngineRpcResultByMethod,
+  AgentEngineRpcTransport,
+} from "./engine/rpc.js";
+export {
+  agentEngineRpcProtocolVersion,
+  createAgentEngineRpcClient,
+  createAgentEngineRpcHandler,
+} from "./engine/rpc.js";
+export type {
   AutomaticContinuationPause,
   AutomaticContinuationState,
   AgentRunOptions,

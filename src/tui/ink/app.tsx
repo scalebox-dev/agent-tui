@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useApp, useInput, useStdin, useStdout } from "ink";
 import {
-  createAgentEngine,
+  createInProcessAgentEngineClient,
   defaultBaseURL,
-  type AgentEngineApp,
+  type AgentEngineClient,
   type AgentRunOptions,
 } from "@agent-api/app-engine/core";
 import {
@@ -201,7 +201,7 @@ function WorkbenchApp({
   const [terminalState, setTerminalState] = useState<WorkbenchTerminalState>(() => initialWorkbenchTerminalState());
   const terminalStateRef = useRef(terminalState);
   const [spinnerFrame, setSpinnerFrame] = useState(0);
-  const agentEngineRef = useRef<AgentEngineApp | null>(null);
+  const agentEngineRef = useRef<AgentEngineClient | null>(null);
   const transcriptStoreRef = useRef<WorkbenchTranscriptStore | null | undefined>(undefined);
   if (transcriptStoreRef.current === undefined) {
     try {
@@ -211,7 +211,7 @@ function WorkbenchApp({
     }
   }
   if (!agentEngineRef.current) {
-    agentEngineRef.current = createAgentEngine({
+    agentEngineRef.current = createInProcessAgentEngineClient({
       authController,
       baseOptions: options,
       profileName,
