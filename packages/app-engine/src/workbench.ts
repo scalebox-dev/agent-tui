@@ -21,6 +21,9 @@ export {
 } from "./workbench/conversation-controller.js";
 export type {
   WorkbenchEngine,
+  WorkbenchEventResult,
+  WorkbenchRunContext,
+  WorkbenchRuntimeEffect,
   WorkbenchSubmission,
 } from "./workbench/engine.js";
 export { createWorkbenchEngine } from "./workbench/engine.js";
@@ -96,11 +99,14 @@ export type {
   LocalToolApproval,
   PendingAutomaticContinuation,
   RenderMode,
+  SelectedConversationPendingAction,
   WorkbenchAction,
   WorkbenchActivity,
   WorkbenchCommand,
   WorkbenchMessage,
   WorkbenchRole,
+  WorkbenchRunStatus,
+  WorkbenchRunSummary,
   WorkbenchState,
   WorkbenchWorkdirStatus,
   WorkbenchWorkspaceSummary,
@@ -113,6 +119,13 @@ export {
   helpText,
   parsePendingApprovalCommand,
   parseWorkbenchCommand,
+  runById,
+  runMatchesConversation,
+  runMatchesSelectedConversation,
+  selectedConversationPendingAction,
+  selectedConversationPendingAutomaticContinuation,
+  selectedConversationPendingLocalTool,
+  selectedConversationRunningRun,
   workbenchReducer,
   workdirText,
 } from "./workbench/state.js";

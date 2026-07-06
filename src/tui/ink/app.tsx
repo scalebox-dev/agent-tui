@@ -308,7 +308,7 @@ function WorkbenchApp({
       updateTerminalState((current) => {
         const normalized = normalizeTerminalState({ ...current, focusedPanel: "input" }, renderModel);
         const result = terminalController.handle(text, {}, normalized, {
-          busy: state.busy,
+          busy: renderModel.input.busy,
           renderModel,
         });
         return result.state;
@@ -400,7 +400,7 @@ function WorkbenchApp({
     const mouse = parseMouseEvent(input);
     if (mouse) {
       const result = terminalController.handleMouse(mouse, currentTerminalState, {
-        busy: state.busy,
+        busy: renderModel.input.busy,
         renderModel,
       });
       if (!sameTerminalState(result.state, currentTerminalState)) commitTerminalState(result.state);
@@ -408,7 +408,7 @@ function WorkbenchApp({
     }
     const normalizedKey = normalizeInkTerminalKey(key as WorkbenchTerminalKey, lastRawInputRef.current);
     const result = terminalController.handle(input, normalizedKey, currentTerminalState, {
-      busy: state.busy,
+      busy: renderModel.input.busy,
       renderModel,
     });
     if (!sameTerminalState(result.state, currentTerminalState)) commitTerminalState(result.state);
@@ -453,8 +453,8 @@ function WorkbenchApp({
           void submitInput(effect.input);
           break;
         case "ignored_busy":
-          dispatch({ type: "message.add", role: "system", text: "Agent turn is running. Use /abort or Esc to cancel it." });
-          dispatch({ type: "activity.add", level: "warning", text: "Input ignored while agent is running" });
+          dispatch({ type: "message.add", role: "system", text: "This conversation already has an active agent turn. Use /abort or Esc to cancel it." });
+          dispatch({ type: "activity.add", level: "warning", text: "Input ignored while selected conversation is running" });
           break;
         case "copy":
           void copyPanelText(effect.target);

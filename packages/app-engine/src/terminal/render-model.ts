@@ -1,4 +1,12 @@
-import { formatBytes, type RenderMode, type WorkbenchState } from "../workbench/state.js";
+import {
+  formatBytes,
+  runMatchesConversation,
+  selectedConversationPendingAutomaticContinuation,
+  selectedConversationPendingLocalTool,
+  selectedConversationRunningRun,
+  type RenderMode,
+  type WorkbenchState,
+} from "../workbench/state.js";
 import {
   buildTranscriptViewModel,
   elapsedDots,
@@ -115,6 +123,9 @@ export function buildWorkbenchRenderModel(input: BuildWorkbenchRenderModelInput)
     ? null
     : Math.max(0, Math.min(input.draft.length, input.selectionAnchor));
   const fullAccess = input.state.accessMode === "full";
+  const selectedRunningRun = selectedConversationRunningRun(input.state);
+  const selectedConversationBusy = Boolean(selectedRunningRun);
+  const activeAssistantMessageId = selectedRunningRun?.assistantMessageId ?? input.state.activeAssistantMessageId;
   const label = "You";
   const inputViewportColumns = Math.max(8, terminalColumns - 6);
   const inputView = buildInputView(input.draft, cursor, selectionAnchor, inputViewportColumns, maxInputRows(terminalRows));
@@ -140,8 +151,8 @@ export function buildWorkbenchRenderModel(input: BuildWorkbenchRenderModelInput)
     ? Math.max(28, terminalColumns - workdirPanelWidth - Math.floor(terminalColumns * 0.27) - 8)
     : Math.max(20, terminalColumns - 4);
   const transcript = buildTranscriptViewModel({
-    activeAssistantMessageId: input.state.activeAssistantMessageId,
-    busy: input.state.busy,
+    activeAssistantMessageId,
+    busy: selectedConversationBusy,
     messages: input.state.messages,
     offset: input.transcriptOffset,
     renderMode: input.state.renderMode,
@@ -221,7 +232,7 @@ export function buildWorkbenchRenderModel(input: BuildWorkbenchRenderModelInput)
     header: { ...header, lines: headerLines },
     layout,
     input: {
-      busy: input.state.busy,
+      busy: selectedConversationBusy,
       cursor,
       draft: input.draft,
       fullAccess,
@@ -229,7 +240,7 @@ export function buildWorkbenchRenderModel(input: BuildWorkbenchRenderModelInput)
       label,
       lines: inputView.lines,
       selectionAnchor,
-      statusText: input.state.busy ? `waiting for agent ${elapsedDots(input.spinnerFrame)}` : "",
+      statusText: selectedConversationBusy ? `waiting for agent ${elapsedDots(input.spinnerFrame)}` : otherRunsStatusText(input.state, input.spinnerFrame),
       viewportColumns: inputViewportColumns,
     },
     terminalColumns,
@@ -268,6 +279,12 @@ function workspacePanelLines(state: WorkbenchState) {
   ];
 }
 
+function otherRunsStatusText(state: WorkbenchState, spinnerFrame: number) {
+  const runningCount = state.runs.filter((run) => run.status === "running").length;
+  if (runningCount <= 0) return "";
+  return `${runningCount} other ${runningCount === 1 ? "run" : "runs"} active ${elapsedDots(spinnerFrame)}`;
+}
+
 function conversationPanelLines(
   state: WorkbenchState,
   header: {
@@ -283,13 +300,14 @@ function conversationPanelLines(
       const snippet = conversation.latestSnippet || conversation.titleSnippet;
       const count = conversation.messageCount > 0 ? ` · ${conversation.messageCount}` : "";
       const settings = current ? conversationSettingsLabel(state) : "";
-      return `${current ? "*" : " "} ${conversation.name}${snippet ? ` · ${snippet}` : " · empty"}${count}${settings}`;
+      return `${current ? "*" : " "} ${conversationRunMarker(state, conversation.id, conversation.name)} ${conversation.name}${snippet ? ` · ${snippet}` : " · empty"}${count}${settings}`;
     });
   }
   return [
     `name=${header.conversation}`,
     `id=${header.conversationId}`,
     `status=${header.conversationStatus}`,
+    `run=${conversationRunLabel(state, state.conversationId, state.currentConversation)}`,
     `previous=${header.conversationPreviousResponseId || "none"}`,
     conversationSettingsLabel(state).replace(/^ · /, ""),
     `messages=${state.messages.length}`,
@@ -299,6 +317,36 @@ function conversationPanelLines(
 
 function conversationSettingsLabel(state: WorkbenchState) {
   return ` · preset=${state.runPreset || "none"} model=${state.runModel || "auto"}`;
+}
+
+function conversationRunMarker(state: WorkbenchState, conversationId: string | undefined, conversationName: string) {
+  if (conversationHasPendingAction(state, conversationId, conversationName)) return "?";
+  const run = latestConversationRun(state, conversationId, conversationName);
+  if (!run) return " ";
+  if (run.status === "running") return "▶";
+  if (run.status === "paused") return "Ⅱ";
+  if (run.status === "failed") return "!";
+  if (run.status === "aborted") return "×";
+  return "✓";
+}
+
+function conversationRunLabel(state: WorkbenchState, conversationId: string | undefined, conversationName: string) {
+  const run = latestConversationRun(state, conversationId, conversationName);
+  if (!run) return "none";
+  return `${run.status}${run.responseId ? ` ${run.responseId}` : ""}`;
+}
+
+function latestConversationRun(state: WorkbenchState, conversationId: string | undefined, conversationName: string) {
+  return state.runs.find((run) => runMatchesConversation(run, conversationId, conversationName));
+}
+
+function conversationHasPendingAction(state: WorkbenchState, conversationId: string | undefined, conversationName: string) {
+  const hasPendingRun = (runId: string | undefined) => {
+    const run = state.runs.find((item) => item.id === runId);
+    return run ? runMatchesConversation(run, conversationId, conversationName) : false;
+  };
+  return state.pendingLocalTools.some((pending) => hasPendingRun(pending.runId)) ||
+    state.pendingAutomaticContinuations.some((pending) => hasPendingRun(pending.runId));
 }
 
 function shortId(id: string) {
@@ -329,14 +377,20 @@ function workdirPanelLines(
 }
 
 export function pendingLocalLabel(state: WorkbenchState) {
-  if (state.pendingLocalTool) {
-    return `${state.pendingLocalTool.name}${state.pendingLocalTool.action ? `.${state.pendingLocalTool.action}` : ""}`;
+  const pendingLocalTool = selectedConversationPendingLocalTool(state);
+  if (pendingLocalTool) {
+    return `${pendingLocalTool.name}${pendingLocalTool.action ? `.${pendingLocalTool.action}` : ""}`;
   }
-  if (state.pendingAutomaticContinuation) {
-    return `continuation ${state.pendingAutomaticContinuation.count}/${state.pendingAutomaticContinuation.limit}`;
+  const pendingContinuation = selectedConversationPendingAutomaticContinuation(state);
+  if (pendingContinuation) {
+    return `continuation ${pendingContinuation.count}/${pendingContinuation.limit}`;
   }
   if (state.pendingUpdate) {
     return `update ${state.pendingUpdate.result.current}->${state.pendingUpdate.result.latest}`;
+  }
+  const pendingElsewhere = state.pendingLocalTools.length + state.pendingAutomaticContinuations.length;
+  if (pendingElsewhere > 0) {
+    return `${pendingElsewhere} pending elsewhere`;
   }
   return "none";
 }

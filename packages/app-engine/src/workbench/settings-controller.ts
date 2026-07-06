@@ -22,6 +22,7 @@ import {
 
 export interface WorkbenchSettingsSnapshot {
   defaultPreset?: string | null;
+  defaultAutomaticContinuationLimit?: number | null;
   automaticContinuationLimit?: number | null;
   runPreset?: string;
   shellIsolation?: ShellIsolationPreferences;
@@ -47,6 +48,7 @@ export interface WorkbenchSettingsController {
     accessMode: string;
     contextEnabled: boolean;
     defaultPreset?: string | null;
+    currentAutomaticContinuationLimit?: number | null;
     automaticContinuationLimit?: number | null;
     localSkillsEnabled: boolean;
     memoryRead: boolean;
@@ -96,6 +98,7 @@ export function createWorkbenchSettingsController(options: WorkbenchSettingsCont
       );
       return {
         defaultPreset: preferences.defaultPreset,
+        ...("automaticContinuationLimit" in preferences ? { defaultAutomaticContinuationLimit: preferences.automaticContinuationLimit } : {}),
         ...("automaticContinuationLimit" in preferences ? { automaticContinuationLimit: preferences.automaticContinuationLimit } : {}),
         ...(preferences.isolation ? { shellIsolation: preferences.isolation } : {}),
         ...(activity ? { activity } : {}),
@@ -292,6 +295,7 @@ export function formatDefaultPreset(value: string | null | undefined) {
 function settingsSnapshot(preferences: WorkbenchPreferences): WorkbenchSettingsSnapshot {
   return {
     ...("defaultPreset" in preferences ? { defaultPreset: preferences.defaultPreset } : {}),
+    ...("automaticContinuationLimit" in preferences ? { defaultAutomaticContinuationLimit: preferences.automaticContinuationLimit } : {}),
     ...("automaticContinuationLimit" in preferences ? { automaticContinuationLimit: preferences.automaticContinuationLimit } : {}),
     ...(preferences.isolation ? { shellIsolation: preferences.isolation } : {}),
   };
@@ -372,6 +376,7 @@ function runConfigText({
   accessMode,
   automaticContinuationLimit,
   contextEnabled,
+  currentAutomaticContinuationLimit,
   defaultPreset,
   localSkillsEnabled,
   memoryRead,
@@ -387,6 +392,7 @@ function runConfigText({
   accessMode: string;
   automaticContinuationLimit?: number | null;
   contextEnabled: boolean;
+  currentAutomaticContinuationLimit?: number | null;
   defaultPreset?: string | null;
   localSkillsEnabled: boolean;
   memoryRead: boolean;
@@ -403,7 +409,8 @@ function runConfigText({
     `Profile: ${profileName}`,
     `Preset: ${runPreset || "none"}`,
     `Default preset: ${formatDefaultPreset(defaultPreset)}`,
-    `Automatic continuation limit: ${formatAutomaticContinuationLimit(automaticContinuationLimit)}`,
+    `Automatic continuation limit: ${formatAutomaticContinuationLimit(currentAutomaticContinuationLimit)}`,
+    `Default automatic continuation limit: ${formatAutomaticContinuationLimit(automaticContinuationLimit)}`,
     `Model: ${runModel || "auto"}`,
     `Render mode: ${renderMode}`,
     `Shell isolation: ${formatShellIsolation(shellIsolation)}`,

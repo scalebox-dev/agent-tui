@@ -5,6 +5,8 @@ import {
   helpText,
   parsePendingApprovalCommand,
   parseWorkbenchCommand,
+  selectedConversationPendingAutomaticContinuation,
+  selectedConversationPendingLocalTool,
   workbenchReducer,
   workdirText,
   type RenderMode,
@@ -29,6 +31,7 @@ export interface WorkbenchEngineOptions {
   workspaceSkillsEnabled?: boolean;
   renderMode?: RenderMode;
   defaultPreset?: string | null;
+  automaticContinuationLimit?: number | null;
   transcriptStore?: WorkbenchTranscriptStore;
 }
 
@@ -38,7 +41,15 @@ export interface WorkbenchEngine {
   dispatch(action: WorkbenchAction): void;
   submit(input: string): WorkbenchSubmission;
   handleCommand(command: WorkbenchCommand): WorkbenchCommandResult;
-  handleAgentEvent(event: AgentTurnEvent): WorkbenchEventResult;
+  handleAgentEvent(event: AgentTurnEvent, runContext?: WorkbenchRunContext): WorkbenchEventResult;
+}
+
+export interface WorkbenchRunContext {
+  runId: string;
+  conversationId?: string;
+  conversationName: string;
+  workspaceId?: string;
+  workspaceName?: string;
 }
 
 export type WorkbenchSubmission =
@@ -79,6 +90,7 @@ export function createWorkbenchEngine(options: WorkbenchEngineOptions): Workbenc
     for (const listener of listeners) listener();
   };
   const dispatch = (action: WorkbenchAction) => {
+    action = normalizeWorkbenchAction(action);
     if (
       action.type === "local_tool.pending.set" ||
       action.type === "local_tool.pending.clear" ||
@@ -91,12 +103,12 @@ export function createWorkbenchEngine(options: WorkbenchEngineOptions): Workbenc
     }
     const previous = state;
     const next = workbenchReducer(state, action);
-    if (Object.is(next, state)) return;
-    state = next;
+    const changed = !Object.is(next, state);
+    if (changed) state = next;
     transcriptPersistQueue = transcriptPersistQueue.then(() =>
       persistTranscriptAction(options.transcriptStore, previous, state, action, dispatch),
     );
-    notify();
+    if (changed) notify();
   };
 
   return {
@@ -223,12 +235,15 @@ export function createWorkbenchEngine(options: WorkbenchEngineOptions): Workbenc
           return unhandled();
       }
     },
-    handleAgentEvent(event) {
+    handleAgentEvent(event, runContext) {
       switch (event.type) {
         case "text.delta":
           return event.delta ? eventResult({ type: "append_text_delta", delta: event.delta }) : eventResult();
         case "response.started":
           if (event.responseID) {
+            if (runContext?.runId) {
+              dispatch({ type: "run.response.set", runId: runContext.runId, responseId: event.responseID });
+            }
             dispatch({ type: "activity.add", text: `Response started: ${event.responseID}` });
             return eventResult({ type: "set_active_response_id", responseID: event.responseID });
           }
@@ -238,6 +253,9 @@ export function createWorkbenchEngine(options: WorkbenchEngineOptions): Workbenc
           dispatch({ type: "activity.add", level: "success", text: event.responseID ? `Response completed: ${event.responseID}` : "Response completed" });
           return eventResult({ type: "flush_text_delta_buffer" });
         case "response.failed":
+          if (runContext?.runId) {
+            dispatch({ type: "run.status.set", runId: runContext.runId, status: "failed", statusText: event.message });
+          }
           dispatch({ type: "activity.add", level: "error", text: event.message });
           return eventResult({ type: "flush_text_delta_buffer" });
         case "reasoning.started":
@@ -274,12 +292,16 @@ export function createWorkbenchEngine(options: WorkbenchEngineOptions): Workbenc
             text: `Local tool: ${event.name}${event.action ? `.${event.action}` : ""}${event.requiresApproval ? " (approval required)" : ""}`,
           });
           if (!event.requiresApproval && (event.arguments || event.result)) {
-            dispatch({ type: "message.add", role: "system", kind: "tool", text: formatLocalToolCompleted(event) });
+            dispatch({ type: "message.add", role: "system", kind: "tool", text: formatLocalToolCompleted(event), conversationId: runContext?.conversationId });
           }
           return eventResult();
         case "local_tool.approval_requested":
+          if (runContext?.runId) {
+            dispatch({ type: "run.status.set", runId: runContext.runId, status: "paused", statusText: "local approval required" });
+          }
           dispatch({
             type: "local_tool.pending.set",
+            runId: runContext?.runId,
             approval: {
               name: event.name,
               action: event.action,
@@ -289,11 +311,12 @@ export function createWorkbenchEngine(options: WorkbenchEngineOptions): Workbenc
               responseID: event.responseID,
             },
           });
-          dispatch({ type: "message.add", role: "system", kind: "tool", text: formatLocalToolApproval(event) });
+          dispatch({ type: "message.add", role: "system", kind: "tool", text: formatLocalToolApproval(event), conversationId: runContext?.conversationId });
           return eventResult();
         case "automatic_continuation.paused":
           dispatch({
             type: "automatic_continuation.pending.set",
+            runId: runContext?.runId,
             pause: {
               reason: event.reason,
               message: event.message,
@@ -303,7 +326,10 @@ export function createWorkbenchEngine(options: WorkbenchEngineOptions): Workbenc
               responseID: event.responseID,
             },
           });
-          dispatch({ type: "message.add", role: "system", text: event.message });
+          if (runContext?.runId) {
+            dispatch({ type: "run.status.set", runId: runContext.runId, status: "paused", statusText: event.reason });
+          }
+          dispatch({ type: "message.add", role: "system", text: event.message, conversationId: runContext?.conversationId });
           return eventResult({ type: "flush_text_delta_buffer" });
         case "model.requested":
           dispatch({ type: "activity.add", text: `Model requested: ${modelLabel(event.model, event.provider)}` });
@@ -327,7 +353,7 @@ export function createWorkbenchEngine(options: WorkbenchEngineOptions): Workbenc
     submit(input) {
       const trimmed = input.trim();
       if (!trimmed) return { kind: "handled" };
-      if (state.pendingLocalTool) {
+      if (selectedConversationPendingLocalTool(state)) {
         const command = parsePendingApprovalCommand(trimmed);
         if (command) {
           pendingApprovalInvalidInputs = 0;
@@ -336,7 +362,7 @@ export function createWorkbenchEngine(options: WorkbenchEngineOptions): Workbenc
         handleInvalidPendingApprovalInput();
         return { kind: "handled" };
       }
-      if (state.pendingAutomaticContinuation) {
+      if (selectedConversationPendingAutomaticContinuation(state)) {
         const command = parsePendingApprovalCommand(trimmed);
         if (command) {
           pendingApprovalInvalidInputs = 0;
@@ -512,6 +538,17 @@ function eventResult(...effects: WorkbenchRuntimeEffect[]): WorkbenchEventResult
   return { effects };
 }
 
+function normalizeWorkbenchAction(action: WorkbenchAction): WorkbenchAction {
+  if (action.type === "message.add" && !action.id) {
+    return { ...action, id: engineMessageId() };
+  }
+  return action;
+}
+
+function engineMessageId() {
+  return `message-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
 async function persistTranscriptAction(
   store: WorkbenchTranscriptStore | undefined,
   previousState: WorkbenchState,
@@ -519,17 +556,18 @@ async function persistTranscriptAction(
   action: WorkbenchAction,
   dispatch: (action: WorkbenchAction) => void,
 ) {
-  if (!store || !state.conversationId) return;
+  const conversationId = transcriptConversationId(action, state);
+  if (!store || !conversationId) return;
   try {
     if (action.type === "message.add") {
       const message = {
-        id: action.id ?? state.messages.at(-1)?.id ?? "",
+        id: action.id ?? "",
         kind: action.kind,
         role: action.role,
         text: action.text,
       };
       if (message && shouldPersistTranscriptMessage(message)) {
-        await store.appendMessage(state.conversationId, message);
+        await store.appendMessage(conversationId, message);
       }
       return;
     }
@@ -537,7 +575,7 @@ async function persistTranscriptAction(
       if (!previousState.messages.some((message) => message.id === action.id)) {
         const message = state.messages.find((item) => item.id === action.id);
         if (message && shouldPersistTranscriptMessage(message)) {
-          await store.appendMessage(state.conversationId, {
+          await store.appendMessage(conversationId, {
             id: message.id,
             kind: message.kind,
             role: message.role,
@@ -546,7 +584,7 @@ async function persistTranscriptAction(
         }
         return;
       }
-      await store.appendMessageDelta(state.conversationId, action.id, action.delta);
+      await store.appendMessageDelta(conversationId, action.id, action.delta);
     }
   } catch (error) {
     dispatch({
@@ -555,6 +593,13 @@ async function persistTranscriptAction(
       text: `Transcript persistence unavailable: ${userFacingError(error)}`,
     });
   }
+}
+
+function transcriptConversationId(action: WorkbenchAction, state: WorkbenchState) {
+  if (action.type === "message.add" || action.type === "message.append") {
+    return action.conversationId ?? state.conversationId;
+  }
+  return state.conversationId;
 }
 
 function modelLabel(model?: string, provider?: string) {

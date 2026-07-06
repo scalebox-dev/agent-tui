@@ -12,7 +12,7 @@ import {
   type LocalToolApprovalRequest,
   type WorkdirAccessMode,
 } from "../agent.js";
-import type { WorkbenchEngine, WorkbenchRuntimeEffect } from "./engine.js";
+import type { WorkbenchEngine, WorkbenchRunContext, WorkbenchRuntimeEffect } from "./engine.js";
 import type { WorkbenchAction, WorkbenchState } from "./state.js";
 
 export interface WorkbenchTurnController {
@@ -21,13 +21,15 @@ export interface WorkbenchTurnController {
     approval: LocalToolApprovalRequest;
     result: string | Record<string, unknown>;
     accessMode: WorkdirAccessMode;
+    sourceRunId?: string;
   }): Promise<void>;
   continueAfterAutomaticContinuation(input: {
     continuation: AutomaticContinuationState;
     bypassAutomaticContinuationLimit: boolean;
+    sourceRunId?: string;
   }): Promise<void>;
-  abort(reason: string): Promise<void>;
-  resumeTimedPause(message?: string): boolean;
+  abort(reason: string, runId?: string): Promise<void>;
+  resumeTimedPause(message?: string, runId?: string): boolean;
 }
 
 export interface WorkbenchTurnControllerOptions {
@@ -35,7 +37,7 @@ export interface WorkbenchTurnControllerOptions {
   baseOptions: AgentRunOptions;
   dispatch(action: WorkbenchAction): void;
   getState(): WorkbenchState;
-  runRuntimeEffects(effects: WorkbenchRuntimeEffect[], assistantId: string): void;
+  runRuntimeEffects(effects: WorkbenchRuntimeEffect[], assistantId: string, runContext?: WorkbenchRunContext): void;
   flushTextDeltaBuffer(): void;
   runAgentTurnImpl?: typeof runAgentTurn;
   resumeAgentAfterLocalApprovalImpl?: typeof resumeAgentAfterLocalApproval;
@@ -43,25 +45,36 @@ export interface WorkbenchTurnControllerOptions {
   resolveRuntimeProfileImpl?: typeof resolveRuntimeProfile;
 }
 
+interface ActiveRunHandle {
+  abortController: AbortController;
+  assistantId: string;
+  localPause?: LocalPauseHandle | null;
+  responseID?: string;
+  runContext: WorkbenchRunContext;
+}
+
 export function createWorkbenchTurnController(options: WorkbenchTurnControllerOptions): WorkbenchTurnController {
   const runAgentTurnImpl = options.runAgentTurnImpl ?? runAgentTurn;
   const resumeAgentAfterLocalApprovalImpl = options.resumeAgentAfterLocalApprovalImpl ?? resumeAgentAfterLocalApproval;
   const resumeAgentAfterAutomaticContinuationImpl = options.resumeAgentAfterAutomaticContinuationImpl ?? resumeAgentAfterAutomaticContinuation;
   const resolveRuntimeProfileImpl = options.resolveRuntimeProfileImpl ?? resolveRuntimeProfile;
-  let activeAbortController: AbortController | null = null;
-  let activeLocalPause: LocalPauseHandle | null = null;
-  let activeResponseID: string | null = null;
+  const activeRuns = new Map<string, ActiveRunHandle>();
   const cancelledResponseIDs = new Set<string>();
 
   return {
     async startPrompt(prompt) {
       const state = options.getState();
+      const runContext = runContextFromState(state, newRunId());
       const assistantId = `assistant-${Date.now()}`;
       const abortController = new AbortController();
-      activeAbortController = abortController;
-      activeResponseID = null;
       options.dispatch({ type: "busy.set", busy: true });
-      options.dispatch({ type: "message.add", role: "user", text: prompt });
+      options.dispatch({ type: "run.started", run: runSummaryFromContext(runContext, assistantId) });
+      activeRuns.set(runContext.runId, {
+        abortController,
+        assistantId,
+        runContext,
+      });
+      options.dispatch({ type: "message.add", role: "user", text: prompt, conversationId: runContext.conversationId });
       options.dispatch({ type: "assistant.active", id: assistantId });
       options.dispatch({ type: "activity.add", text: "Agent turn started" });
       try {
@@ -74,9 +87,9 @@ export function createWorkbenchTurnController(options: WorkbenchTurnControllerOp
             stream: true,
             file: undefined,
             stdin: false,
-            conversation: state.currentConversation,
-            workspaceId: state.currentWorkspaceId,
-            workspaceName: state.currentWorkspaceName,
+            conversation: runContext.conversationName,
+            workspaceId: runContext.workspaceId,
+            workspaceName: runContext.workspaceName,
             includeLocalContext: state.contextEnabled,
             accessMode: state.accessMode,
             discoverLocalSkills: state.localSkillsEnabled,
@@ -86,9 +99,9 @@ export function createWorkbenchTurnController(options: WorkbenchTurnControllerOp
             automaticContinuationLimit: effectiveAutomaticContinuationLimit(state),
             restartConversation: false,
             abortSignal: abortController.signal,
-            localPause: localPauseHooks(),
+            localPause: localPauseHooks(runContext.runId),
           },
-          (event) => handleAgentEvent(event, assistantId),
+          (event) => handleAgentEvent(event, assistantId, runContext),
         );
         options.dispatch({
           type: "activity.add",
@@ -97,20 +110,31 @@ export function createWorkbenchTurnController(options: WorkbenchTurnControllerOp
             ? `Agent turn ${result.paused ? "paused" : "completed"}: ${result.responseID}`
             : `Agent turn ${result.paused ? "paused" : "completed"}`,
         });
+        options.dispatch({
+          type: "run.status.set",
+          runId: runContext.runId,
+          status: result.paused ? "paused" : "completed",
+          statusText: result.responseID,
+        });
       } catch (error) {
-        handleTurnError(error);
+        handleTurnError(error, runContext);
       } finally {
-        finishTurn(abortController);
+        finishTurn(abortController, runContext, assistantId);
       }
     },
 
     async continueAfterLocalApproval(input) {
       const state = options.getState();
+      const runContext = continuationRunContext(state, input.sourceRunId, newRunId());
       const assistantId = `assistant-${Date.now()}`;
       const abortController = new AbortController();
-      activeAbortController = abortController;
-      activeResponseID = null;
       options.dispatch({ type: "busy.set", busy: true });
+      options.dispatch({ type: "run.started", run: runSummaryFromContext(runContext, assistantId, "local approval continuation") });
+      activeRuns.set(runContext.runId, {
+        abortController,
+        assistantId,
+        runContext,
+      });
       options.dispatch({ type: "assistant.active", id: assistantId });
       options.dispatch({ type: "activity.add", text: "Continuing agent turn" });
       try {
@@ -122,9 +146,9 @@ export function createWorkbenchTurnController(options: WorkbenchTurnControllerOp
             stream: true,
             file: undefined,
             stdin: false,
-            conversation: state.currentConversation,
-            workspaceId: state.currentWorkspaceId,
-            workspaceName: state.currentWorkspaceName,
+            conversation: runContext.conversationName,
+            workspaceId: runContext.workspaceId,
+            workspaceName: runContext.workspaceName,
             includeLocalContext: state.contextEnabled,
             accessMode: input.accessMode,
             discoverLocalSkills: state.localSkillsEnabled,
@@ -134,11 +158,11 @@ export function createWorkbenchTurnController(options: WorkbenchTurnControllerOp
             automaticContinuationLimit: effectiveAutomaticContinuationLimit(state),
             restartConversation: false,
             abortSignal: abortController.signal,
-            localPause: localPauseHooks(),
+            localPause: localPauseHooks(runContext.runId),
           },
           input.approval,
           input.result,
-          (event) => handleAgentEvent(event, assistantId),
+          (event) => handleAgentEvent(event, assistantId, runContext),
         );
         options.dispatch({
           type: "activity.add",
@@ -147,20 +171,31 @@ export function createWorkbenchTurnController(options: WorkbenchTurnControllerOp
             ? `Agent turn ${continuation.paused ? "paused" : "continued"}: ${continuation.responseID}`
             : `Agent turn ${continuation.paused ? "paused" : "continued"}`,
         });
+        options.dispatch({
+          type: "run.status.set",
+          runId: runContext.runId,
+          status: continuation.paused ? "paused" : "completed",
+          statusText: continuation.responseID,
+        });
       } catch (error) {
-        handleTurnError(error);
+        handleTurnError(error, runContext);
       } finally {
-        finishTurn(abortController);
+        finishTurn(abortController, runContext, assistantId);
       }
     },
 
     async continueAfterAutomaticContinuation(input) {
       const state = options.getState();
+      const runContext = continuationRunContext(state, input.sourceRunId, newRunId());
       const assistantId = `assistant-${Date.now()}`;
       const abortController = new AbortController();
-      activeAbortController = abortController;
-      activeResponseID = null;
       options.dispatch({ type: "busy.set", busy: true });
+      options.dispatch({ type: "run.started", run: runSummaryFromContext(runContext, assistantId, "automatic continuation") });
+      activeRuns.set(runContext.runId, {
+        abortController,
+        assistantId,
+        runContext,
+      });
       options.dispatch({ type: "assistant.active", id: assistantId });
       options.dispatch({ type: "activity.add", text: "Continuing automatic workflow" });
       try {
@@ -172,9 +207,9 @@ export function createWorkbenchTurnController(options: WorkbenchTurnControllerOp
             stream: true,
             file: undefined,
             stdin: false,
-            conversation: state.currentConversation,
-            workspaceId: state.currentWorkspaceId,
-            workspaceName: state.currentWorkspaceName,
+            conversation: runContext.conversationName,
+            workspaceId: runContext.workspaceId,
+            workspaceName: runContext.workspaceName,
             includeLocalContext: state.contextEnabled,
             accessMode: state.accessMode,
             discoverLocalSkills: state.localSkillsEnabled,
@@ -185,10 +220,10 @@ export function createWorkbenchTurnController(options: WorkbenchTurnControllerOp
             restartConversation: false,
             bypassAutomaticContinuationLimit: input.bypassAutomaticContinuationLimit,
             abortSignal: abortController.signal,
-            localPause: localPauseHooks(),
+            localPause: localPauseHooks(runContext.runId),
           },
           input.continuation,
-          (event) => handleAgentEvent(event, assistantId),
+          (event) => handleAgentEvent(event, assistantId, runContext),
         );
         options.dispatch({
           type: "activity.add",
@@ -197,27 +232,34 @@ export function createWorkbenchTurnController(options: WorkbenchTurnControllerOp
             ? `Automatic workflow ${continuation.paused ? "paused" : "continued"}: ${continuation.responseID}`
             : `Automatic workflow ${continuation.paused ? "paused" : "continued"}`,
         });
+        options.dispatch({
+          type: "run.status.set",
+          runId: runContext.runId,
+          status: continuation.paused ? "paused" : "completed",
+          statusText: continuation.responseID,
+        });
       } catch (error) {
-        handleTurnError(error);
+        handleTurnError(error, runContext);
       } finally {
-        finishTurn(abortController);
+        finishTurn(abortController, runContext, assistantId);
       }
     },
 
-    async abort(reason) {
-      const state = options.getState();
-      if (!state.busy && !activeAbortController && !activeResponseID) {
+    async abort(reason, runId) {
+      const activeRun = activeRunForAbort(runId);
+      if (!activeRun) {
         options.dispatch({ type: "message.add", role: "system", text: "No agent turn is running." });
         return;
       }
-      activeAbortController?.abort();
+      activeRun.abortController.abort();
+      options.dispatch({ type: "run.status.set", runId: activeRun.runContext.runId, status: "aborted", statusText: reason });
       options.dispatch({ type: "activity.add", level: "warning", text: reason });
-      if (!activeResponseID) {
+      if (!activeRun.responseID) {
         options.dispatch({ type: "message.add", role: "system", text: "Abort requested. No remote response ID is available yet." });
         return;
       }
-      if (cancelledResponseIDs.has(activeResponseID)) return;
-      const responseID = activeResponseID;
+      if (cancelledResponseIDs.has(activeRun.responseID)) return;
+      const responseID = activeRun.responseID;
       cancelledResponseIDs.add(responseID);
       try {
         const runtimeProfile = await resolveRuntimeProfileImpl(options.baseOptions.profile);
@@ -240,38 +282,55 @@ export function createWorkbenchTurnController(options: WorkbenchTurnControllerOp
       }
     },
 
-    resumeTimedPause(message) {
-      if (!activeLocalPause) return false;
-      activeLocalPause.resume(message);
+    resumeTimedPause(message, runId) {
+      const activeRun = activeRunForResume(runId);
+      if (!activeRun?.localPause) return false;
+      activeRun.localPause.resume(message);
       return true;
     },
   };
 
-  function handleAgentEvent(event: AgentTurnEvent, assistantId: string) {
-    const result = options.engine.handleAgentEvent(event);
+  function handleAgentEvent(event: AgentTurnEvent, assistantId: string, runContext: WorkbenchRunContext) {
+    const result = options.engine.handleAgentEvent(event, runContext);
     for (const effect of result.effects) {
       if (effect.type === "set_active_response_id") {
-        activeResponseID = effect.responseID;
+        const activeRun = activeRuns.get(runContext.runId);
+        if (activeRun) activeRun.responseID = effect.responseID;
       }
     }
-    options.runRuntimeEffects(result.effects, assistantId);
+    options.runRuntimeEffects(result.effects, assistantId, runContext);
   }
 
-  function finishTurn(abortController: AbortController) {
+  function activeRunForAbort(runId?: string) {
+    if (runId) return activeRuns.get(runId) ?? null;
+    return latestActiveRun();
+  }
+
+  function activeRunForResume(runId?: string) {
+    if (runId) return activeRuns.get(runId) ?? null;
+    return [...activeRuns.values()].find((run) => run.localPause) ?? null;
+  }
+
+  function latestActiveRun() {
+    return [...activeRuns.values()].at(-1) ?? null;
+  }
+
+  function finishTurn(abortController: AbortController, runContext: WorkbenchRunContext, assistantId: string) {
     options.flushTextDeltaBuffer();
-    if (activeAbortController === abortController) {
-      activeAbortController = null;
+    const activeRun = activeRuns.get(runContext.runId);
+    if (activeRun?.abortController === abortController) {
+      activeRuns.delete(runContext.runId);
     }
-    activeLocalPause = null;
-    activeResponseID = null;
-    options.dispatch({ type: "busy.set", busy: false });
-    options.dispatch({ type: "assistant.active", id: null });
+    if (options.getState().activeAssistantMessageId === assistantId) {
+      options.dispatch({ type: "assistant.active", id: null });
+    }
   }
 
-  function localPauseHooks(): NonNullable<AgentRunOptions["localPause"]> {
+  function localPauseHooks(runId: string): NonNullable<AgentRunOptions["localPause"]> {
     return {
       onPauseStart(handle) {
-        activeLocalPause = handle;
+        const activeRun = activeRuns.get(runId);
+        if (activeRun) activeRun.localPause = handle;
         options.dispatch({
           type: "activity.add",
           level: "warning",
@@ -279,7 +338,8 @@ export function createWorkbenchTurnController(options: WorkbenchTurnControllerOp
         });
       },
       onPauseEnd(result) {
-        activeLocalPause = null;
+        const activeRun = activeRuns.get(runId);
+        if (activeRun) activeRun.localPause = null;
         options.dispatch({
           type: "activity.add",
           level: result.status === "cancelled" ? "warning" : "success",
@@ -291,13 +351,20 @@ export function createWorkbenchTurnController(options: WorkbenchTurnControllerOp
     };
   }
 
-  function handleTurnError(error: unknown) {
+  function handleTurnError(error: unknown, runContext: WorkbenchRunContext) {
     const message = userFacingError(error);
     const aborted = /aborted/i.test(message);
     options.dispatch({
       type: "message.add",
       role: "system",
       text: aborted ? "Agent turn aborted." : message,
+      conversationId: runContext.conversationId,
+    });
+    options.dispatch({
+      type: "run.status.set",
+      runId: runContext.runId,
+      status: aborted ? "aborted" : "failed",
+      statusText: message,
     });
     options.dispatch({
       type: "activity.add",
@@ -326,6 +393,44 @@ export function createWorkbenchTurnController(options: WorkbenchTurnControllerOp
       ...(state.memoryTenantSearch ? { tenant_search: true } : {}),
     };
   }
+}
+
+function runContextFromState(state: WorkbenchState, runId: string): WorkbenchRunContext {
+  return {
+    runId,
+    conversationId: state.conversationId,
+    conversationName: state.currentConversation,
+    workspaceId: state.currentWorkspaceId,
+    workspaceName: state.currentWorkspaceName,
+  };
+}
+
+function continuationRunContext(state: WorkbenchState, sourceRunId: string | undefined, runId: string): WorkbenchRunContext {
+  const sourceRun = sourceRunId ? state.runs.find((run) => run.id === sourceRunId) : undefined;
+  if (!sourceRun) return runContextFromState(state, runId);
+  return {
+    runId,
+    conversationId: sourceRun.conversationId,
+    conversationName: sourceRun.conversationName,
+    workspaceId: sourceRun.workspaceId,
+    workspaceName: sourceRun.workspaceName,
+  };
+}
+
+function runSummaryFromContext(runContext: WorkbenchRunContext, assistantMessageId: string, statusText?: string) {
+  return {
+    id: runContext.runId,
+    assistantMessageId,
+    conversationId: runContext.conversationId,
+    conversationName: runContext.conversationName,
+    statusText,
+    workspaceId: runContext.workspaceId,
+    workspaceName: runContext.workspaceName,
+  };
+}
+
+function newRunId() {
+  return `run-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 function userFacingError(error: unknown) {

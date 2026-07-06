@@ -39,6 +39,7 @@ export function createWorkbenchSession(options: WorkbenchSessionOptions): Workbe
     memoryWrite: Boolean(options.baseOptions.memory?.write),
     model: options.baseOptions.model,
     preset: options.baseOptions.preset,
+    automaticContinuationLimit: options.baseOptions.automaticContinuationLimit,
     transcriptStore: options.services?.transcriptStore,
     workspaceSkillsEnabled: Boolean(options.baseOptions.skillTool?.tenant_search),
   });

@@ -52,14 +52,32 @@ export interface WorkbenchWorkspaceSummary {
   status: string;
 }
 
+export type WorkbenchRunStatus = "running" | "paused" | "completed" | "failed" | "aborted";
+
+export interface WorkbenchRunSummary {
+  id: string;
+  assistantMessageId?: string;
+  conversationId?: string;
+  conversationName: string;
+  responseId?: string;
+  startedAt: number;
+  status: WorkbenchRunStatus;
+  statusText?: string;
+  updatedAt: number;
+  workspaceId?: string;
+  workspaceName?: string;
+}
+
 export interface LocalToolApproval extends LocalToolApprovalRequest {
   id: string;
   createdAt: number;
+  runId?: string;
 }
 
 export interface PendingAutomaticContinuation extends AutomaticContinuationPause {
   id: string;
   createdAt: number;
+  runId?: string;
 }
 
 export interface PendingUpdate {
@@ -72,6 +90,7 @@ export type RenderMode = "markdown" | "raw";
 export type WorkbenchCopyTarget = "page" | "transcript" | "activity" | "conversation" | "header" | "workspace" | "workdir";
 const maxTranscriptWindowMessages = 80;
 const maxTranscriptWindowMessageCharacters = 64_000;
+const maxRunSummaries = 50;
 
 export interface WorkbenchState {
   /** Bounded transcript viewport buffer. Full transcript bodies live in WorkbenchTranscriptStore. */
@@ -81,7 +100,10 @@ export interface WorkbenchState {
   contextEnabled: boolean;
   workdir: WorkbenchWorkdirStatus | null;
   activeAssistantMessageId: string | null;
+  activeRunId: string | null;
+  pendingLocalTools: LocalToolApproval[];
   pendingLocalTool: LocalToolApproval | null;
+  pendingAutomaticContinuations: PendingAutomaticContinuation[];
   pendingAutomaticContinuation: PendingAutomaticContinuation | null;
   pendingUpdate: PendingUpdate | null;
   accessMode: WorkdirAccessMode;
@@ -98,6 +120,7 @@ export interface WorkbenchState {
   workspaceSummaries: WorkbenchWorkspaceSummary[];
   runPreset?: string;
   runModel?: string;
+  runs: WorkbenchRunSummary[];
   memoryRead: boolean;
   memoryWrite: boolean;
   memoryTenantSearch: boolean;
@@ -105,6 +128,7 @@ export interface WorkbenchState {
   workspaceSkillsEnabled: boolean;
   renderMode: RenderMode;
   defaultPreset?: string | null;
+  defaultAutomaticContinuationLimit?: number | null;
   automaticContinuationLimit?: number | null;
   automaticContinuationUnlocked: boolean;
   shellIsolation?: ShellIsolationPreferences;
@@ -119,8 +143,8 @@ export interface InputHistory {
 }
 
 export type WorkbenchAction =
-  | { type: "message.add"; role: WorkbenchRole; text: string; id?: string; kind?: WorkbenchMessageKind }
-  | { type: "message.append"; id: string; delta: string }
+  | { type: "message.add"; role: WorkbenchRole; text: string; id?: string; kind?: WorkbenchMessageKind; conversationId?: string }
+  | { type: "message.append"; id: string; delta: string; conversationId?: string }
   | { type: "messages.clear" }
   | { type: "messages.appendPage"; messages: WorkbenchMessage[] }
   | { type: "messages.prepend"; messages: WorkbenchMessage[] }
@@ -131,10 +155,13 @@ export type WorkbenchAction =
   | { type: "context.set"; enabled: boolean }
   | { type: "workdir.set"; workdir: WorkbenchWorkdirStatus }
   | { type: "assistant.active"; id: string | null }
-  | { type: "local_tool.pending.set"; approval: LocalToolApprovalRequest }
-  | { type: "local_tool.pending.clear" }
-  | { type: "automatic_continuation.pending.set"; pause: AutomaticContinuationPause }
-  | { type: "automatic_continuation.pending.clear" }
+  | { type: "run.started"; run: Omit<WorkbenchRunSummary, "startedAt" | "status" | "updatedAt"> & { status?: WorkbenchRunStatus; statusText?: string } }
+  | { type: "run.response.set"; runId: string; responseId: string }
+  | { type: "run.status.set"; runId: string; status: WorkbenchRunStatus; statusText?: string }
+  | { type: "local_tool.pending.set"; approval: LocalToolApprovalRequest; runId?: string }
+  | { type: "local_tool.pending.clear"; runId?: string }
+  | { type: "automatic_continuation.pending.set"; pause: AutomaticContinuationPause; runId?: string }
+  | { type: "automatic_continuation.pending.clear"; runId?: string }
   | { type: "automatic_continuation.unlock"; unlocked: boolean }
   | { type: "update.pending.set"; result: UpdateCheckResult }
   | { type: "update.pending.clear" }
@@ -143,7 +170,7 @@ export type WorkbenchAction =
   | { type: "conversations.set"; conversations: WorkbenchConversationSummary[] }
   | { type: "workspace.set"; workspace: { authType?: "api_key" | "browser"; id: string; name: string; role?: string; switchable?: boolean } }
   | { type: "workspaces.set"; workspaces: WorkbenchWorkspaceSummary[] }
-  | { type: "settings.set"; settings: Partial<Pick<WorkbenchState, "runPreset" | "runModel" | "memoryRead" | "memoryWrite" | "memoryTenantSearch" | "localSkillsEnabled" | "workspaceSkillsEnabled" | "renderMode" | "defaultPreset" | "automaticContinuationLimit" | "shellIsolation">> };
+  | { type: "settings.set"; settings: Partial<Pick<WorkbenchState, "runPreset" | "runModel" | "memoryRead" | "memoryWrite" | "memoryTenantSearch" | "localSkillsEnabled" | "workspaceSkillsEnabled" | "renderMode" | "defaultPreset" | "defaultAutomaticContinuationLimit" | "automaticContinuationLimit" | "shellIsolation">> };
 
 export type WorkbenchCommand =
   | { kind: "invalid"; command: string }
@@ -157,6 +184,7 @@ export type WorkbenchCommand =
   | { kind: "switch_profile"; name?: string }
   | { kind: "auth_status" }
   | { kind: "config"; field?: "preset" | "continuation-limit" | "isolation" | "isolator"; value?: string }
+  | { kind: "continuation_limit"; value?: string }
   | { kind: "memory"; field?: "read" | "write" | "workspace"; enabled?: boolean }
   | { kind: "skills"; field?: "local" | "workspace"; enabled?: boolean }
   | { kind: "render"; mode?: RenderMode }
@@ -213,7 +241,10 @@ export function createInitialWorkbenchState(options: {
     contextEnabled: options.contextEnabled || accessMode === "approval" || accessMode === "full",
     workdir: null,
     activeAssistantMessageId: null,
+    activeRunId: null,
+    pendingLocalTools: [],
     pendingLocalTool: null,
+    pendingAutomaticContinuations: [],
     pendingAutomaticContinuation: null,
     pendingUpdate: null,
     accessMode,
@@ -230,6 +261,7 @@ export function createInitialWorkbenchState(options: {
     workspaceSummaries: [],
     runPreset: options.preset,
     runModel: options.model,
+    runs: [],
     memoryRead: Boolean(options.memoryRead),
     memoryWrite: Boolean(options.memoryWrite),
     memoryTenantSearch: Boolean(options.memoryTenantSearch),
@@ -237,6 +269,7 @@ export function createInitialWorkbenchState(options: {
     workspaceSkillsEnabled: Boolean(options.workspaceSkillsEnabled),
     renderMode: options.renderMode ?? "markdown",
     defaultPreset: options.defaultPreset,
+    defaultAutomaticContinuationLimit: options.automaticContinuationLimit,
     automaticContinuationLimit: options.automaticContinuationLimit,
     automaticContinuationUnlocked: false,
     shellIsolation: options.shellIsolation,
@@ -292,11 +325,13 @@ export function createInputHistory(limit = 100): InputHistory {
 export function workbenchReducer(state: WorkbenchState, action: WorkbenchAction): WorkbenchState {
   switch (action.type) {
     case "message.add":
+      if (!isVisibleConversationAction(state, action)) return state;
       return {
         ...state,
         messages: limitMessages([...state.messages, newMessage(action.role, action.text, action.id, action.kind)]),
       };
     case "message.append":
+      if (!isVisibleConversationAction(state, action)) return state;
       return {
         ...state,
         messages: limitMessages(appendMessageDelta(state.messages, action.id, action.delta)),
@@ -342,50 +377,70 @@ export function workbenchReducer(state: WorkbenchState, action: WorkbenchAction)
       };
     case "assistant.active":
       return { ...state, activeAssistantMessageId: action.id };
+    case "run.started":
+      return upsertRun(state, {
+        ...action.run,
+        startedAt: Date.now(),
+        status: action.run.status ?? "running",
+        updatedAt: Date.now(),
+      });
+    case "run.response.set":
+      return updateRun(state, action.runId, { responseId: action.responseId });
+    case "run.status.set":
+      return updateRun(state, action.runId, {
+        status: action.status,
+        statusText: action.statusText,
+      });
     case "local_tool.pending.set": {
       const pending = {
         ...action.approval,
         id: `local-${Date.now()}`,
         createdAt: Date.now(),
+        runId: action.runId,
       };
-      return {
+      const pendingLocalTools = upsertPendingByRun(state.pendingLocalTools, pending);
+      const pendingAutomaticContinuations = removePendingByRun(state.pendingAutomaticContinuations, action.runId);
+      return withSelectedPendingCompatibility({
         ...state,
-        pendingLocalTool: pending,
-        pendingAutomaticContinuation: null,
+        pendingLocalTools,
+        pendingAutomaticContinuations,
         pendingUpdate: null,
         activities: [
           ...state.activities,
           newActivity("warning", `Local approval ready: ${pending.name}${pending.action ? `.${pending.action}` : ""}`),
         ].slice(-20),
-      };
+      });
     }
     case "local_tool.pending.clear":
-      return {
+      return withSelectedPendingCompatibility({
         ...state,
-        pendingLocalTool: null,
-      };
+        pendingLocalTools: clearPendingByRunOrSelection(state, state.pendingLocalTools, action.runId),
+      });
     case "automatic_continuation.pending.set": {
       const pending = {
         ...action.pause,
         id: `continuation-${Date.now()}`,
         createdAt: Date.now(),
+        runId: action.runId,
       };
-      return {
+      const pendingAutomaticContinuations = upsertPendingByRun(state.pendingAutomaticContinuations, pending);
+      const pendingLocalTools = removePendingByRun(state.pendingLocalTools, action.runId);
+      return withSelectedPendingCompatibility({
         ...state,
-        pendingLocalTool: null,
+        pendingLocalTools,
         pendingUpdate: null,
-        pendingAutomaticContinuation: pending,
+        pendingAutomaticContinuations,
         activities: [
           ...state.activities,
           newActivity("warning", `Automatic continuation paused: ${pending.count}/${pending.limit}`),
         ].slice(-20),
-      };
+      });
     }
     case "automatic_continuation.pending.clear":
-      return {
+      return withSelectedPendingCompatibility({
         ...state,
-        pendingAutomaticContinuation: null,
-      };
+        pendingAutomaticContinuations: clearPendingByRunOrSelection(state, state.pendingAutomaticContinuations, action.runId),
+      });
     case "update.pending.set": {
       const pending = {
         result: action.result,
@@ -394,7 +449,9 @@ export function workbenchReducer(state: WorkbenchState, action: WorkbenchAction)
       };
       return {
         ...state,
+        pendingLocalTools: [],
         pendingLocalTool: null,
+        pendingAutomaticContinuations: [],
         pendingAutomaticContinuation: null,
         pendingUpdate: pending,
         activities: [
@@ -420,7 +477,7 @@ export function workbenchReducer(state: WorkbenchState, action: WorkbenchAction)
     case "access.set":
       return setLocalAccess(state, action.mode);
     case "conversation.set":
-      return {
+      return withSelectedPendingCompatibility({
         ...state,
         conversationId: action.id,
         currentConversation: action.name,
@@ -429,7 +486,7 @@ export function workbenchReducer(state: WorkbenchState, action: WorkbenchAction)
         ...stateFromConversationRunSettings(action.runSettings),
         automaticContinuationUnlocked: false,
         activities: [...state.activities, newActivity("info", conversationActivityText(action))].slice(-20),
-      };
+      });
     case "conversations.set":
       return {
         ...state,
@@ -459,6 +516,131 @@ export function workbenchReducer(state: WorkbenchState, action: WorkbenchAction)
   }
 }
 
+export function selectedConversationRunningRun(state: WorkbenchState): WorkbenchRunSummary | null {
+  return state.runs.find((run) =>
+    run.status === "running" &&
+    runMatchesSelectedConversation(state, run)
+  ) ?? null;
+}
+
+export function selectedConversationPendingLocalTool(state: WorkbenchState): LocalToolApproval | null {
+  return pendingForSelectedConversation(state, state.pendingLocalTools) ?? state.pendingLocalTool;
+}
+
+export function selectedConversationPendingAutomaticContinuation(state: WorkbenchState): PendingAutomaticContinuation | null {
+  return pendingForSelectedConversation(state, state.pendingAutomaticContinuations) ?? state.pendingAutomaticContinuation;
+}
+
+export type SelectedConversationPendingAction =
+  | { kind: "local_tool"; approval: LocalToolApproval }
+  | { kind: "automatic_continuation"; pause: PendingAutomaticContinuation };
+
+export function selectedConversationPendingAction(state: WorkbenchState): SelectedConversationPendingAction | null {
+  const localTool = selectedConversationPendingLocalTool(state);
+  if (localTool) return { kind: "local_tool", approval: localTool };
+  const continuation = selectedConversationPendingAutomaticContinuation(state);
+  if (continuation) return { kind: "automatic_continuation", pause: continuation };
+  return null;
+}
+
+export function runById(state: WorkbenchState, runId: string | undefined): WorkbenchRunSummary | null {
+  if (!runId) return null;
+  return state.runs.find((run) => run.id === runId) ?? null;
+}
+
+export function runMatchesSelectedConversation(state: WorkbenchState, run: WorkbenchRunSummary) {
+  if (state.conversationId) return run.conversationId === state.conversationId;
+  return run.conversationName === state.currentConversation;
+}
+
+export function runMatchesConversation(run: WorkbenchRunSummary, conversationId: string | undefined, conversationName: string) {
+  if (conversationId && run.conversationId === conversationId) return true;
+  if (!conversationId && !run.conversationId && run.conversationName === conversationName) return true;
+  return run.conversationName === conversationName;
+}
+
+function isVisibleConversationAction(
+  state: WorkbenchState,
+  action: Extract<WorkbenchAction, { type: "message.add" | "message.append" }>,
+) {
+  if (!action.conversationId) return true;
+  return action.conversationId === state.conversationId;
+}
+
+function upsertRun(state: WorkbenchState, run: WorkbenchRunSummary): WorkbenchState {
+  const runs = [run, ...state.runs.filter((item) => item.id !== run.id)].slice(0, maxRunSummaries);
+  return {
+    ...state,
+    activeRunId: run.id,
+    busy: hasRunningRun(runs),
+    runs,
+  };
+}
+
+function updateRun(
+  state: WorkbenchState,
+  runId: string,
+  patch: Partial<Pick<WorkbenchRunSummary, "responseId" | "status" | "statusText">>,
+): WorkbenchState {
+  let found = false;
+  const updatedAt = Date.now();
+  const runs = state.runs.map((run) => {
+    if (run.id !== runId) return run;
+    found = true;
+    return { ...run, ...patch, updatedAt };
+  });
+  if (!found) return state;
+  const nextActiveRunId = patch.status && patch.status !== "running" && state.activeRunId === runId
+    ? runs.find((run) => run.status === "running")?.id ?? null
+    : state.activeRunId;
+  return {
+    ...state,
+    activeRunId: nextActiveRunId,
+    busy: hasRunningRun(runs),
+    runs,
+  };
+}
+
+function hasRunningRun(runs: WorkbenchRunSummary[]) {
+  return runs.some((run) => run.status === "running");
+}
+
+function withSelectedPendingCompatibility(state: WorkbenchState): WorkbenchState {
+  return {
+    ...state,
+    pendingLocalTool: pendingForSelectedConversation(state, state.pendingLocalTools),
+    pendingAutomaticContinuation: pendingForSelectedConversation(state, state.pendingAutomaticContinuations),
+  };
+}
+
+function pendingForSelectedConversation<T extends { runId?: string }>(state: WorkbenchState, pendingItems: T[]) {
+  return pendingItems.find((pending) => {
+    const run = runById(state, pending.runId);
+    return run ? runMatchesSelectedConversation(state, run) : !pending.runId;
+  }) ?? null;
+}
+
+function upsertPendingByRun<T extends { id: string; runId?: string }>(pendingItems: T[], pending: T) {
+  const matches = (item: T) => pending.runId ? item.runId === pending.runId : !item.runId;
+  return [pending, ...pendingItems.filter((item) => !matches(item))];
+}
+
+function removePendingByRun<T extends { runId?: string }>(pendingItems: T[], runId: string | undefined) {
+  if (!runId) return pendingItems;
+  return pendingItems.filter((item) => item.runId !== runId);
+}
+
+function clearPendingByRunOrSelection<T extends { runId?: string }>(
+  state: WorkbenchState,
+  pendingItems: T[],
+  runId: string | undefined,
+) {
+  if (runId) return pendingItems.filter((item) => item.runId !== runId);
+  const selected = pendingForSelectedConversation(state, pendingItems);
+  if (!selected) return [];
+  return pendingItems.filter((item) => item !== selected);
+}
+
 function stateFromConversationRunSettings(runSettings?: ConversationRunSettings): Partial<WorkbenchState> {
   if (!runSettings) return {};
   const state: Partial<WorkbenchState> = {};
@@ -481,14 +663,14 @@ function conversationActivityText(action: Extract<WorkbenchAction, { type: "conv
 }
 
 function setLocalAccess(state: WorkbenchState, mode: WorkdirAccessMode): WorkbenchState {
-  return {
+  return withSelectedPendingCompatibility({
     ...state,
     accessMode: mode,
     contextEnabled: mode !== "off",
-    pendingLocalTool: mode === "off" ? null : state.pendingLocalTool,
-    pendingAutomaticContinuation: mode === "off" ? null : state.pendingAutomaticContinuation,
+    pendingLocalTools: mode === "off" ? [] : state.pendingLocalTools,
+    pendingAutomaticContinuations: mode === "off" ? [] : state.pendingAutomaticContinuations,
     activities: [...state.activities, newActivity(mode === "off" ? "warning" : "success", `Local access: ${mode}`)].slice(-20),
-  };
+  });
 }
 
 export function parseWorkbenchCommand(input: string): WorkbenchCommand | null {
@@ -572,6 +754,12 @@ export function parseWorkbenchCommand(input: string): WorkbenchCommand | null {
     case "model": {
       const value = rest.join(" ").trim();
       return { kind: "model", value: value || undefined };
+    }
+    case "continuation-limit":
+    case "continuation":
+    case "automatic-continuation-limit": {
+      const value = rest.join(" ").trim();
+      return { kind: "continuation_limit", value: value || undefined };
     }
     case "memory": {
       const [fieldOrValue, maybeValue, maybeToggle] = rest;
@@ -702,6 +890,7 @@ export function helpText() {
     ["/config", "isolator", "save agent-isolator path; use none/off to clear"],
     ["/preset", "[name]", "show or set preset; use none/off to clear"],
     ["/model", "[name]", "show or set explicit model; use auto/none/off to clear"],
+    ["/continuation-limit", "[n|unlimited|reset]", "show or set this conversation's continuation checkpoint limit"],
     ["/memory", "", "show memory options; /memory off clears memory options"],
     ["/memory", "read|write [on|off]", "toggle memory read or write"],
     ["/memory", "read workspace [on|off]", "toggle read-scoped workspace memory search"],

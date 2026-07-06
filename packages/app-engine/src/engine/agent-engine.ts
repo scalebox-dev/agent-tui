@@ -171,7 +171,16 @@ export function createAgentEngine(options: AgentEngineAppOptions): AgentEngineAp
         presetExplicit: options.baseOptions.presetExplicit,
       });
       if (lifecycleOptions.isMounted && !lifecycleOptions.isMounted()) return;
-      session.engine.dispatch({ type: "settings.set", settings });
+      const state = session.engine.snapshot();
+      session.engine.dispatch({
+        type: "settings.set",
+        settings: {
+          ...settings,
+          defaultAutomaticContinuationLimit: settings.defaultAutomaticContinuationLimit ?? settings.automaticContinuationLimit,
+          ...(state.runPreset ? { runPreset: state.runPreset } : {}),
+          ...(state.automaticContinuationLimit !== undefined ? { automaticContinuationLimit: state.automaticContinuationLimit } : {}),
+        },
+      });
       if (settings.activity) {
         session.engine.dispatch({ type: "activity.add", level: "success", text: settings.activity });
       }

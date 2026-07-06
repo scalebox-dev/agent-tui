@@ -1,12 +1,17 @@
 import type { AgentRunOptions } from "../agent.js";
 import type { ConversationRunSettings } from "../config.js";
-import type { WorkbenchCommand } from "./state.js";
+import {
+  selectedConversationPendingAutomaticContinuation,
+  selectedConversationPendingLocalTool,
+  selectedConversationRunningRun,
+  type WorkbenchCommand,
+} from "./state.js";
 import { checkForUpdate, formatUpdateNotice, installUpdate, type UpdateCheckResult, type UpdateInstallResult } from "../update.js";
 import type { WorkbenchAuthController } from "./auth-controller.js";
 import type { WorkbenchConversationController } from "./conversation-controller.js";
 import type { WorkbenchEffect, WorkbenchEngine } from "./engine.js";
 import type { WorkbenchLocalController } from "./local-controller.js";
-import { UnknownPresetError } from "./settings-controller.js";
+import { formatAutomaticContinuationLimit, normalizeAutomaticContinuationLimitPreference, UnknownPresetError } from "./settings-controller.js";
 import type { WorkbenchSettingsController } from "./settings-controller.js";
 import type { WorkbenchTranscriptStore } from "./transcript-store.js";
 import type { WorkbenchTurnController } from "./turn-controller.js";
@@ -54,17 +59,21 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
       }
       switch (command.kind) {
         case "abort":
-          if (!options.engine.snapshot().busy) {
-            dispatch({ type: "message.add", role: "system", text: "No agent turn is running." });
+          const activeRun = selectedConversationRunningRun(options.engine.snapshot());
+          if (!activeRun) {
+            dispatch({ type: "message.add", role: "system", text: "No agent turn is running for the selected conversation." });
             return;
           }
-          await options.turnController.abort("Abort requested.");
+          await options.turnController.abort("Abort requested.", activeRun.id);
           return;
         case "config":
           await runConfigCommand(command);
           return;
         case "preset":
           await runPresetCommand(command.value);
+          return;
+        case "continuation_limit":
+          await runContinuationLimitCommand(command.value);
           return;
         case "summary":
           await showSummary();
@@ -163,7 +172,8 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
           accessMode: state.accessMode,
           contextEnabled: state.contextEnabled,
           defaultPreset: state.defaultPreset,
-          automaticContinuationLimit: state.automaticContinuationLimit,
+          currentAutomaticContinuationLimit: state.automaticContinuationLimit,
+          automaticContinuationLimit: state.defaultAutomaticContinuationLimit,
           localSkillsEnabled: state.localSkillsEnabled,
           memoryRead: state.memoryRead,
           memoryTenantSearch: state.memoryTenantSearch,
@@ -191,14 +201,13 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
           profileName: options.profileName,
           options: options.options,
         });
-        dispatch({ type: "settings.set", settings: { defaultPreset: settings.defaultPreset, runPreset: settings.runPreset } });
+        dispatch({ type: "settings.set", settings: { defaultPreset: settings.defaultPreset } });
         dispatch({
           type: "message.add",
           role: "system",
           text: settings.message,
         });
         dispatch({ type: "activity.add", level: "success", text: settings.activity });
-        await persistCurrentRunSettings();
       } catch (error) {
         if (error instanceof UnknownPresetError) {
           dispatch({
@@ -219,16 +228,15 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
         dispatch({
           type: "message.add",
           role: "system",
-          text: options.settingsController.automaticContinuationLimitHelp(state.automaticContinuationLimit),
+          text: options.settingsController.automaticContinuationLimitHelp(state.defaultAutomaticContinuationLimit),
         });
         return;
       }
       try {
         const settings = await options.settingsController.saveAutomaticContinuationLimit(command.value);
-        dispatch({ type: "settings.set", settings: { automaticContinuationLimit: settings.automaticContinuationLimit } });
+        dispatch({ type: "settings.set", settings: { defaultAutomaticContinuationLimit: settings.automaticContinuationLimit } });
         dispatch({ type: "message.add", role: "system", text: settings.message });
         dispatch({ type: "activity.add", level: "success", text: settings.activity });
-        await persistCurrentRunSettings();
       } catch (error) {
         dispatch({ type: "message.add", role: "system", text: `Could not save automatic continuation limit: ${userFacingError(error)}` });
         dispatch({ type: "activity.add", level: "error", text: "Automatic continuation limit save failed" });
@@ -302,6 +310,32 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
     dispatch({ type: "message.add", role: "system", text: `Preset set to ${normalized || "none"}.` });
     dispatch({ type: "activity.add", text: `Preset: ${normalized || "none"}` });
     await persistCurrentRunSettings();
+  }
+
+  async function runContinuationLimitCommand(value?: string) {
+    const state = options.engine.snapshot();
+    if (!value) {
+      dispatch({
+        type: "message.add",
+        role: "system",
+        text: `Continuation limit: ${formatAutomaticContinuationLimit(state.automaticContinuationLimit)}. Use /continuation-limit <n>, /continuation-limit unlimited, or /continuation-limit reset.`,
+      });
+      return;
+    }
+    try {
+      const normalized = normalizeAutomaticContinuationLimitPreference(value);
+      dispatch({ type: "settings.set", settings: { automaticContinuationLimit: normalized } });
+      dispatch({
+        type: "message.add",
+        role: "system",
+        text: `Conversation continuation limit set to ${formatAutomaticContinuationLimit(normalized)}.`,
+      });
+      dispatch({ type: "activity.add", level: "success", text: `Continuation limit: ${formatAutomaticContinuationLimit(normalized)}` });
+      await persistCurrentRunSettings();
+    } catch (error) {
+      dispatch({ type: "message.add", role: "system", text: `Could not set continuation limit: ${userFacingError(error)}` });
+      dispatch({ type: "activity.add", level: "error", text: "Continuation limit update failed" });
+    }
   }
 
   async function validatePresetName(preset: string) {
@@ -666,12 +700,14 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
 
   function showEditPreview() {
     const state = options.engine.snapshot();
-    if (state.pendingLocalTool) {
-      dispatch({ type: "message.add", role: "system", text: options.localController.approvalPreview(state.pendingLocalTool) });
+    const pendingLocalTool = selectedConversationPendingLocalTool(state);
+    if (pendingLocalTool) {
+      dispatch({ type: "message.add", role: "system", text: options.localController.approvalPreview(pendingLocalTool) });
       return;
     }
-    if (state.pendingAutomaticContinuation) {
-      dispatch({ type: "message.add", role: "system", text: state.pendingAutomaticContinuation.message });
+    const pendingContinuation = selectedConversationPendingAutomaticContinuation(state);
+    if (pendingContinuation) {
+      dispatch({ type: "message.add", role: "system", text: pendingContinuation.message });
       return;
     }
     if (state.pendingUpdate) {
@@ -683,7 +719,9 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
 
   function resumeTimedPause(message?: string) {
     const state = options.engine.snapshot();
-    if (options.turnController.resumeTimedPause(message)) {
+    const activeRun = selectedConversationRunningRun(state);
+    if (options.turnController.resumeTimedPause(message, activeRun?.id)) {
+      if (activeRun) dispatch({ type: "run.status.set", runId: activeRun.id, status: "running", statusText: message || "timed pause resumed" });
       dispatch({
         type: "message.add",
         role: "system",
@@ -699,7 +737,7 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
       role: "system",
       text: [
         "No timed local pause is active.",
-        state.pendingAutomaticContinuation
+        selectedConversationPendingAutomaticContinuation(state)
           ? "Automatic continuation checkpoints still use /apply or /apply-all."
           : "",
         message ? `Resume note recorded locally: ${message}` : "",
@@ -752,14 +790,18 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
       }
       return;
     }
-    if (state.pendingAutomaticContinuation) {
+    const pendingContinuation = selectedConversationPendingAutomaticContinuation(state);
+    if (pendingContinuation) {
       dispatch({
         type: "activity.add",
         level: "warning",
-        text: `Continuing automatic workflow: ${state.pendingAutomaticContinuation.count}/${state.pendingAutomaticContinuation.limit}`,
+        text: `Continuing automatic workflow: ${pendingContinuation.count}/${pendingContinuation.limit}`,
       });
-      const pending = state.pendingAutomaticContinuation;
-      dispatch({ type: "automatic_continuation.pending.clear" });
+      const pending = pendingContinuation;
+      if (pending.runId) {
+        dispatch({ type: "run.status.set", runId: pending.runId, status: "completed", statusText: "automatic continuation resumed" });
+      }
+      dispatch({ type: "automatic_continuation.pending.clear", runId: pending.runId });
       if (allowFutureLocalActions) {
         dispatch({ type: "automatic_continuation.unlock", unlocked: true });
       }
@@ -773,6 +815,7 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
       await options.turnController.continueAfterAutomaticContinuation({
         continuation: pending.continuation,
         bypassAutomaticContinuationLimit: allowFutureLocalActions,
+        sourceRunId: pending.runId,
       });
       return;
     }
@@ -780,14 +823,18 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
       dispatch({ type: "message.add", role: "system", text: unavailableWorkdirText() });
       return;
     }
-    if (state.pendingLocalTool) {
+    const pendingLocalTool = selectedConversationPendingLocalTool(state);
+    if (pendingLocalTool) {
       dispatch({
         type: "activity.add",
         level: "warning",
-        text: `Applying local action: ${state.pendingLocalTool.name}${state.pendingLocalTool.action ? `.${state.pendingLocalTool.action}` : ""}`,
+        text: `Applying local action: ${pendingLocalTool.name}${pendingLocalTool.action ? `.${pendingLocalTool.action}` : ""}`,
       });
       try {
-        const result = await options.localController.applyApproval(state.pendingLocalTool);
+        const result = await options.localController.applyApproval(pendingLocalTool);
+        if (pendingLocalTool.runId) {
+          dispatch({ type: "run.status.set", runId: pendingLocalTool.runId, status: "completed", statusText: "local action applied" });
+        }
         const nextAccessMode = allowFutureLocalActions ? "full" : state.accessMode;
         if (allowFutureLocalActions) {
           dispatch({ type: "access.set", mode: "full" });
@@ -804,12 +851,13 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
           ].join("\n"),
         });
         dispatch({ type: "activity.add", level: "success", text: "Local action applied" });
-        const approval = state.pendingLocalTool;
-        dispatch({ type: "local_tool.pending.clear" });
+        const approval = pendingLocalTool;
+        dispatch({ type: "local_tool.pending.clear", runId: approval.runId });
         await options.turnController.continueAfterLocalApproval({
           approval,
           result,
           accessMode: nextAccessMode,
+          sourceRunId: approval.runId,
         });
       } catch (error) {
         dispatch({ type: "message.add", role: "system", text: userFacingError(error) });
@@ -822,21 +870,29 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
 
   function rejectPendingEdit() {
     const state = options.engine.snapshot();
-    if (state.pendingAutomaticContinuation) {
+    const pendingContinuation = selectedConversationPendingAutomaticContinuation(state);
+    if (pendingContinuation) {
       dispatch({
         type: "activity.add",
-        text: `Stopped automatic workflow: ${state.pendingAutomaticContinuation.responseID || state.pendingAutomaticContinuation.continuation.previousResponseID}`,
+        text: `Stopped automatic workflow: ${pendingContinuation.responseID || pendingContinuation.continuation.previousResponseID}`,
       });
-      dispatch({ type: "automatic_continuation.pending.clear" });
+      if (pendingContinuation.runId) {
+        dispatch({ type: "run.status.set", runId: pendingContinuation.runId, status: "aborted", statusText: "automatic continuation rejected" });
+      }
+      dispatch({ type: "automatic_continuation.pending.clear", runId: pendingContinuation.runId });
       dispatch({ type: "message.add", role: "system", text: "Automatic workflow stopped at the checkpoint." });
       return;
     }
-    if (state.pendingLocalTool) {
+    const pendingLocalTool = selectedConversationPendingLocalTool(state);
+    if (pendingLocalTool) {
       dispatch({
         type: "activity.add",
-        text: `Rejected local action: ${state.pendingLocalTool.name}${state.pendingLocalTool.action ? `.${state.pendingLocalTool.action}` : ""}`,
+        text: `Rejected local action: ${pendingLocalTool.name}${pendingLocalTool.action ? `.${pendingLocalTool.action}` : ""}`,
       });
-      dispatch({ type: "local_tool.pending.clear" });
+      if (pendingLocalTool.runId) {
+        dispatch({ type: "run.status.set", runId: pendingLocalTool.runId, status: "aborted", statusText: "local action rejected" });
+      }
+      dispatch({ type: "local_tool.pending.clear", runId: pendingLocalTool.runId });
       return;
     }
     if (state.pendingUpdate) {

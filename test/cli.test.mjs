@@ -56,6 +56,7 @@ import {
   localShellIsolationOptions as localShellIsolationOptionsFromBoundary,
   parsePendingApprovalCommand,
   parseWorkbenchCommand,
+  selectedConversationPendingLocalTool,
   sessionState,
   summarizeMessages,
   UnknownPresetError,
@@ -1115,6 +1116,7 @@ test("workbench command parser and reducer handle local workflow state", () => {
   assert.deepEqual(parseWorkbenchCommand("/access approval"), { kind: "access", mode: "approval" });
   assert.deepEqual(parseWorkbenchCommand("/preset pro-search"), { kind: "preset", value: "pro-search" });
   assert.deepEqual(parseWorkbenchCommand("/model auto"), { kind: "model", value: "auto" });
+  assert.deepEqual(parseWorkbenchCommand("/continuation-limit unlimited"), { kind: "continuation_limit", value: "unlimited" });
   assert.deepEqual(parseWorkbenchCommand("/memory"), { kind: "memory", enabled: undefined });
   assert.deepEqual(parseWorkbenchCommand("/memory on"), { kind: "invalid", command: "memory on" });
   assert.deepEqual(parseWorkbenchCommand("/memory off"), { kind: "memory", enabled: false });
@@ -1722,14 +1724,13 @@ test("workbench session constructs shared engine and controllers", () => {
 
 test("workbench runtime controller buffers and flushes text deltas", () => {
   const engine = createWorkbenchEngine({ contextEnabled: false });
-  engine.dispatch({ type: "message.add", role: "assistant", id: "assistant-test", text: "" });
   const runtime = createWorkbenchRuntimeController({ dispatch: engine.dispatch, flushDelayMs: 1000 });
 
   runtime.runEffects([
     { type: "append_text_delta", delta: "hel" },
     { type: "append_text_delta", delta: "lo" },
   ], "assistant-test");
-  assert.equal(engine.snapshot().messages.at(-1).text, "");
+  assert.equal(engine.snapshot().messages.at(-1).text, "hel");
 
   runtime.flushTextDeltaBuffer();
   assert.equal(engine.snapshot().messages.at(-1).text, "hello");
@@ -1929,8 +1930,14 @@ test("workbench command controller saves automatic continuation limit", async ()
 
   await controller.run({ kind: "config", field: "continuation-limit", value: "14" });
 
-  assert.equal(engine.snapshot().automaticContinuationLimit, 14);
+  assert.equal(engine.snapshot().defaultAutomaticContinuationLimit, 14);
+  assert.equal(engine.snapshot().automaticContinuationLimit, undefined);
   assert.match(engine.snapshot().messages.at(-1).text, /Saved automatic continuation limit: 14/);
+
+  engine.dispatch({ type: "conversation.set", id: "conv_default", name: "default", status: "fresh" });
+  await controller.run({ kind: "continuation_limit", value: "9" });
+  assert.equal(engine.snapshot().automaticContinuationLimit, 9);
+  assert.match(engine.snapshot().messages.at(-1).text, /Conversation continuation limit set to 9/);
 });
 
 test("workbench command controller resumes timed local pauses", async () => {
@@ -2014,7 +2021,16 @@ test("workbench command controller applies pending local approvals", async () =>
   const continuations = [];
   const engine = createWorkbenchEngine({ contextEnabled: true, accessMode: "approval" });
   engine.dispatch({
+    type: "run.started",
+    run: {
+      id: "run_local",
+      assistantMessageId: "assistant_local",
+      conversationName: "default",
+    },
+  });
+  engine.dispatch({
     type: "local_tool.pending.set",
+    runId: "run_local",
     approval: {
       name: "local_shell",
       action: "run",
@@ -2057,6 +2073,53 @@ test("workbench command controller applies pending local approvals", async () =>
   assert.equal(continuations.length, 1);
   assert.equal(continuations[0].accessMode, "full");
   assert.deepEqual(continuations[0].result, { ok: true, command: "pwd" });
+  assert.equal(engine.snapshot().runs.find((run) => run.id === "run_local")?.status, "completed");
+  assert.equal(engine.snapshot().runs.find((run) => run.id === "run_local")?.statusText, "local action applied");
+});
+
+test("workbench command controller scopes abort to the selected conversation run", async () => {
+  const engine = createWorkbenchEngine({ contextEnabled: true, accessMode: "approval" });
+  let aborts = 0;
+  engine.dispatch({ type: "conversation.set", id: "conv_a", name: "alpha", status: "fresh" });
+  engine.dispatch({
+    type: "run.started",
+    run: {
+      id: "run_alpha",
+      assistantMessageId: "assistant_alpha",
+      conversationId: "conv_a",
+      conversationName: "alpha",
+    },
+  });
+  engine.dispatch({ type: "conversation.set", id: "conv_b", name: "beta", status: "fresh" });
+  const commandController = createWorkbenchCommandController({
+    authController: stubAuthController(),
+    conversationController: stubConversationController(),
+    engine,
+    localController: stubLocalController(),
+    options: { promptParts: [], profile: "default" },
+    profileName: "default",
+    settingsController: stubSettingsController(),
+    turnController: {
+      ...stubTurnController(),
+      async abort() {
+        aborts += 1;
+      },
+    },
+    workspaceController: stubWorkspaceController(),
+    async onDeleteProfile() {},
+    onExit() {},
+    onLogin() {},
+    onLogout() {},
+    onSwitchProfile() {},
+  });
+
+  await commandController.run({ kind: "abort" });
+  assert.equal(aborts, 0);
+  assert.match(engine.snapshot().messages.at(-1).text, /No agent turn is running for the selected conversation/);
+
+  engine.dispatch({ type: "conversation.set", id: "conv_a", name: "alpha", status: "fresh" });
+  await commandController.run({ kind: "abort" });
+  assert.equal(aborts, 1);
 });
 
 test("workbench command controller checks and applies CLI updates", async () => {
@@ -2198,13 +2261,23 @@ test("workbench render model exposes renderer-neutral screen state", () => {
 });
 
 test("workbench render model keeps input editable while busy", () => {
-  const state = createInitialWorkbenchState({});
+  let state = createInitialWorkbenchState({});
+  state = workbenchReducer(state, { type: "conversation.set", id: "conv_selected", name: "selected", status: "fresh" });
+  state = workbenchReducer(state, {
+    type: "run.started",
+    run: {
+      id: "run_selected",
+      assistantMessageId: "assistant_selected",
+      conversationId: "conv_selected",
+      conversationName: "selected",
+    },
+  });
   const model = buildWorkbenchRenderModel({
     cursor: 4,
     draft: "/resume now",
     profileName: "default",
     spinnerFrame: 5,
-    state: { ...state, busy: true },
+    state,
     transcriptOffset: 0,
     viewport: { rows: 30, columns: 80 },
     workdirFallback: "/fallback",
@@ -2216,6 +2289,88 @@ test("workbench render model keeps input editable while busy", () => {
   assert.equal(model.input.draft, "/resume now");
   assert.equal(model.input.lines[0].beforeCursor, "/res");
   assert.equal(model.input.lines[0].cursorText, "u");
+});
+
+test("workbench render model keeps input ready when another conversation is running", () => {
+  let state = createInitialWorkbenchState({});
+  state = workbenchReducer(state, { type: "conversation.set", id: "conv_selected", name: "selected", status: "fresh" });
+  state = workbenchReducer(state, {
+    type: "run.started",
+    run: {
+      id: "run_other",
+      assistantMessageId: "assistant_other",
+      conversationId: "conv_other",
+      conversationName: "other",
+    },
+  });
+  const model = buildWorkbenchRenderModel({
+    draft: "new task",
+    profileName: "default",
+    spinnerFrame: 5,
+    state,
+    transcriptOffset: 0,
+    viewport: { rows: 30, columns: 80 },
+    workdirFallback: "/fallback",
+  });
+
+  assert.equal(state.busy, true);
+  assert.equal(model.input.busy, false);
+  assert.match(model.input.statusText, /1 other run active/);
+});
+
+test("workbench render model marks conversation run status", () => {
+  let state = createInitialWorkbenchState({});
+  state = workbenchReducer(state, { type: "conversation.set", id: "conv_current", name: "current", status: "fresh" });
+  state = workbenchReducer(state, {
+    type: "conversations.set",
+    conversations: [
+      { id: "conv_current", latestSnippet: "Current work", messageCount: 1, name: "current", status: "fresh", titleSnippet: "Current work" },
+      { id: "conv_other", latestSnippet: "Background work", messageCount: 3, name: "other", status: "continued", titleSnippet: "Background work" },
+      { id: "conv_failed", latestSnippet: "Failed work", messageCount: 2, name: "failed", status: "continued", titleSnippet: "Failed work" },
+    ],
+  });
+  state = workbenchReducer(state, {
+    type: "run.started",
+    run: { id: "run_other", assistantMessageId: "assistant_other", conversationId: "conv_other", conversationName: "other" },
+  });
+  state = workbenchReducer(state, {
+    type: "run.started",
+    run: { id: "run_failed", assistantMessageId: "assistant_failed", conversationId: "conv_failed", conversationName: "failed" },
+  });
+  state = workbenchReducer(state, { type: "run.status.set", runId: "run_failed", status: "failed", statusText: "boom" });
+  const model = buildWorkbenchRenderModel({
+    draft: "",
+    profileName: "default",
+    spinnerFrame: 0,
+    state,
+    transcriptOffset: 0,
+    viewport: { rows: 30, columns: 120 },
+    workdirFallback: "/fallback",
+  });
+
+  assert.match(model.conversation.lines.join("\n"), /\s▶ other · Background work/);
+  assert.match(model.conversation.lines.join("\n"), /\s! failed · Failed work/);
+});
+
+test("workbench render model shows selected conversation run in fallback panel", () => {
+  let state = createInitialWorkbenchState({});
+  state = workbenchReducer(state, { type: "conversation.set", id: "conv_current", name: "current", status: "fresh" });
+  state = workbenchReducer(state, {
+    type: "run.started",
+    run: { id: "run_current", assistantMessageId: "assistant_current", conversationId: "conv_current", conversationName: "current" },
+  });
+  state = workbenchReducer(state, { type: "run.response.set", runId: "run_current", responseId: "resp_current" });
+  const model = buildWorkbenchRenderModel({
+    draft: "",
+    profileName: "default",
+    spinnerFrame: 0,
+    state,
+    transcriptOffset: 0,
+    viewport: { rows: 30, columns: 120 },
+    workdirFallback: "/fallback",
+  });
+
+  assert.match(model.conversation.lines.join("\n"), /run=running resp_current/);
 });
 
 test("workbench render model extracts panel-scoped copy text", () => {
@@ -2286,17 +2441,19 @@ test("workbench terminal controller routes focused panel operations", () => {
     workdirFallback: "/fallback",
   });
   const apply = (input, key) => {
+    const currentModel = model();
     const result = controller.handle(input, key, terminalState, {
-      busy: workbenchState.busy,
-      renderModel: model(),
+      busy: currentModel.input.busy,
+      renderModel: currentModel,
     });
     terminalState = result.state;
     return result;
   };
   const applyMouse = (event) => {
+    const currentModel = model();
     const result = controller.handleMouse(event, terminalState, {
-      busy: workbenchState.busy,
-      renderModel: model(),
+      busy: currentModel.input.busy,
+      renderModel: currentModel,
     });
     terminalState = result.state;
     return result;
@@ -2464,6 +2621,43 @@ test("workbench terminal controller routes focused panel operations", () => {
   const submit = apply("i", {});
   assert.equal(submit.state.draft, "hi");
   assert.deepEqual(apply("", { return: true }).effects, [{ type: "submit", input: "hi" }]);
+});
+
+test("workbench terminal controller allows submit when only another conversation is running", () => {
+  const controller = createWorkbenchTerminalController();
+  let state = createInitialWorkbenchState({});
+  state = workbenchReducer(state, { type: "conversation.set", id: "conv_selected", name: "selected", status: "fresh" });
+  state = workbenchReducer(state, {
+    type: "run.started",
+    run: {
+      id: "run_other",
+      assistantMessageId: "assistant_other",
+      conversationId: "conv_other",
+      conversationName: "other",
+    },
+  });
+  const terminalState = {
+    ...initialWorkbenchTerminalState(),
+    cursor: "new task".length,
+    draft: "new task",
+  };
+  const renderModel = buildWorkbenchRenderModel({
+    cursor: terminalState.cursor,
+    draft: terminalState.draft,
+    profileName: "default",
+    spinnerFrame: 0,
+    state,
+    transcriptOffset: 0,
+    viewport: { rows: 24, columns: 120 },
+    workdirFallback: "/fallback",
+  });
+
+  assert.equal(state.busy, true);
+  assert.equal(renderModel.input.busy, false);
+  assert.deepEqual(controller.handle("", { return: true }, terminalState, {
+    busy: renderModel.input.busy,
+    renderModel,
+  }).effects, [{ type: "submit", input: "new task" }]);
 });
 
 test("tui mouse parser accepts Ink-delivered SGR reports without ESC", () => {
@@ -2710,6 +2904,7 @@ test("workbench settings controller persists automatic continuation limit", asyn
 
   assert.deepEqual(await controller.loadInitial({ modelExplicit: false, preset: "pro-search", presetExplicit: false }), {
     automaticContinuationLimit: 12,
+    defaultAutomaticContinuationLimit: 12,
     defaultPreset: undefined,
     runPreset: "pro-search",
     shellIsolation: { installSkipped: true },
@@ -2717,11 +2912,13 @@ test("workbench settings controller persists automatic continuation limit", asyn
 
   assert.deepEqual(await controller.saveAutomaticContinuationLimit("16"), {
     automaticContinuationLimit: 16,
+    defaultAutomaticContinuationLimit: 16,
     message: "Saved automatic continuation limit: 16.",
     activity: "Automatic continuation limit saved: 16",
   });
   assert.deepEqual(await controller.saveAutomaticContinuationLimit("unlimited"), {
     automaticContinuationLimit: null,
+    defaultAutomaticContinuationLimit: null,
     message: "Saved automatic continuation limit: unlimited.",
     activity: "Automatic continuation limit saved: unlimited",
   });
@@ -3545,6 +3742,112 @@ test("workbench reducer creates streamed assistant output at first text event", 
   assert.equal(state.messages.at(-1)?.text, "Final answer.");
 });
 
+test("workbench reducer keeps targeted background transcript writes out of the selected conversation", () => {
+  let state = createInitialWorkbenchState({ contextEnabled: false });
+  state = workbenchReducer(state, { type: "conversation.set", id: "conv_visible", name: "visible", status: "fresh" });
+  const beforeMessages = state.messages;
+
+  state = workbenchReducer(state, {
+    type: "message.add",
+    id: "background-1",
+    role: "assistant",
+    text: "Background output",
+    conversationId: "conv_background",
+  });
+
+  assert.equal(state.messages, beforeMessages);
+});
+
+test("workbench reducer tracks run registry lifecycle", () => {
+  let state = createInitialWorkbenchState({ contextEnabled: false });
+  state = workbenchReducer(state, {
+    type: "run.started",
+    run: {
+      id: "run_1",
+      assistantMessageId: "assistant_1",
+      conversationId: "conv_1",
+      conversationName: "alpha",
+      workspaceId: "wrk_1",
+      workspaceName: "Workspace",
+    },
+  });
+
+  assert.equal(state.busy, true);
+  assert.equal(state.activeRunId, "run_1");
+  assert.equal(state.runs[0].status, "running");
+  assert.equal(state.runs[0].conversationId, "conv_1");
+
+  state = workbenchReducer(state, { type: "run.response.set", runId: "run_1", responseId: "resp_1" });
+  assert.equal(state.runs[0].responseId, "resp_1");
+
+  state = workbenchReducer(state, { type: "run.status.set", runId: "run_1", status: "completed", statusText: "resp_1" });
+  assert.equal(state.busy, false);
+  assert.equal(state.activeRunId, null);
+  assert.equal(state.runs[0].status, "completed");
+  assert.equal(state.runs[0].statusText, "resp_1");
+});
+
+test("workbench reducer scopes pending local approvals by selected conversation", () => {
+  let state = createInitialWorkbenchState({ contextEnabled: true, accessMode: "approval" });
+  state = workbenchReducer(state, { type: "conversation.set", id: "conv_a", name: "alpha", status: "fresh" });
+  state = workbenchReducer(state, {
+    type: "run.started",
+    run: {
+      id: "run_alpha",
+      assistantMessageId: "assistant_alpha",
+      conversationId: "conv_a",
+      conversationName: "alpha",
+    },
+  });
+  state = workbenchReducer(state, { type: "conversation.set", id: "conv_b", name: "beta", status: "fresh" });
+  state = workbenchReducer(state, {
+    type: "run.started",
+    run: {
+      id: "run_beta",
+      assistantMessageId: "assistant_beta",
+      conversationId: "conv_b",
+      conversationName: "beta",
+    },
+  });
+  state = workbenchReducer(state, {
+    type: "local_tool.pending.set",
+    runId: "run_alpha",
+    approval: {
+      name: "local_shell",
+      action: "run",
+      arguments: { command: "echo alpha" },
+      callID: "call_alpha",
+      responseID: "resp_alpha",
+    },
+  });
+  state = workbenchReducer(state, {
+    type: "local_tool.pending.set",
+    runId: "run_beta",
+    approval: {
+      name: "local_workdir",
+      action: "read",
+      arguments: { path: "beta.txt" },
+      callID: "call_beta",
+      responseID: "resp_beta",
+    },
+  });
+
+  assert.equal(state.pendingLocalTools.length, 2);
+  assert.equal(selectedConversationPendingLocalTool(state)?.responseID, "resp_beta");
+  assert.equal(state.pendingLocalTool?.responseID, "resp_beta");
+
+  state = workbenchReducer(state, { type: "conversation.set", id: "conv_a", name: "alpha", status: "continued" });
+  assert.equal(selectedConversationPendingLocalTool(state)?.responseID, "resp_alpha");
+  assert.equal(state.pendingLocalTool?.responseID, "resp_alpha");
+
+  state = workbenchReducer(state, { type: "local_tool.pending.clear", runId: "run_alpha" });
+  assert.equal(selectedConversationPendingLocalTool(state), null);
+  assert.equal(state.pendingLocalTools.length, 1);
+
+  state = workbenchReducer(state, { type: "conversation.set", id: "conv_b", name: "beta", status: "continued" });
+  assert.equal(selectedConversationPendingLocalTool(state)?.responseID, "resp_beta");
+});
+
 test("workbench transcript store persists recent messages and deltas", async () => {
   const store = createMemoryTranscriptStore();
   await store.appendMessage("conv_1", { id: "user-1", role: "user", text: "Hello" });
@@ -3608,6 +3911,29 @@ test("workbench engine keeps transcript store independent from the visible windo
   const persisted = await store.loadRecentMessages("conv_window", 1);
   assert.equal(persisted.length, 1);
   assert.equal(persisted[0].text, `${fullText}tail`);
+});
+
+test("workbench engine persists targeted background transcript writes without changing the visible window", async () => {
+  const store = createMemoryTranscriptStore();
+  const engine = createWorkbenchEngine({ contextEnabled: false, transcriptStore: store });
+  engine.dispatch({ type: "conversation.set", id: "conv_visible", name: "visible", status: "fresh" });
+  const visibleBefore = engine.snapshot().messages;
+
+  engine.dispatch({
+    type: "message.add",
+    id: "background-1",
+    role: "assistant",
+    text: "Background output",
+    conversationId: "conv_background",
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(engine.snapshot().messages, visibleBefore);
+  assert.deepEqual(await store.loadRecentMessages("conv_background", 5), [
+    { id: "background-1", kind: undefined, role: "assistant", text: "Background output", transcriptSeq: 1 },
+  ]);
+  assert.deepEqual(await store.loadRecentMessages("conv_visible", 5), []);
 });
 
 test("workbench file transcript store persists messages on disk", async () => {
@@ -4074,9 +4400,120 @@ test("workbench turn controller runs prompt turns through engine state", async (
   assert.deepEqual(seenOptions[0].skillTool, { tenant_search: true });
   assert.equal(engine.snapshot().busy, false);
   assert.equal(engine.snapshot().activeAssistantMessageId, null);
+  assert.equal(engine.snapshot().runs[0].status, "completed");
+  assert.equal(engine.snapshot().runs[0].responseId, "resp_turn");
+  assert.equal(engine.snapshot().runs[0].conversationName, "demo");
   assert.match(engine.snapshot().activities.at(-1).text, /Agent turn completed: resp_turn/);
   assert.equal(runtimeEffects.some((entry) => Array.isArray(entry.effects) && entry.effects.some((effect) => effect.type === "append_text_delta")), true);
   assert.equal(runtimeEffects.some((entry) => entry.type === "flush"), true);
+});
+
+test("workbench turn controller writes in-flight run output to the starting conversation", async () => {
+  const store = createMemoryTranscriptStore();
+  const engine = createWorkbenchEngine({ contextEnabled: true, transcriptStore: store });
+  engine.dispatch({ type: "conversation.set", id: "conv_a", name: "alpha", status: "fresh" });
+  const runtime = createWorkbenchRuntimeController({ dispatch: engine.dispatch, flushDelayMs: 1000 });
+  const controller = createWorkbenchTurnController({
+    baseOptions: { promptParts: [], profile: "default" },
+    dispatch: engine.dispatch,
+    engine,
+    flushTextDeltaBuffer: runtime.flushTextDeltaBuffer,
+    getState: engine.snapshot,
+    runRuntimeEffects: runtime.runEffects,
+    async runAgentTurnImpl(_options, onEvent) {
+      engine.dispatch({ type: "conversation.set", id: "conv_b", name: "beta", status: "fresh" });
+      onEvent?.({ type: "response.started", responseID: "resp_alpha" });
+      onEvent?.({ type: "text.delta", delta: "alpha output" });
+      onEvent?.({ type: "response.completed", responseID: "resp_alpha" });
+      return { text: "alpha output", responseID: "resp_alpha" };
+    },
+  });
+
+  await controller.startPrompt("hello alpha");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(engine.snapshot().conversationId, "conv_b");
+  assert.equal(engine.snapshot().runs[0].conversationId, "conv_a");
+  assert.equal(engine.snapshot().runs[0].status, "completed");
+  assert.deepEqual((await store.loadRecentMessages("conv_a", 5)).map((message) => ({
+    role: message.role,
+    text: message.text,
+  })), [
+    { role: "user", text: "hello alpha" },
+    { role: "assistant", text: "alpha output" },
+  ]);
+  assert.deepEqual(await store.loadRecentMessages("conv_b", 5), []);
+  runtime.dispose();
+});
+
+test("workbench turn controller resumes pending work in the source run conversation", async () => {
+  const engine = createWorkbenchEngine({ contextEnabled: true, accessMode: "approval" });
+  engine.dispatch({ type: "workspace.set", workspace: { id: "wrk_alpha", name: "Alpha Workspace" } });
+  engine.dispatch({ type: "conversation.set", id: "conv_alpha", name: "alpha", status: "fresh" });
+  engine.dispatch({
+    type: "run.started",
+    run: {
+      id: "run_alpha",
+      assistantMessageId: "assistant_alpha",
+      conversationId: "conv_alpha",
+      conversationName: "alpha",
+      workspaceId: "wrk_alpha",
+      workspaceName: "Alpha Workspace",
+      status: "paused",
+    },
+  });
+  engine.dispatch({ type: "workspace.set", workspace: { id: "wrk_beta", name: "Beta Workspace" } });
+  engine.dispatch({ type: "conversation.set", id: "conv_beta", name: "beta", status: "fresh" });
+
+  const localApprovalOptions = [];
+  const automaticContinuationOptions = [];
+  const controller = createWorkbenchTurnController({
+    baseOptions: { promptParts: [], profile: "default" },
+    dispatch: engine.dispatch,
+    engine,
+    flushTextDeltaBuffer() {},
+    getState: engine.snapshot,
+    runRuntimeEffects() {},
+    async resumeAgentAfterLocalApprovalImpl(options) {
+      localApprovalOptions.push(options);
+      return { text: "local done", responseID: "resp_local_done" };
+    },
+    async resumeAgentAfterAutomaticContinuationImpl(options) {
+      automaticContinuationOptions.push(options);
+      return { text: "auto done", responseID: "resp_auto_done" };
+    },
+  });
+
+  await controller.continueAfterLocalApproval({
+    sourceRunId: "run_alpha",
+    approval: {
+      name: "local_shell",
+      action: "run",
+      arguments: { command: "pwd" },
+      callID: "call_alpha",
+      responseID: "resp_alpha",
+    },
+    result: "ok",
+    accessMode: "approval",
+  });
+  await controller.continueAfterAutomaticContinuation({
+    sourceRunId: "run_alpha",
+    bypassAutomaticContinuationLimit: false,
+    continuation: {
+      input: [{ type: "function_call_output", call_id: "call_alpha", output: "ok" }],
+      previousResponseID: "resp_alpha",
+      automaticContinuationCount: 1,
+    },
+  });
+
+  assert.equal(localApprovalOptions[0].conversation, "alpha");
+  assert.equal(localApprovalOptions[0].workspaceId, "wrk_alpha");
+  assert.equal(localApprovalOptions[0].workspaceName, "Alpha Workspace");
+  assert.equal(automaticContinuationOptions[0].conversation, "alpha");
+  assert.equal(automaticContinuationOptions[0].workspaceId, "wrk_alpha");
+  assert.equal(automaticContinuationOptions[0].workspaceName, "Alpha Workspace");
+  assert.equal(engine.snapshot().conversationId, "conv_beta");
+  assert.equal(engine.snapshot().runs[0].conversationId, "conv_alpha");
 });
 
 test("workbench turn controller resumes active timed local pauses", async () => {
@@ -4170,6 +4607,48 @@ test("workbench turn controller aborts active remote responses", async () => {
   assert.equal(engine.snapshot().messages.some((message) => /Abort requested for response resp_abort/.test(message.text)), true);
 });
 
+test("workbench turn controller keeps independent handles for overlapping runs", async () => {
+  const engine = createWorkbenchEngine({ accessMode: "approval", contextEnabled: true });
+  const releases = new Map();
+  const controller = createWorkbenchTurnController({
+    baseOptions: { promptParts: [], profile: "default" },
+    dispatch: engine.dispatch,
+    engine,
+    flushTextDeltaBuffer() {},
+    getState: engine.snapshot,
+    runRuntimeEffects() {},
+    async runAgentTurnImpl(options, onEvent) {
+      const prompt = options.promptParts[0];
+      onEvent?.({ type: "response.started", responseID: `resp_${prompt}` });
+      await new Promise((resolve, reject) => {
+        releases.set(prompt, resolve);
+        options.abortSignal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+      });
+      return { text: prompt, responseID: `resp_${prompt}` };
+    },
+  });
+
+  const alpha = controller.startPrompt("alpha");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const beta = controller.startPrompt("beta");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(engine.snapshot().runs.filter((run) => run.status === "running").length, 2);
+  releases.get("alpha")();
+  await alpha;
+
+  assert.equal(engine.snapshot().runs.find((run) => run.conversationName === "default" && run.responseId === "resp_alpha")?.status, "completed");
+  assert.equal(engine.snapshot().busy, true);
+
+  const betaRun = engine.snapshot().runs.find((run) => run.responseId === "resp_beta");
+  assert.ok(betaRun);
+  await controller.abort("Abort beta.", betaRun.id);
+  await beta;
+
+  assert.equal(engine.snapshot().runs.find((run) => run.id === betaRun.id)?.status, "aborted");
+  assert.equal(engine.snapshot().busy, false);
+});
+
 test("workbench command controller resumes automatic continuation checkpoints", async () => {
   const engine = createWorkbenchEngine({ accessMode: "full", contextEnabled: true });
   let resumedInput;
@@ -4224,7 +4703,17 @@ test("workbench command controller resumes automatic continuation checkpoints", 
     onSwitchProfile() {},
   });
   engine.dispatch({
+    type: "run.started",
+    run: {
+      id: "run_continuation",
+      assistantMessageId: "assistant_continuation",
+      conversationName: "default",
+      status: "paused",
+    },
+  });
+  engine.dispatch({
     type: "automatic_continuation.pending.set",
+    runId: "run_continuation",
     pause: {
       reason: "automatic_continuation_limit",
       message: "Automatic workflow paused.",
@@ -4245,6 +4734,8 @@ test("workbench command controller resumes automatic continuation checkpoints", 
   assert.equal(engine.snapshot().automaticContinuationUnlocked, true);
   assert.equal(resumedInput.bypassAutomaticContinuationLimit, true);
   assert.equal(resumedInput.continuation.previousResponseID, "resp_local");
+  assert.equal(engine.snapshot().runs.find((run) => run.id === "run_continuation")?.status, "completed");
+  assert.equal(engine.snapshot().runs.find((run) => run.id === "run_continuation")?.statusText, "automatic continuation resumed");
 });
 
 test("workbench turn controller uses unlocked automatic continuation limit for later turns", async () => {
