@@ -21,14 +21,30 @@ export interface UpdateInstallResult {
   output: string;
 }
 
+export interface UpdateNoticeOptions {
+  installPlan?: UpdateInstallPlan;
+}
+
+export interface UpdateInstallOptions {
+  installPlan?: UpdateInstallPlan;
+}
+
+export interface UpdateInstallPlan {
+  command: string;
+  args: string[];
+  cwd?: string;
+  scope: "global" | "local";
+}
+
 const defaultPackageName = "@agent-api/cli";
 const defaultRegistryURL = "https://registry.npmjs.org";
+const defaultUpdateTimeoutMs = 15_000;
 
 export async function checkForUpdate(options: UpdateCheckOptions = {}): Promise<UpdateCheckResult | null> {
   const packageName = options.packageName || process.env.AGENT_TUI_UPDATE_PACKAGE || defaultPackageName;
   const current = options.currentVersion || appVersion();
   const registryURL = (options.registryURL || process.env.AGENT_TUI_NPM_REGISTRY || defaultRegistryURL).replace(/\/+$/, "");
-  const timeoutMs = options.timeoutMs ?? 1500;
+  const timeoutMs = options.timeoutMs ?? positiveInt(process.env.AGENT_TUI_UPDATE_TIMEOUT_MS, defaultUpdateTimeoutMs);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   const signal = combineSignals(options.signal, controller.signal);
@@ -48,24 +64,34 @@ export async function checkForUpdate(options: UpdateCheckOptions = {}): Promise<
       updateAvailable: compareVersions(latest, current) > 0,
     };
   } catch {
-    return null;
+  return null;
   } finally {
     clearTimeout(timer);
   }
 }
 
-export function formatUpdateNotice(result: UpdateCheckResult): string {
-  return `Update available: ${result.packageName} ${result.current} -> ${result.latest}. Run: npm install -g ${result.packageName}@latest`;
+export function formatUpdateNotice(result: UpdateCheckResult, options: UpdateNoticeOptions = {}): string {
+  const plan = options.installPlan ?? globalUpdateInstallPlan(result);
+  return `Update available: ${result.packageName} ${result.current} -> ${result.latest}. Run: ${formatInstallPlan(plan)}`;
 }
 
-export async function installUpdate(result: UpdateCheckResult): Promise<UpdateInstallResult> {
-  const executable = process.platform === "win32" ? "npm.cmd" : "npm";
-  const args = ["install", "-g", `${result.packageName}@latest`];
-  const output = await runCommand(executable, args);
+export async function installUpdate(result: UpdateCheckResult, options: UpdateInstallOptions = {}): Promise<UpdateInstallResult> {
+  const plan = options.installPlan ?? globalUpdateInstallPlan(result);
+  const output = await runCommand(plan.command, plan.args, { cwd: plan.cwd });
   return {
-    command: `${executable} ${args.join(" ")}`,
+    command: formatInstallPlan(plan),
     output,
   };
+}
+
+export function globalUpdateInstallPlan(result: Pick<UpdateCheckResult, "packageName">): UpdateInstallPlan {
+  const executable = process.platform === "win32" ? "npm.cmd" : "npm";
+  return { command: executable, args: ["install", "-g", `${result.packageName}@latest`], scope: "global" };
+}
+
+export function localUpdateInstallPlan(result: Pick<UpdateCheckResult, "packageName">, cwd: string): UpdateInstallPlan {
+  const executable = process.platform === "win32" ? "npm.cmd" : "npm";
+  return { command: executable, args: ["install", `${result.packageName}@latest`], cwd, scope: "local" };
 }
 
 export function compareVersions(a: string, b: string): number {
@@ -76,6 +102,12 @@ export function compareVersions(a: string, b: string): number {
     if (delta !== 0) return delta > 0 ? 1 : -1;
   }
   return 0;
+}
+
+function positiveInt(value: string | number | undefined, fallback: number): number {
+  if (value == null) return fallback;
+  const parsed = typeof value === "number" ? value : Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 function parseVersion(version: string): number[] {
@@ -104,9 +136,10 @@ function combineSignals(...signals: Array<AbortSignal | undefined>): AbortSignal
   return controller.signal;
 }
 
-function runCommand(command: string, args: string[]) {
+function runCommand(command: string, args: string[], options: { cwd?: string } = {}) {
   return new Promise<string>((resolve, reject) => {
     const child = spawn(command, args, {
+      cwd: options.cwd,
       env: process.env,
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -123,7 +156,25 @@ function runCommand(command: string, args: string[]) {
         resolve(output.trim());
         return;
       }
-      reject(new Error(`${command} ${args.join(" ")} failed with exit code ${code}${output ? `\n${output.trim()}` : ""}`));
+      reject(new Error(formatCommandFailure(command, args, code, output)));
     });
   });
+}
+
+function formatInstallPlan(plan: UpdateInstallPlan): string {
+  const rendered = `${plan.command} ${plan.args.join(" ")}`;
+  return plan.cwd ? `${rendered} --prefix ${plan.cwd}` : rendered;
+}
+
+function formatCommandFailure(command: string, args: string[], code: number | null, output: string): string {
+  const commandText = `${command} ${args.join(" ")}`;
+  const trimmed = output.trim();
+  if (/\bEACCES\b|permission denied/i.test(trimmed)) {
+    return [
+      `${commandText} failed because the npm install location is not writable by the current user.`,
+      "Use a user-owned npm prefix, run the matching install command manually with the required privileges, or reinstall agent-tui without sudo.",
+      trimmed,
+    ].filter(Boolean).join("\n");
+  }
+  return `${commandText} failed with exit code ${code}${trimmed ? `\n${trimmed}` : ""}`;
 }

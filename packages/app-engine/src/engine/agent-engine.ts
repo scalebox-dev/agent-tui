@@ -291,6 +291,13 @@ export function createAgentEngine(options: AgentEngineAppOptions): AgentEngineAp
         type: "workdir.set",
         workdir,
       });
+      if (workdir.scanWarnings?.length) {
+        session.engine.dispatch({
+          type: "activity.add",
+          level: "warning",
+          text: formatWorkdirScanWarning(workdir.scanWarnings),
+        });
+      }
     } catch (error) {
       if (disposed || isCanceledWorkdirLoad(error)) return;
       if (lifecycleOptions.isMounted && !lifecycleOptions.isMounted()) return;
@@ -389,6 +396,13 @@ export function createAgentEngine(options: AgentEngineAppOptions): AgentEngineAp
 
 function isCanceledWorkdirLoad(error: unknown): boolean {
   return error instanceof Error && /workdir load canceled/i.test(error.message);
+}
+
+function formatWorkdirScanWarning(warnings: NonNullable<WorkbenchState["workdir"]>["scanWarnings"]): string {
+  const first = warnings?.[0];
+  const suffix = first ? `: ${first.path}${first.code ? ` (${first.code})` : ""}` : "";
+  const extra = warnings && warnings.length > 1 ? ` and ${warnings.length - 1} more` : "";
+  return `Workdir scan skipped ${warnings?.length ?? 0} entr${warnings?.length === 1 ? "y" : "ies"}${suffix}${extra}`;
 }
 
 function firstStoredTranscriptSeq(messages: WorkbenchState["messages"]) {

@@ -16,6 +16,7 @@ import {
 } from "./state.js";
 import type { AgentTurnEvent, WorkdirAccessMode } from "../agent.js";
 import { formatDisplayPreview, localToolDisplayArguments } from "../local-display.js";
+import { appVersion } from "../runtime/index.js";
 import { shouldPersistTranscriptMessage, type WorkbenchTranscriptStore } from "./transcript-store.js";
 
 export interface WorkbenchEngineOptions {
@@ -157,6 +158,10 @@ export function createWorkbenchEngine(options: WorkbenchEngineOptions): Workbenc
           return handled();
         case "help":
           dispatch({ type: "message.add", role: "system", text: helpText() });
+          return handled();
+        case "version":
+          dispatch({ type: "message.add", role: "system", text: `Agent API Workbench ${appVersion()}` });
+          dispatch({ type: "activity.add", text: `Version: ${appVersion()}` });
           return handled();
         case "clear":
           dispatch({ type: "messages.clear" });

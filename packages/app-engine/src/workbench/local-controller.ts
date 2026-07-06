@@ -1,7 +1,7 @@
 import { createLocalShellToolRegistry, createLocalWorkdirToolRegistry } from "@agent-api/sdk/local";
 import { formatDisplayPreview, localToolDisplayArguments } from "../local-display.js";
 import { openWorkdir, type WorkdirService } from "../workdir/index.js";
-import type { WorkbenchState, WorkbenchWorkdirStatus } from "./state.js";
+import type { WorkbenchScanWarning, WorkbenchState, WorkbenchWorkdirStatus } from "./state.js";
 import { localShellIsolationOptions } from "./shell-isolation.js";
 import type { ShellIsolationPreferences } from "./shell-isolation.js";
 
@@ -44,13 +44,16 @@ export function createWorkbenchLocalController(options: WorkbenchLocalController
       const summary = await next.summarize(DEFAULT_WORKDIR_SUMMARY_OPTIONS);
       if (disposed || generation !== loadGeneration) throw new Error("Workdir load canceled.");
       workdir = next;
-      return {
+      const status: WorkbenchWorkdirStatus = {
         root: next.root,
         name: next.name,
         fileCount: summary.file_count,
         totalBytes: summary.total_bytes,
         scanTruncated: summary.scan_truncated,
       };
+      const warnings = summaryScanWarnings(summary);
+      if (warnings) status.scanWarnings = warnings;
+      return status;
     },
 
     dispose() {
@@ -120,6 +123,18 @@ export function createWorkbenchLocalController(options: WorkbenchLocalController
     if (!workdir) throw new Error("Workdir is still loading.");
     return workdir;
   }
+}
+
+function summaryScanWarnings(summary: unknown): WorkbenchScanWarning[] | undefined {
+  const warnings = (summary as { scan_warnings?: unknown }).scan_warnings;
+  if (!Array.isArray(warnings) || warnings.length === 0) return undefined;
+  return warnings
+    .filter((warning): warning is Record<string, unknown> => warning !== null && typeof warning === "object")
+    .map((warning) => ({
+      path: typeof warning.path === "string" ? warning.path : ".",
+      code: typeof warning.code === "string" ? warning.code : undefined,
+      message: typeof warning.message === "string" ? warning.message : undefined,
+    }));
 }
 
 function formatLocalToolApproval(approval: {

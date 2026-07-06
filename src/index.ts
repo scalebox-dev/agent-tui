@@ -205,7 +205,7 @@ function resolveRunWorkdir(positional?: string, option?: string) {
 }
 
 async function runTopLevelUpdate(options: { checkOnly: boolean }) {
-  const result = await checkForUpdate({ timeoutMs: 5_000 });
+  const result = await checkForUpdate();
   if (!result) {
     console.error("Could not check for a CLI update right now.");
     process.exitCode = 1;

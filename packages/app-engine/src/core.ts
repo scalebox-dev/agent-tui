@@ -142,10 +142,13 @@ export {
   checkForUpdate,
   compareVersions,
   formatUpdateNotice,
+  globalUpdateInstallPlan,
   installUpdate,
+  localUpdateInstallPlan,
 } from "./update.js";
 export type {
   UpdateCheckResult,
+  UpdateInstallPlan,
   UpdateInstallResult,
 } from "./update.js";
 export type {

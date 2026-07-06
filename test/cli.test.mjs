@@ -11,6 +11,7 @@ import {
   bindLineDelimitedAgentEngineRpcHandler,
   agentResponseFailureMessage,
   agentTurnEventFromStreamEvent,
+  checkForUpdate,
   clearPresetToolCatalogCache,
   compareVersions,
   configureAgentAppRuntime,
@@ -26,6 +27,7 @@ import {
   localToolExecutionErrorResult,
   normalizeChatOptions,
   resolveAgentRequestTools,
+  localUpdateInstallPlan,
 } from "@agent-api/app-engine/core";
 import {
   authStatusText,
@@ -1581,6 +1583,40 @@ test("update helper compares semver-ish CLI versions and formats npm notice", ()
     packageName: "@agent-api/cli",
     updateAvailable: true,
   }), "Update available: @agent-api/cli 0.1.0 -> 0.1.1. Run: npm install -g @agent-api/cli@latest");
+});
+
+test("update helper formats explicit local install plans", () => {
+  const result = {
+    current: "0.1.0",
+    latest: "0.1.1",
+    packageName: "@agent-api/cli",
+    updateAvailable: true,
+  };
+  const plan = localUpdateInstallPlan(result, "/tmp/agent-project");
+  assert.equal(plan.scope, "local");
+  assert.equal(plan.cwd, "/tmp/agent-project");
+  assert.deepEqual(plan.args, ["install", "@agent-api/cli@latest"]);
+  assert.equal(
+    formatUpdateNotice(result, { installPlan: plan }),
+    "Update available: @agent-api/cli 0.1.0 -> 0.1.1. Run: npm install @agent-api/cli@latest --prefix /tmp/agent-project",
+  );
+});
+
+test("update helper honors env timeout override", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalTimeout = process.env.AGENT_TUI_UPDATE_TIMEOUT_MS;
+  process.env.AGENT_TUI_UPDATE_TIMEOUT_MS = "1";
+  globalThis.fetch = (_url, init = {}) => new Promise((_resolve, reject) => {
+    init.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+  });
+  try {
+    const result = await checkForUpdate({ currentVersion: "0.1.0", packageName: "@agent-api/cli" });
+    assert.equal(result, null);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalTimeout === undefined) delete process.env.AGENT_TUI_UPDATE_TIMEOUT_MS;
+    else process.env.AGENT_TUI_UPDATE_TIMEOUT_MS = originalTimeout;
+  }
 });
 
 test("workbench lifecycle controller emits update notice once", async () => {
@@ -4029,6 +4065,7 @@ test("workbench help transcript styles command names", () => {
   assert.deepEqual(authLine.spans?.[0], { text: "/auth", bold: true });
   assert.equal(authLine.spans?.[1]?.bold, undefined);
   assert.match(authLine.spans?.[1]?.text ?? "", /show current auth profile/);
+  assert.ok(lines.some((line) => line.text.includes("/version") && line.text.includes("current workbench version")));
 });
 
 test("workbench view model labels local tool transcript messages distinctly", () => {
@@ -4156,6 +4193,7 @@ test("workbench engine routes submitted input into prompts and commands", () => 
 
   assert.deepEqual(engine.submit("  "), { kind: "handled" });
   assert.deepEqual(engine.submit("/help"), { kind: "command", command: { kind: "help" } });
+  assert.deepEqual(engine.submit("/version"), { kind: "command", command: { kind: "version" } });
   assert.deepEqual(engine.submit("\\/help"), { kind: "prompt", prompt: "/help" });
   assert.deepEqual(engine.submit("  \\/literal slash prompt  "), { kind: "prompt", prompt: "/literal slash prompt" });
   assert.deepEqual(engine.submit("hello agent"), { kind: "prompt", prompt: "hello agent" });
@@ -4204,6 +4242,9 @@ test("workbench engine handles renderer-neutral commands", () => {
 
   assert.equal(engine.handleCommand({ kind: "transcript" }).handled, true);
   assert.match(engine.snapshot().messages.at(-1).text, /Transcript preview/);
+
+  assert.equal(engine.handleCommand({ kind: "version" }).handled, true);
+  assert.match(engine.snapshot().messages.at(-1).text, /Agent API Workbench/);
 
   assert.equal(engine.handleCommand({ kind: "copy", target: "page" }).handled, true);
   assert.match(engine.snapshot().messages.at(-1).text, /Clipboard copy is provided by the active renderer/);

@@ -29,6 +29,13 @@ export interface WorkbenchWorkdirStatus {
   fileCount: number;
   totalBytes: number;
   scanTruncated: boolean;
+  scanWarnings?: WorkbenchScanWarning[];
+}
+
+export interface WorkbenchScanWarning {
+  path: string;
+  code?: string;
+  message?: string;
 }
 
 export interface WorkbenchConversationSummary {
@@ -177,6 +184,7 @@ export type WorkbenchCommand =
   | { kind: "abort" }
   | { kind: "quit" }
   | { kind: "help" }
+  | { kind: "version" }
   | { kind: "clear" }
   | { kind: "login" }
   | { kind: "logout" }
@@ -687,6 +695,8 @@ export function parseWorkbenchCommand(input: string): WorkbenchCommand | null {
       return { kind: "quit" };
     case "help":
       return { kind: "help" };
+    case "version":
+      return { kind: "version" };
     case "clear":
       return { kind: "clear" };
     case "login":
@@ -878,6 +888,7 @@ export function helpText() {
     ["/logout", "", "leave current session and return to auth gate"],
     ["/switch-profile", "", "switch/sign in with a different profile"],
     ["/delete-profile", "", "delete current saved profile and return to auth"],
+    ["/version", "", "show the current workbench version"],
     ["/workspace", "[id]", "show platform workspaces or switch browser-auth workspace"],
     ["/config", "", "show current run configuration and saved defaults"],
     ["/render", "[mode]", "show or set output rendering: markdown or raw"],
