@@ -17,6 +17,7 @@ export interface WorkdirContextOptions extends WorkdirOptions {
   query?: string;
   maxFiles?: number;
   maxBytes?: number;
+  maxDepth?: number;
   includeContent?: boolean;
 }
 
@@ -52,6 +53,7 @@ export async function openWorkdir(options: WorkdirOptions = {}): Promise<Workdir
         includeSearch: Boolean(contextOptions.query),
         maxFiles: contextOptions.maxFiles,
         maxBytes: contextOptions.maxBytes,
+        maxDepth: contextOptions.maxDepth ?? 3,
         includeContent: contextOptions.includeContent,
       }),
     contextBlock: async (contextOptions = {}) => {
@@ -60,6 +62,7 @@ export async function openWorkdir(options: WorkdirOptions = {}): Promise<Workdir
         includeSearch: Boolean(contextOptions.query),
         maxFiles: contextOptions.maxFiles,
         maxBytes: contextOptions.maxBytes,
+        maxDepth: contextOptions.maxDepth ?? 3,
         includeContent: contextOptions.includeContent,
       });
       return [
