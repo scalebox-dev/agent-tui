@@ -106,6 +106,7 @@ export function createSQLiteTranscriptStore(file: string): WorkbenchTranscriptSt
       });
     },
     async appendMessageDelta(conversationId, messageId, delta) {
+      if (!delta) return;
       appendDelta.run({
         conversationId,
         messageId,

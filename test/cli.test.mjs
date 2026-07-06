@@ -3536,25 +3536,34 @@ test("workbench transcript formatter produces readable plain text", () => {
   ]), "System:\nReady.\n\nTool:\nLocal execution completed.\n\nYou:\nHello\n\nAgent:\nHi there\n");
 });
 
+test("workbench reducer creates streamed assistant output at first text event", () => {
+  let state = createInitialWorkbenchState({ contextEnabled: false });
+  state = workbenchReducer(state, { type: "message.add", id: "tool-1", kind: "tool", role: "system", text: "Local execution completed." });
+  state = workbenchReducer(state, { type: "message.append", id: "assistant-1", delta: "Final answer." });
+
+  assert.deepEqual(state.messages.slice(-2).map((message) => message.id), ["tool-1", "assistant-1"]);
+  assert.equal(state.messages.at(-1)?.text, "Final answer.");
+});
+
 test("workbench transcript store persists recent messages and deltas", async () => {
   const store = createMemoryTranscriptStore();
   await store.appendMessage("conv_1", { id: "user-1", role: "user", text: "Hello" });
-  await store.appendMessage("conv_1", { id: "assistant-1", role: "assistant", text: "" });
-  await store.appendMessageDelta("conv_1", "assistant-1", "Hi");
   await store.appendMessage("conv_1", { id: "tool-1", kind: "tool", role: "system", text: "Local execution completed." });
+  await store.appendMessage("conv_1", { id: "assistant-1", role: "assistant", text: "Hi" });
+  await store.appendMessageDelta("conv_1", "assistant-1", " there");
 
   assert.deepEqual(await store.loadRecentMessages("conv_1", 2), [
-    { id: "assistant-1", role: "assistant", text: "Hi", transcriptSeq: 2 },
-    { id: "tool-1", kind: "tool", role: "system", text: "Local execution completed.", transcriptSeq: 3 },
+    { id: "tool-1", kind: "tool", role: "system", text: "Local execution completed.", transcriptSeq: 2 },
+    { id: "assistant-1", role: "assistant", text: "Hi there", transcriptSeq: 3 },
   ]);
   assert.deepEqual(await store.loadBeforeMessages("conv_1", 3, 1), [
-    { id: "assistant-1", role: "assistant", text: "Hi", transcriptSeq: 2 },
+    { id: "tool-1", kind: "tool", role: "system", text: "Local execution completed.", transcriptSeq: 2 },
   ]);
   assert.deepEqual(await store.loadAfterMessages("conv_1", 1, 1), [
-    { id: "assistant-1", role: "assistant", text: "Hi", transcriptSeq: 2 },
+    { id: "tool-1", kind: "tool", role: "system", text: "Local execution completed.", transcriptSeq: 2 },
   ]);
   assert.deepEqual(await store.getConversationSummary("conv_1"), {
-    latestSnippet: "Hi",
+    latestSnippet: "Hi there",
     messageCount: 3,
     titleSnippet: "Hello",
     updatedAt: undefined,
@@ -3572,11 +3581,11 @@ test("workbench transcript store persists recent messages and deltas", async () 
     "You:",
     "Hello",
     "",
-    "Agent:",
-    "Hi",
-    "",
     "Tool:",
     "Local execution completed.",
+    "",
+    "Agent:",
+    "Hi there",
     "",
   ].join("\n"));
 });
@@ -3605,19 +3614,24 @@ test("workbench file transcript store persists messages on disk", async () => {
   const root = await mkdtemp(join(tmpdir(), "agent-tui-file-transcript-"));
   const store = createFileTranscriptStore(root);
   await store.appendMessage("conv_file", { id: "user-1", role: "user", text: "Hello" });
+  await store.appendMessage("conv_file", { id: "tool-1", kind: "tool", role: "system", text: "Local execution completed." });
   await store.appendMessage("conv_file", { id: "assistant-1", role: "assistant", text: "" });
   await store.appendMessageDelta("conv_file", "assistant-1", "Fallback");
 
   const reopened = createFileTranscriptStore(root);
   assert.deepEqual(await reopened.loadRecentMessages("conv_file", 10), [
     { id: "user-1", role: "user", text: "Hello", transcriptSeq: 1 },
-    { id: "assistant-1", role: "assistant", text: "Fallback", transcriptSeq: 2 },
+    { id: "tool-1", kind: "tool", role: "system", text: "Local execution completed.", transcriptSeq: 2 },
+    { id: "assistant-1", role: "assistant", text: "Fallback", transcriptSeq: 3 },
+  ]);
+  assert.deepEqual(await reopened.loadBeforeMessages("conv_file", 3, 1), [
+    { id: "tool-1", kind: "tool", role: "system", text: "Local execution completed.", transcriptSeq: 2 },
+  ]);
+  assert.deepEqual(await reopened.loadAfterMessages("conv_file", 2, 1), [
+    { id: "assistant-1", role: "assistant", text: "Fallback", transcriptSeq: 3 },
   ]);
   assert.deepEqual(await reopened.loadBeforeMessages("conv_file", 2, 1), [
     { id: "user-1", role: "user", text: "Hello", transcriptSeq: 1 },
-  ]);
-  assert.deepEqual(await reopened.loadAfterMessages("conv_file", 1, 1), [
-    { id: "assistant-1", role: "assistant", text: "Fallback", transcriptSeq: 2 },
   ]);
   assert.match(await reopened.exportConversation("conv_file"), /Agent:\nFallback/);
 });
@@ -3628,6 +3642,7 @@ test("cli sqlite transcript store persists messages on disk", async () => {
   const file = join(root, "transcripts.sqlite3");
   const store = createSQLiteTranscriptStore(file);
   await store.appendMessage("conv_sql", { id: "user-1", role: "user", text: "Hello" });
+  await store.appendMessage("conv_sql", { id: "tool-1", kind: "tool", role: "system", text: "Local execution completed." });
   await store.appendMessage("conv_sql", { id: "assistant-1", role: "assistant", text: "" });
   await store.appendMessageDelta("conv_sql", "assistant-1", "Stored");
   store.dispose();
@@ -3635,13 +3650,14 @@ test("cli sqlite transcript store persists messages on disk", async () => {
   const reopened = createSQLiteTranscriptStore(file);
   assert.deepEqual(await reopened.loadRecentMessages("conv_sql", 10), [
     { id: "user-1", role: "user", text: "Hello", transcriptSeq: 1 },
-    { id: "assistant-1", role: "assistant", text: "Stored", transcriptSeq: 2 },
+    { id: "tool-1", kind: "tool", role: "system", text: "Local execution completed.", transcriptSeq: 2 },
+    { id: "assistant-1", role: "assistant", text: "Stored", transcriptSeq: 3 },
   ]);
-  assert.deepEqual(await reopened.loadBeforeMessages("conv_sql", 2, 1), [
-    { id: "user-1", role: "user", text: "Hello", transcriptSeq: 1 },
+  assert.deepEqual(await reopened.loadBeforeMessages("conv_sql", 3, 1), [
+    { id: "tool-1", kind: "tool", role: "system", text: "Local execution completed.", transcriptSeq: 2 },
   ]);
-  assert.deepEqual(await reopened.loadAfterMessages("conv_sql", 1, 1), [
-    { id: "assistant-1", role: "assistant", text: "Stored", transcriptSeq: 2 },
+  assert.deepEqual(await reopened.loadAfterMessages("conv_sql", 2, 1), [
+    { id: "assistant-1", role: "assistant", text: "Stored", transcriptSeq: 3 },
   ]);
   assert.match(await reopened.exportConversation("conv_sql"), /Agent:\nStored/);
   reopened.dispose();

@@ -299,9 +299,7 @@ export function workbenchReducer(state: WorkbenchState, action: WorkbenchAction)
     case "message.append":
       return {
         ...state,
-        messages: limitMessages(state.messages.map((message) =>
-          message.id === action.id ? { ...message, text: limitMessageText(message.text + action.delta) } : message,
-        )),
+        messages: limitMessages(appendMessageDelta(state.messages, action.id, action.delta)),
       };
     case "messages.clear":
       return {
@@ -797,6 +795,17 @@ function normalizeStoredMessage(message: WorkbenchMessage): WorkbenchMessage {
 function limitMessages(messages: WorkbenchMessage[]) {
   if (messages.length <= maxTranscriptWindowMessages) return messages;
   return messages.slice(-maxTranscriptWindowMessages);
+}
+
+function appendMessageDelta(messages: WorkbenchMessage[], id: string, delta: string) {
+  if (!delta) return messages;
+  const index = messages.findIndex((message) => message.id === id);
+  if (index === -1) {
+    return [...messages, newMessage("assistant", delta, id)];
+  }
+  return messages.map((message, messageIndex) =>
+    messageIndex === index ? { ...message, text: limitMessageText(message.text + delta) } : message,
+  );
 }
 
 function limitMessageText(text: string) {

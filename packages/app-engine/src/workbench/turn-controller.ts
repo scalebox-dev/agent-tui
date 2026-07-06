@@ -62,7 +62,6 @@ export function createWorkbenchTurnController(options: WorkbenchTurnControllerOp
       activeResponseID = null;
       options.dispatch({ type: "busy.set", busy: true });
       options.dispatch({ type: "message.add", role: "user", text: prompt });
-      options.dispatch({ type: "message.add", role: "assistant", text: "", id: assistantId });
       options.dispatch({ type: "assistant.active", id: assistantId });
       options.dispatch({ type: "activity.add", text: "Agent turn started" });
       try {
@@ -112,7 +111,6 @@ export function createWorkbenchTurnController(options: WorkbenchTurnControllerOp
       activeAbortController = abortController;
       activeResponseID = null;
       options.dispatch({ type: "busy.set", busy: true });
-      options.dispatch({ type: "message.add", role: "assistant", text: "", id: assistantId });
       options.dispatch({ type: "assistant.active", id: assistantId });
       options.dispatch({ type: "activity.add", text: "Continuing agent turn" });
       try {
@@ -163,7 +161,6 @@ export function createWorkbenchTurnController(options: WorkbenchTurnControllerOp
       activeAbortController = abortController;
       activeResponseID = null;
       options.dispatch({ type: "busy.set", busy: true });
-      options.dispatch({ type: "message.add", role: "assistant", text: "", id: assistantId });
       options.dispatch({ type: "assistant.active", id: assistantId });
       options.dispatch({ type: "activity.add", text: "Continuing automatic workflow" });
       try {

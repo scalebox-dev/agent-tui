@@ -89,11 +89,12 @@ export function createWorkbenchEngine(options: WorkbenchEngineOptions): Workbenc
     ) {
       pendingApprovalInvalidInputs = 0;
     }
+    const previous = state;
     const next = workbenchReducer(state, action);
     if (Object.is(next, state)) return;
     state = next;
     transcriptPersistQueue = transcriptPersistQueue.then(() =>
-      persistTranscriptAction(options.transcriptStore, state, action, dispatch),
+      persistTranscriptAction(options.transcriptStore, previous, state, action, dispatch),
     );
     notify();
   };
@@ -513,6 +514,7 @@ function eventResult(...effects: WorkbenchRuntimeEffect[]): WorkbenchEventResult
 
 async function persistTranscriptAction(
   store: WorkbenchTranscriptStore | undefined,
+  previousState: WorkbenchState,
   state: WorkbenchState,
   action: WorkbenchAction,
   dispatch: (action: WorkbenchAction) => void,
@@ -532,6 +534,18 @@ async function persistTranscriptAction(
       return;
     }
     if (action.type === "message.append") {
+      if (!previousState.messages.some((message) => message.id === action.id)) {
+        const message = state.messages.find((item) => item.id === action.id);
+        if (message && shouldPersistTranscriptMessage(message)) {
+          await store.appendMessage(state.conversationId, {
+            id: message.id,
+            kind: message.kind,
+            role: message.role,
+            text: message.text,
+          });
+        }
+        return;
+      }
       await store.appendMessageDelta(state.conversationId, action.id, action.delta);
     }
   } catch (error) {
