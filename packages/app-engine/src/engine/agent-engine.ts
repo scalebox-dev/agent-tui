@@ -53,6 +53,7 @@ export interface AgentEngineLifecycleOptions {
 }
 
 export function createAgentEngine(options: AgentEngineAppOptions): AgentEngineApp {
+  let disposed = false;
   const session = createWorkbenchSession({
     authController: options.authController,
     baseOptions: options.baseOptions,
@@ -280,15 +281,18 @@ export function createAgentEngine(options: AgentEngineAppOptions): AgentEngineAp
   }
 
   async function loadWorkdir(path?: string, lifecycleOptions: AgentEngineLifecycleOptions = {}) {
+    if (disposed) return;
     session.engine.dispatch({ type: "activity.add", text: "Loading workdir" });
     try {
       const workdir = await session.local.load(path);
+      if (disposed) return;
       if (lifecycleOptions.isMounted && !lifecycleOptions.isMounted()) return;
       session.engine.dispatch({
         type: "workdir.set",
         workdir,
       });
     } catch (error) {
+      if (disposed || isCanceledWorkdirLoad(error)) return;
       if (lifecycleOptions.isMounted && !lifecycleOptions.isMounted()) return;
       session.engine.dispatch({
         type: "activity.add",
@@ -375,10 +379,16 @@ export function createAgentEngine(options: AgentEngineAppOptions): AgentEngineAp
     submit,
     runLifecycleEffects,
     dispose() {
+      disposed = true;
+      session.local.dispose();
       session.runtime.dispose();
       options.services?.transcriptStore?.dispose?.();
     },
   };
+}
+
+function isCanceledWorkdirLoad(error: unknown): boolean {
+  return error instanceof Error && /workdir load canceled/i.test(error.message);
 }
 
 function firstStoredTranscriptSeq(messages: WorkbenchState["messages"]) {

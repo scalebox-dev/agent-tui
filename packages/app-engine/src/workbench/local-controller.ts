@@ -7,6 +7,7 @@ import type { ShellIsolationPreferences } from "./shell-isolation.js";
 
 export interface WorkbenchLocalController {
   load(path?: string): Promise<WorkbenchWorkdirStatus>;
+  dispose(): void;
   isLoaded(): boolean;
   summaryText(): Promise<string>;
   searchText(query: string): Promise<{ text: string; count: number }>;
@@ -21,14 +22,27 @@ export interface WorkbenchLocalControllerOptions {
 
 type LocalApprovalLike = NonNullable<WorkbenchState["pendingLocalTool"]>;
 
+const DEFAULT_WORKDIR_SUMMARY_OPTIONS = {
+  maxDepth: 3,
+  maxFiles: 500,
+  maxPreviews: 5,
+  previewBytes: 2048,
+  topPaths: 8,
+} as const;
+
 export function createWorkbenchLocalController(options: WorkbenchLocalControllerOptions = {}): WorkbenchLocalController {
   const openWorkdirImpl = options.openWorkdirImpl ?? openWorkdir;
   let workdir: WorkdirService | null = null;
+  let disposed = false;
+  let loadGeneration = 0;
 
   return {
     async load(path) {
+      const generation = ++loadGeneration;
       const next = await openWorkdirImpl({ path });
-      const summary = await next.summarize();
+      if (disposed || generation !== loadGeneration) throw new Error("Workdir load canceled.");
+      const summary = await next.summarize(DEFAULT_WORKDIR_SUMMARY_OPTIONS);
+      if (disposed || generation !== loadGeneration) throw new Error("Workdir load canceled.");
       workdir = next;
       return {
         root: next.root,
@@ -39,13 +53,19 @@ export function createWorkbenchLocalController(options: WorkbenchLocalController
       };
     },
 
+    dispose() {
+      disposed = true;
+      loadGeneration += 1;
+      workdir = null;
+    },
+
     isLoaded() {
       return Boolean(workdir);
     },
 
     async summaryText() {
       const current = requireWorkdir();
-      const summary = await current.summarize();
+      const summary = await current.summarize(DEFAULT_WORKDIR_SUMMARY_OPTIONS);
       const previews = summary.text_previews
         .slice(0, 5)
         .map((preview) => `- ${preview.path} (${formatBytes(preview.size)})`)

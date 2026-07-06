@@ -4299,6 +4299,7 @@ test("workbench engine maps agent events into state and runtime effects", () => 
 });
 
 test("workbench local controller loads, summarizes, and searches a workdir", async () => {
+  const summarizeCalls = [];
   const fakeWorkdir = {
     root: "/tmp/project",
     name: "project",
@@ -4311,7 +4312,8 @@ test("workbench local controller loads, summarizes, and searches a workdir", asy
         };
       },
     },
-    async summarize() {
+    async summarize(options) {
+      summarizeCalls.push(options);
       return {
         file_count: 2,
         total_bytes: 2048,
@@ -4338,6 +4340,10 @@ test("workbench local controller loads, summarizes, and searches a workdir", asy
   });
   assert.equal(controller.isLoaded(), true);
   assert.match(await controller.summaryText(), /Workdir summary for project/);
+  assert.deepEqual(summarizeCalls, [
+    { maxDepth: 3, maxFiles: 500, maxPreviews: 5, previewBytes: 2048, topPaths: 8 },
+    { maxDepth: 3, maxFiles: 500, maxPreviews: 5, previewBytes: 2048, topPaths: 8 },
+  ]);
   assert.deepEqual(await controller.searchText("hello"), {
     text: "README.md:2: hello agent",
     count: 1,

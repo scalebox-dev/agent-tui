@@ -24,7 +24,7 @@ export interface WorkdirService {
   root: string;
   name: string;
   workdir: LocalWorkdir;
-  summarize(): Promise<LocalSummary>;
+  summarize(options?: Record<string, unknown>): Promise<LocalSummary>;
   snapshot(): Promise<LocalWorkdirSnapshot>;
   packageContext(options?: Omit<WorkdirContextOptions, "path" | "name">): Promise<LocalContextManifest>;
   contextBlock(options?: Omit<WorkdirContextOptions, "path" | "name">): Promise<string>;
@@ -44,7 +44,7 @@ export async function openWorkdir(options: WorkdirOptions = {}): Promise<Workdir
     root,
     name,
     workdir,
-    summarize: () => workdir.summarize(),
+    summarize: (summaryOptions = {}) => workdir.summarize(summaryOptions),
     snapshot: () => workdir.snapshot({ hash: true }),
     packageContext: (contextOptions = {}) =>
       createLocalContextPackage(workdir, {
