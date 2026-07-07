@@ -57,6 +57,38 @@ For a no-publish rehearsal:
 npm run release:local -- --dry-run
 ```
 
+## GitHub Actions Release
+
+The repository includes **Package and Release** in `.github/workflows/package.yml`.
+It builds and tests both packages, uploads npm tarballs as workflow artifacts, and
+can publish `@agent-api/app-engine` followed by `@agent-api/cli`.
+
+Before using it, add this repository secret in GitHub:
+
+- `NPM_TOKEN`: npm automation token with publish access for both
+  `@agent-api/app-engine` and `@agent-api/cli`.
+
+Manual dry run:
+
+1. Open **Actions → Package and Release → Run workflow**.
+2. Keep `dry_run=true`.
+3. Confirm the workflow passes and uploads `agent-tui-npm-package`.
+
+Manual publish:
+
+1. Open **Actions → Package and Release → Run workflow**.
+2. Set `dry_run=false`.
+3. The workflow runs `npm run release:local`, which skips versions already on npm.
+
+Tag publish:
+
+```bash
+git tag v0.4.49
+git push origin v0.4.49
+```
+
+Pushing a `v*` tag publishes automatically.
+
 Set `AGENT_TUI_UPDATE_CHECK=0` to disable the startup update notice.
 
 ## Command Shape
