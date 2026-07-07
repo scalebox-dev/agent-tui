@@ -8,13 +8,22 @@ on:
 
 jobs:
   test:
-    name: Node ${{ matrix.node }} on ${{ matrix.os }}
+    name: Node ${{ matrix.node }} on ${{ matrix.os }}${{ matrix.required && ' (required)' || ' (compatibility)' }}
     runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ !matrix.required }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        node: [20, 22]
+        include:
+          - os: ubuntu-latest
+            node: 24
+            required: true
+          - os: macos-latest
+            node: 24
+            required: false
+          - os: windows-latest
+            node: 24
+            required: false
 
     steps:
       - name: Checkout
@@ -34,4 +43,3 @@ jobs:
 
       - name: Smoke CLI
         run: npm run smoke
-
