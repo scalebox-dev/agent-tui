@@ -87,6 +87,7 @@ import {
   createPostgresStorage,
   createSQLiteStorage,
 } from "@agent-api/app-engine/storage";
+import { localAppDirs } from "@agent-api/sdk/local";
 import { parseMouseEvent } from "../dist/tui/mouse.js";
 
 const execFileAsync = promisify(execFile);
@@ -101,6 +102,14 @@ function isolatedEnv(root) {
     XDG_DATA_HOME: join(root, ".local", "share"),
     XDG_CACHE_HOME: join(root, ".cache"),
   };
+}
+
+function testConfigDir(root, appName = "agent-tui") {
+  return localAppDirs({
+    appName,
+    home: root,
+    env: isolatedEnv(root),
+  }).config;
 }
 
 function lineReader(stream) {
@@ -621,7 +630,7 @@ test("agent conversation manager lists, shows, and deletes local conversation st
 
   await execFileAsync("node", [bin, "auth", "login", "--profile", "test", "--api-key", "sk-test-abcdefghijklmnopqrstuvwxyz", "--base-url", "https://api.test"], { env });
 
-  const configDir = join(root, ".config", "agent-tui");
+  const configDir = testConfigDir(root);
   const conversationsPath = join(configDir, "conversations.json");
   const conversations = { conversations: {} };
   conversations.conversations["test:release"] = {
@@ -651,7 +660,7 @@ test("workbench configuration is stored separately from profiles", async () => {
 
   await execFileAsync("node", [bin, "auth", "login", "--profile", "test", "--api-key", "sk-test-abcdefghijklmnopqrstuvwxyz", "--base-url", "https://api.test"], { env });
 
-  const configDir = join(root, ".config", "agent-tui");
+  const configDir = testConfigDir(root);
   const profilesPath = join(configDir, "profiles.json");
   const appConfigPath = join(configDir, "configuration.json");
   const conversationsPath = join(configDir, "conversations.json");
@@ -703,8 +712,8 @@ test("workbench configuration is stored separately from profiles", async () => {
 test("legacy agent-api-cli config merges into agent-tui config and removes old dir", async () => {
   const root = await mkdtemp(join(tmpdir(), "agent-tui-legacy-config-"));
   const env = isolatedEnv(root);
-  const legacyConfigDir = join(root, ".config", "agent-api-cli");
-  const configDir = join(root, ".config", "agent-tui");
+  const legacyConfigDir = testConfigDir(root, "agent-api-cli");
+  const configDir = testConfigDir(root);
   await mkdir(legacyConfigDir, { recursive: true });
   await mkdir(configDir, { recursive: true });
   await writeFile(join(legacyConfigDir, "profiles.json"), JSON.stringify({
