@@ -14,6 +14,7 @@ import {
 } from "../agent.js";
 import type { WorkbenchEngine, WorkbenchRunContext, WorkbenchRuntimeEffect } from "./engine.js";
 import type { WorkbenchAction, WorkbenchState } from "./state.js";
+import type { LocalKnowledgeService } from "@agent-api/sdk/local";
 
 export interface WorkbenchTurnController {
   startPrompt(prompt: string): Promise<void>;
@@ -39,6 +40,7 @@ export interface WorkbenchTurnControllerOptions {
   getState(): WorkbenchState;
   runRuntimeEffects(effects: WorkbenchRuntimeEffect[], assistantId: string, runContext?: WorkbenchRunContext): void;
   flushTextDeltaBuffer(): void;
+  localKnowledge?: LocalKnowledgeService;
   runAgentTurnImpl?: typeof runAgentTurn;
   resumeAgentAfterLocalApprovalImpl?: typeof resumeAgentAfterLocalApproval;
   resumeAgentAfterAutomaticContinuationImpl?: typeof resumeAgentAfterAutomaticContinuation;
@@ -100,6 +102,7 @@ export function createWorkbenchTurnController(options: WorkbenchTurnControllerOp
             restartConversation: false,
             abortSignal: abortController.signal,
             localPause: localPauseHooks(runContext.runId),
+            localKnowledge: options.localKnowledge,
           },
           (event) => handleAgentEvent(event, assistantId, runContext),
         );
@@ -159,6 +162,7 @@ export function createWorkbenchTurnController(options: WorkbenchTurnControllerOp
             restartConversation: false,
             abortSignal: abortController.signal,
             localPause: localPauseHooks(runContext.runId),
+            localKnowledge: options.localKnowledge,
           },
           input.approval,
           input.result,
@@ -221,6 +225,7 @@ export function createWorkbenchTurnController(options: WorkbenchTurnControllerOp
             bypassAutomaticContinuationLimit: input.bypassAutomaticContinuationLimit,
             abortSignal: abortController.signal,
             localPause: localPauseHooks(runContext.runId),
+            localKnowledge: options.localKnowledge,
           },
           input.continuation,
           (event) => handleAgentEvent(event, assistantId, runContext),

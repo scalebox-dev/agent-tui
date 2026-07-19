@@ -18,11 +18,15 @@ import {
 import { localSkillFromDirectory, pendingLocalSkillCalls, runLocalSkillHandlers } from "@agent-api/sdk/node";
 import {
   createLocalPauseToolRegistry,
+  createLocalKnowledgeToolRegistry,
   createLocalShellToolRegistry,
   createLocalWorkdirToolRegistry,
+  formatLocalKnowledgeContext,
   localPauseToolInstructions,
   localShellToolInstructions,
   localWorkdirToolInstructions,
+  type LocalKnowledgeService,
+  type LocalKnowledgeScope,
   type LocalPauseHandle,
   type LocalPauseRequest,
   type LocalPauseResult,
@@ -71,6 +75,7 @@ export interface AgentRunOptions {
   automaticContinuationCount?: number;
   abortSignal?: AbortSignal;
   localPause?: LocalPauseHooks;
+  localKnowledge?: LocalKnowledgeService;
 }
 
 export type WorkdirAccessMode = "off" | "approval" | "full";
@@ -174,6 +179,7 @@ export async function runAgent(options: AgentRunOptions) {
 
 export async function runAgentTurn(options: AgentRunOptions, onEvent?: (event: AgentTurnEvent) => void): Promise<AgentTurnResult> {
   const runtimeProfile = await resolveRuntimeProfile(options.profile);
+  await prepareLocalKnowledge(options);
   const localContext = await prepareLocalContext(options);
   const input = await buildInput(options);
   const previousResponseId = await resolvePreviousResponseID(options);
@@ -243,6 +249,7 @@ export async function resumeAgentAfterLocalApproval(
   onEvent?: (event: AgentTurnEvent) => void,
 ): Promise<AgentTurnResult> {
   const runtimeProfile = await resolveRuntimeProfile(options.profile);
+  await prepareLocalKnowledge(options);
   const localContext = await prepareLocalContext(options);
   if (!localContext) {
     throw new Error("local tools are not available for approval continuation");
@@ -280,6 +287,7 @@ export async function resumeAgentAfterAutomaticContinuation(
   onEvent?: (event: AgentTurnEvent) => void,
 ): Promise<AgentTurnResult> {
   const runtimeProfile = await resolveRuntimeProfile(options.profile);
+  await prepareLocalKnowledge(options);
   const localContext = await prepareLocalContext(options);
   if (!localContext) {
     throw new Error("local tools are not available for automatic continuation");
@@ -729,8 +737,9 @@ function catalogCacheKey(baseURL: string): string {
 
 async function buildInput(options: AgentRunOptions) {
   const chunks: string[] = [];
+  const promptText = options.promptParts.join(" ");
   if (options.promptParts.length > 0) {
-    chunks.push(options.promptParts.join(" "));
+    chunks.push(promptText);
   }
   if (options.file) {
     chunks.push(await readFile(options.file, "utf8"));
@@ -751,7 +760,38 @@ async function buildInput(options: AgentRunOptions) {
       maxBytes: options.maxContextBytes,
     }));
   }
+  if (options.localKnowledge && promptText.trim()) {
+    const context = await options.localKnowledge.contextForPrompt({
+      query: promptText,
+      scope: localKnowledgeScope(options),
+    });
+    if (context) {
+      chunks.push(formatLocalKnowledgeContext(context));
+    }
+  }
   return chunks.join("\n\n");
+}
+
+async function prepareLocalKnowledge(options: AgentRunOptions) {
+  if (!options.localKnowledge?.ingestWorkdir) return;
+  if (!shouldUseLocalTools(options)) return;
+  try {
+    await options.localKnowledge.ingestWorkdir({
+      root: options.workdir || process.cwd(),
+      scope: localKnowledgeScope(options),
+    });
+  } catch {
+    // Local knowledge is opportunistic; normal agent turns should not fail if indexing is unavailable.
+  }
+}
+
+function localKnowledgeScope(options: AgentRunOptions): LocalKnowledgeScope {
+  return {
+    conversationId: options.conversation,
+    workspaceId: options.workspaceId,
+    profile: options.profile,
+    workdir: options.workdir || process.cwd(),
+  };
 }
 
 async function prepareLocalWorkdirTools(options: AgentRunOptions): Promise<{
@@ -793,11 +833,15 @@ async function prepareLocalWorkdirTools(options: AgentRunOptions): Promise<{
 async function prepareLocalContext(options: AgentRunOptions): Promise<LocalExecutionContext | null> {
   const localWorkdir = await prepareLocalWorkdirTools(options);
   const localSkills = await prepareLocalSkills(options);
-  if (!localWorkdir && localSkills.length === 0) {
+  const localKnowledge = options.localKnowledge ? createLocalKnowledgeToolRegistry(options.localKnowledge) : null;
+  if (!localWorkdir && localSkills.length === 0 && !localKnowledge) {
     return null;
   }
   return {
-    registry: localWorkdir?.registry ?? emptyLocalToolRegistry(),
+    registry: combineLocalToolRegistries(
+      ...(localWorkdir ? [localWorkdir.registry] : []),
+      ...(localKnowledge ? [localKnowledge] : []),
+    ),
     instructions: localWorkdir?.instructions,
     localSkills,
   };

@@ -54,6 +54,7 @@ export function createWorkbenchSession(options: WorkbenchSessionOptions): Workbe
     engine,
     flushTextDeltaBuffer: runtime.flushTextDeltaBuffer,
     getState: engine.snapshot,
+    localKnowledge: options.services?.localKnowledge,
     runRuntimeEffects: runtime.runEffects,
   });
 

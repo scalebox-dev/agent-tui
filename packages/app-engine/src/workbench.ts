@@ -84,6 +84,22 @@ export type {
   ShellIsolationPreferences,
 } from "./workbench/shell-isolation.js";
 export { localShellIsolationOptions } from "./workbench/shell-isolation.js";
+export type {
+  LocalKnowledgeContext,
+  LocalKnowledgeContextParams,
+  LocalKnowledgeHit,
+  LocalKnowledgeIngestMessage,
+  LocalKnowledgeIngestWorkdirOptions,
+  LocalKnowledgeSearchParams,
+  LocalKnowledgeSearchResult,
+  LocalKnowledgeService,
+  LocalKnowledgeSourceType,
+} from "@agent-api/sdk/local";
+export {
+  createLocalKnowledgeToolRegistry,
+  formatLocalKnowledgeContext,
+  localKnowledgeToolDefinition,
+} from "@agent-api/sdk/local";
 export type { WorkbenchTurnController } from "./workbench/turn-controller.js";
 export { createWorkbenchTurnController } from "./workbench/turn-controller.js";
 export type {

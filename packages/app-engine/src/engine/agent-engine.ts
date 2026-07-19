@@ -389,6 +389,7 @@ export function createAgentEngine(options: AgentEngineAppOptions): AgentEngineAp
       disposed = true;
       session.local.dispose();
       session.runtime.dispose();
+      options.services?.localKnowledge?.dispose?.();
       options.services?.transcriptStore?.dispose?.();
     },
   };

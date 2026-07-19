@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   currentAgentAppRuntime,
 } from "@agent-api/app-engine/core";
+import type { LocalKnowledgeService } from "@agent-api/sdk/local";
 import {
   createFileTranscriptStore,
   formatTranscript,
@@ -12,17 +13,21 @@ import {
   type WorkbenchTranscriptStore,
 } from "@agent-api/app-engine/workbench";
 
-export function createDefaultTranscriptStore(): WorkbenchTranscriptStore {
+export interface DefaultTranscriptStoreOptions {
+  localKnowledge?: LocalKnowledgeService;
+}
+
+export function createDefaultTranscriptStore(options: DefaultTranscriptStoreOptions = {}): WorkbenchTranscriptStore {
   const dataDir = currentAgentAppRuntime().runtime.dirs.data;
   mkdirSync(dataDir, { recursive: true });
   try {
-    return createSQLiteTranscriptStore(path.join(dataDir, "transcripts.sqlite3"));
+    return createSQLiteTranscriptStore(path.join(dataDir, "transcripts.sqlite3"), options);
   } catch {
     return createFileTranscriptStore(path.join(dataDir, "transcripts"));
   }
 }
 
-export function createSQLiteTranscriptStore(file: string): WorkbenchTranscriptStore {
+export function createSQLiteTranscriptStore(file: string, options: DefaultTranscriptStoreOptions = {}): WorkbenchTranscriptStore {
   mkdirSync(path.dirname(file), { recursive: true });
   const db = new Database(file);
   db.pragma("journal_mode = WAL");
@@ -93,6 +98,11 @@ export function createSQLiteTranscriptStore(file: string): WorkbenchTranscriptSt
     WHERE conversation_id = ?
   `);
   const deleteConversation = db.prepare("DELETE FROM transcript_messages WHERE conversation_id = ?");
+  const messageByID = db.prepare(`
+    SELECT seq, message_id, role, kind, text
+    FROM transcript_messages
+    WHERE conversation_id = ? AND message_id = ?
+  `);
 
   return {
     async appendMessage(conversationId, message) {
@@ -104,6 +114,7 @@ export function createSQLiteTranscriptStore(file: string): WorkbenchTranscriptSt
         text: message.text,
         now: nowSeconds(),
       });
+      ingestKnowledgeMessage(options.localKnowledge, conversationId, message);
     },
     async appendMessageDelta(conversationId, messageId, delta) {
       if (!delta) return;
@@ -113,9 +124,16 @@ export function createSQLiteTranscriptStore(file: string): WorkbenchTranscriptSt
         delta,
         now: nowSeconds(),
       });
+      const rows = rowsToMessages([messageByID.get(conversationId, messageId)].filter(Boolean));
+      if (rows[0]) ingestKnowledgeMessage(options.localKnowledge, conversationId, rows[0]);
     },
     async clearConversation(conversationId) {
       deleteConversation.run(conversationId);
+      try {
+        await options.localKnowledge?.forgetConversation?.(conversationId);
+      } catch {
+        // The transcript store remains the source of truth for deletion.
+      }
     },
     async exportConversation(conversationId) {
       return formatTranscript(rowsToMessages(allMessages.all(conversationId)));
@@ -139,6 +157,24 @@ export function createSQLiteTranscriptStore(file: string): WorkbenchTranscriptSt
       db.close();
     },
   };
+}
+
+function ingestKnowledgeMessage(
+  localKnowledge: LocalKnowledgeService | undefined,
+  conversationId: string,
+  message: WorkbenchMessage,
+) {
+  try {
+    localKnowledge?.ingestMessage?.({
+      conversationId,
+      messageId: message.id,
+      role: message.role,
+      kind: message.kind,
+      text: message.text,
+    });
+  } catch {
+    // Transcript persistence should not fail because the opportunistic local index is unavailable.
+  }
 }
 
 function rowsToMessages(rows: unknown[]): WorkbenchMessage[] {

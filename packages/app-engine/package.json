@@ -1,6 +1,6 @@
 {
   "name": "@agent-api/app-engine",
-  "version": "0.1.46",
+  "version": "0.1.47",
   "description": "Renderer-neutral application engine for Agent API apps",
   "license": "MIT",
   "homepage": "https://github.com/scalebox-dev/agent-tui#readme",
@@ -45,7 +45,7 @@
     "pack:local": "npm pack --pack-destination ./artifacts"
   },
   "dependencies": {
-    "@agent-api/sdk": "^1.4.8",
+    "@agent-api/sdk": "^1.4.9",
     "zod": "^4.4.3"
   },
   "devDependencies": {

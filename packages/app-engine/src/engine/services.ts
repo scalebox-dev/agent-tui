@@ -8,6 +8,7 @@ import type { WorkbenchSettingsController } from "../workbench/settings-controll
 import type { WorkbenchTranscriptStore } from "../workbench/transcript-store.js";
 import type { WorkbenchTurnController } from "../workbench/turn-controller.js";
 import type { WorkbenchWorkspaceController } from "../workbench/workspace-controller.js";
+import type { LocalKnowledgeService } from "@agent-api/sdk/local";
 
 export interface AgentEngineServices {
   auth?: WorkbenchAuthController;
@@ -15,6 +16,7 @@ export interface AgentEngineServices {
   engine?: WorkbenchEngine;
   lifecycle?: WorkbenchLifecycleController;
   local?: WorkbenchLocalController;
+  localKnowledge?: LocalKnowledgeService;
   runtime?: WorkbenchRuntimeController;
   settings?: WorkbenchSettingsController;
   transcriptStore?: WorkbenchTranscriptStore;

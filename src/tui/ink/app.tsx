@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } fro
 import { useApp, useInput, useStdin, useStdout } from "ink";
 import {
   createInProcessAgentEngineClient,
+  currentAgentAppRuntime,
   defaultBaseURL,
   type AgentEngineClient,
   type AgentRunOptions,
@@ -11,6 +12,7 @@ import {
   createWorkbenchAuthGateController,
   parseWorkbenchCommand,
   type AuthGateState,
+  type LocalKnowledgeService,
   type WorkbenchAuthController,
   type WorkbenchAuthGateController,
   type WorkbenchTranscriptStore,
@@ -40,6 +42,8 @@ import {
 } from "../clipboard.js";
 import { disableMouseReporting, parseMouseEvent } from "../mouse.js";
 import { createDefaultTranscriptStore } from "../transcript-store.js";
+import { createSQLiteLocalKnowledgeStore } from "../local-knowledge-store.js";
+import path from "node:path";
 
 export function ChatApp({ options }: { options: AgentRunOptions }) {
   return <AuthenticatedChatApp options={options} />;
@@ -202,10 +206,21 @@ function WorkbenchApp({
   const terminalStateRef = useRef(terminalState);
   const [spinnerFrame, setSpinnerFrame] = useState(0);
   const agentEngineRef = useRef<AgentEngineClient | null>(null);
+  const localKnowledgeRef = useRef<LocalKnowledgeService | null | undefined>(undefined);
+  if (localKnowledgeRef.current === undefined) {
+    try {
+      const dataDir = currentAgentAppRuntime().runtime.dirs.data;
+      localKnowledgeRef.current = createSQLiteLocalKnowledgeStore(path.join(dataDir, "local-knowledge.sqlite3"));
+    } catch {
+      localKnowledgeRef.current = null;
+    }
+  }
   const transcriptStoreRef = useRef<WorkbenchTranscriptStore | null | undefined>(undefined);
   if (transcriptStoreRef.current === undefined) {
     try {
-      transcriptStoreRef.current = createDefaultTranscriptStore();
+      transcriptStoreRef.current = createDefaultTranscriptStore({
+        localKnowledge: localKnowledgeRef.current ?? undefined,
+      });
     } catch {
       transcriptStoreRef.current = null;
     }
@@ -215,7 +230,10 @@ function WorkbenchApp({
       authController,
       baseOptions: options,
       profileName,
-      services: transcriptStoreRef.current ? { transcriptStore: transcriptStoreRef.current } : undefined,
+      services: {
+        ...(transcriptStoreRef.current ? { transcriptStore: transcriptStoreRef.current } : {}),
+        ...(localKnowledgeRef.current ? { localKnowledge: localKnowledgeRef.current } : {}),
+      },
       onDeleteProfile,
       onExit: app.exit,
       onLogin,
