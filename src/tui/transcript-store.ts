@@ -17,6 +17,7 @@ import {
 export interface DefaultTranscriptStoreOptions {
   localKnowledge?: LocalKnowledgeService;
   localKnowledgeIngestDelayMs?: number;
+  localKnowledgePendingMaxBytes?: number;
 }
 
 export function createDefaultTranscriptStore(options: DefaultTranscriptStoreOptions = {}): WorkbenchTranscriptStore {
@@ -67,37 +68,51 @@ export function createSQLiteTranscriptStore(file: string, options: DefaultTransc
     SET text = text || @delta, updated_at = @now
     WHERE conversation_id = @conversationId AND message_id = @messageId
   `);
-  const recentMessages = db.prepare(`
-    SELECT seq, message_id, role, kind, text
-    FROM transcript_messages
-    WHERE conversation_id = ?
-    ORDER BY seq DESC
-    LIMIT ?
-  `);
-  const beforeMessages = db.prepare(`
-    SELECT seq, message_id, role, kind, text
-    FROM transcript_messages
-    WHERE conversation_id = ? AND seq < ?
-    ORDER BY seq DESC
-    LIMIT ?
-  `);
-  const afterMessages = db.prepare(`
-    SELECT seq, message_id, role, kind, text
-    FROM transcript_messages
-    WHERE conversation_id = ? AND seq > ?
-    ORDER BY seq ASC
-    LIMIT ?
-  `);
   const allMessages = db.prepare(`
     SELECT seq, message_id, role, kind, text
     FROM transcript_messages
     WHERE conversation_id = ?
     ORDER BY seq ASC
   `);
+  const recentMessagesForDisplay = db.prepare(`
+    SELECT seq, message_id, role, kind, ${displayTextSql()} AS text
+    FROM transcript_messages
+    WHERE conversation_id = ?
+    ORDER BY seq DESC
+    LIMIT ?
+  `);
+  const beforeMessagesForDisplay = db.prepare(`
+    SELECT seq, message_id, role, kind, ${displayTextSql()} AS text
+    FROM transcript_messages
+    WHERE conversation_id = ? AND seq < ?
+    ORDER BY seq DESC
+    LIMIT ?
+  `);
+  const afterMessagesForDisplay = db.prepare(`
+    SELECT seq, message_id, role, kind, ${displayTextSql()} AS text
+    FROM transcript_messages
+    WHERE conversation_id = ? AND seq > ?
+    ORDER BY seq ASC
+    LIMIT ?
+  `);
   const conversationUpdatedAt = db.prepare(`
     SELECT COUNT(*) AS count, MAX(updated_at) AS updated_at
     FROM transcript_messages
     WHERE conversation_id = ?
+  `);
+  const firstUserSnippet = db.prepare(`
+    SELECT ${snippetTextSql()} AS text
+    FROM transcript_messages
+    WHERE conversation_id = ? AND role = 'user' AND trim(text) != ''
+    ORDER BY seq ASC
+    LIMIT 1
+  `);
+  const latestMeaningfulSnippet = db.prepare(`
+    SELECT ${snippetTextSql()} AS text
+    FROM transcript_messages
+    WHERE conversation_id = ? AND role IN ('user', 'assistant') AND trim(text) != ''
+    ORDER BY seq DESC
+    LIMIT 1
   `);
   const deleteConversation = db.prepare("DELETE FROM transcript_messages WHERE conversation_id = ?");
   const messageByID = db.prepare(`
@@ -106,6 +121,7 @@ export function createSQLiteTranscriptStore(file: string, options: DefaultTransc
     WHERE conversation_id = ? AND message_id = ?
   `);
   const knowledgeIngestDelayMs = Math.max(0, options.localKnowledgeIngestDelayMs ?? 1500);
+  const knowledgePendingMaxBytes = Math.max(1024, options.localKnowledgePendingMaxBytes ?? maxKnowledgePendingBytes);
   const pendingKnowledgeIngests = new Map<string, {
     conversationId: string;
     message: WorkbenchMessage;
@@ -124,7 +140,7 @@ export function createSQLiteTranscriptStore(file: string, options: DefaultTransc
         now: nowSeconds(),
       });
       cancelPendingKnowledgeIngest(conversationId, message.id);
-      ingestKnowledgeMessage(options.localKnowledge, conversationId, message, writeOptions?.localKnowledgeScope);
+      ingestKnowledgeMessage(options.localKnowledge, conversationId, knowledgeBoundedMessage(message), writeOptions?.localKnowledgeScope);
     },
     async appendMessageDelta(conversationId, messageId, delta, writeOptions?: WorkbenchTranscriptWriteOptions) {
       if (!delta) return;
@@ -156,18 +172,23 @@ export function createSQLiteTranscriptStore(file: string, options: DefaultTransc
     },
     async getConversationSummary(conversationId) {
       const stats = conversationUpdatedAt.get(conversationId) as Record<string, unknown> | undefined;
-      return summarizeMessages(rowsToMessages(allMessages.all(conversationId)), {
+      const first = firstUserSnippet.get(conversationId) as Record<string, unknown> | undefined;
+      const latest = latestMeaningfulSnippet.get(conversationId) as Record<string, unknown> | undefined;
+      return {
+        latestSnippet: snippetText(String(latest?.text ?? "")),
+        messageCount: typeof stats?.count === "number" ? stats.count : 0,
+        titleSnippet: snippetText(String(first?.text ?? "")) || snippetText(String(latest?.text ?? "")),
         updatedAt: typeof stats?.updated_at === "number" ? stats.updated_at : undefined,
-      });
+      };
     },
     async loadAfterMessages(conversationId, afterSeq, limit) {
-      return rowsToMessages(afterMessages.all(conversationId, afterSeq, Math.max(0, limit)));
+      return rowsToMessages(afterMessagesForDisplay.all(conversationId, afterSeq, Math.max(0, limit)));
     },
     async loadBeforeMessages(conversationId, beforeSeq, limit) {
-      return rowsToMessages(beforeMessages.all(conversationId, beforeSeq, Math.max(0, limit))).reverse();
+      return rowsToMessages(beforeMessagesForDisplay.all(conversationId, beforeSeq, Math.max(0, limit))).reverse();
     },
     async loadRecentMessages(conversationId, limit) {
-      return rowsToMessages(recentMessages.all(conversationId, Math.max(0, limit))).reverse();
+      return rowsToMessages(recentMessagesForDisplay.all(conversationId, Math.max(0, limit))).reverse();
     },
     dispose() {
       flushPendingKnowledgeIngests();
@@ -180,17 +201,25 @@ export function createSQLiteTranscriptStore(file: string, options: DefaultTransc
     const key = knowledgeIngestKey(conversationId, message.id);
     const pending = pendingKnowledgeIngests.get(key);
     if (pending) clearTimeout(pending.timer);
+    const boundedMessage = knowledgeBoundedMessage(message);
     if (knowledgeIngestDelayMs === 0) {
-      ingestKnowledgeMessage(options.localKnowledge, conversationId, message, scope);
+      ingestKnowledgeMessage(options.localKnowledge, conversationId, boundedMessage, scope);
       return;
     }
     const timer = setTimeout(() => flushPendingKnowledgeIngest(key), knowledgeIngestDelayMs);
     pendingKnowledgeIngests.set(key, {
       conversationId,
-      message: { ...message },
+      message: boundedMessage,
       scope,
       timer,
     });
+  }
+
+  function knowledgeBoundedMessage(message: WorkbenchMessage): WorkbenchMessage {
+    return {
+      ...message,
+      text: trimTextByBytes(message.text, knowledgePendingMaxBytes),
+    };
   }
 
   function flushPendingKnowledgeIngest(key: string) {
@@ -271,6 +300,45 @@ function rowsToMessages(rows: unknown[]): WorkbenchMessage[] {
     if (record.kind === "tool") message.kind = "tool";
     return message;
   });
+}
+
+const maxDisplayMessageCharacters = 64_000;
+const displayTrimMarker = "\n\n[Earlier local transcript text trimmed from the live view; use /export for persisted history.]\n\n";
+const displayTailCharacters = maxDisplayMessageCharacters - displayTrimMarker.length;
+const summarySnippetCharacters = 2_048;
+const maxKnowledgePendingBytes = 64 * 1024;
+
+function displayTextSql() {
+  return `CASE WHEN length(text) > ${maxDisplayMessageCharacters} THEN '${escapeSqlString(displayTrimMarker)}' || substr(text, -${displayTailCharacters}) ELSE text END`;
+}
+
+function snippetTextSql() {
+  return `substr(text, 1, ${summarySnippetCharacters})`;
+}
+
+function snippetText(text?: string) {
+  const normalized = (text ?? "")
+    .replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return normalized.length > 180 ? `${normalized.slice(0, 177)}...` : normalized;
+}
+
+function trimTextByBytes(text: string, maxBytes: number) {
+  if (Buffer.byteLength(text, "utf8") <= maxBytes) return text;
+  let output = "";
+  let bytes = 0;
+  for (const char of Array.from(text)) {
+    const charBytes = Buffer.byteLength(char, "utf8");
+    if (bytes + charBytes > maxBytes) break;
+    output += char;
+    bytes += charBytes;
+  }
+  return output;
+}
+
+function escapeSqlString(value: string) {
+  return value.replace(/'/g, "''");
 }
 
 function roleValue(value: unknown): WorkbenchMessage["role"] {

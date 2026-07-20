@@ -4295,6 +4295,38 @@ test("cli sqlite transcript store persists messages on disk", async () => {
   reopened.dispose();
 });
 
+test("cli sqlite transcript store keeps UI reads bounded while preserving export fidelity", async () => {
+  const { createSQLiteTranscriptStore } = await import("../dist/tui/transcript-store.js");
+  const root = await mkdtemp(join(tmpdir(), "agent-tui-transcript-large-"));
+  const file = join(root, "transcripts.sqlite3");
+  const store = createSQLiteTranscriptStore(file);
+  const longUser = `hello ${"u".repeat(90_000)} title-tail`;
+  const longAssistant = `answer ${"a".repeat(120_000)} latest-tail`;
+
+  await store.appendMessage("conv_large", { id: "user-large", role: "user", text: longUser });
+  await store.appendMessage("conv_large", { id: "assistant-large", role: "assistant", text: longAssistant });
+
+  const summary = await store.getConversationSummary("conv_large");
+  assert.equal(summary.messageCount, 2);
+  assert.match(summary.titleSnippet, /^hello u+/);
+  assert.ok(summary.titleSnippet.length <= 180);
+  assert.match(summary.latestSnippet, /^answer a+/);
+  assert.ok(summary.latestSnippet.length <= 180);
+
+  const recent = await store.loadRecentMessages("conv_large", 2);
+  assert.equal(recent.length, 2);
+  assert.ok(recent[0].text.length < longUser.length);
+  assert.ok(recent[1].text.length < longAssistant.length);
+  assert.match(recent[0].text, /trimmed from the live view/);
+  assert.match(recent[1].text, /latest-tail$/);
+
+  const exported = await store.exportConversation("conv_large");
+  assert.match(exported, /title-tail/);
+  assert.match(exported, /latest-tail/);
+  assert.ok(exported.length > longUser.length + longAssistant.length);
+  store.dispose();
+});
+
 test("cli sqlite transcript store coalesces streamed local knowledge ingestion", async () => {
   const { createSQLiteTranscriptStore } = await import("../dist/tui/transcript-store.js");
   const root = await mkdtemp(join(tmpdir(), "agent-tui-transcript-knowledge-"));
@@ -4339,6 +4371,39 @@ test("cli sqlite transcript store coalesces streamed local knowledge ingestion",
     ["assistant-1", "ABC"],
   ]);
   assert.deepEqual(ingested[1].scope, scope);
+  store.dispose();
+});
+
+test("cli sqlite transcript store bounds local knowledge pending ingest text", async () => {
+  const { createSQLiteTranscriptStore } = await import("../dist/tui/transcript-store.js");
+  const root = await mkdtemp(join(tmpdir(), "agent-tui-transcript-knowledge-large-"));
+  const file = join(root, "transcripts.sqlite3");
+  const ingested = [];
+  const localKnowledge = {
+    ingestMessage(message) {
+      ingested.push({ ...message });
+    },
+    async search() {
+      return { object: "local_knowledge_search_result", data: [] };
+    },
+    async contextForPrompt() {
+      return null;
+    },
+  };
+  const store = createSQLiteTranscriptStore(file, {
+    localKnowledge,
+    localKnowledgeIngestDelayMs: 20,
+    localKnowledgePendingMaxBytes: 4096,
+  });
+  const longDelta = "k".repeat(16_000);
+  await store.appendMessage("conv_knowledge_large", { id: "assistant-large", role: "assistant", text: "" });
+  await store.appendMessageDelta("conv_knowledge_large", "assistant-large", longDelta);
+  await store.appendMessageDelta("conv_knowledge_large", "assistant-large", longDelta);
+  await new Promise((resolve) => setTimeout(resolve, 60));
+
+  assert.equal(ingested.length, 1);
+  assert.equal(Buffer.byteLength(ingested[0].text, "utf8"), 4096);
+  assert.equal((await store.exportConversation("conv_knowledge_large")).includes(longDelta + longDelta), true);
   store.dispose();
 });
 
