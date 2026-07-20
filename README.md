@@ -83,8 +83,8 @@ Manual publish:
 Tag publish:
 
 ```bash
-git tag v0.4.50
-git push origin v0.4.50
+git tag v0.4.51
+git push origin v0.4.51
 ```
 
 Pushing a `v*` tag publishes automatically.

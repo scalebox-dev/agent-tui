@@ -1,6 +1,6 @@
 {
   "name": "@agent-api/cli",
-  "version": "0.4.50",
+  "version": "0.4.51",
   "description": "First-class command line interface for Agent API",
   "license": "MIT",
   "homepage": "https://github.com/scalebox-dev/agent-tui#readme",
@@ -36,7 +36,7 @@
     "test": "npm run sync-version && npm run build && npm run smoke -w @agent-api/app-engine && node --test test/*.test.mjs"
   },
   "dependencies": {
-    "@agent-api/app-engine": "^0.1.47",
+    "@agent-api/app-engine": "^0.1.48",
     "better-sqlite3": "^12.11.1",
     "commander": "^14.0.3",
     "ink": "^6.8.0",

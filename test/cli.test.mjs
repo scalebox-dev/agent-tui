@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { chmod, mkdir, mkdtemp, readFile, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { execFile, spawn } from "node:child_process";
@@ -28,6 +28,7 @@ import {
   normalizeChatOptions,
   resolveAgentRequestTools,
   localUpdateInstallPlan,
+  runAgentTurn,
 } from "@agent-api/app-engine/core";
 import {
   authStatusText,
@@ -110,6 +111,14 @@ function testConfigDir(root, appName = "agent-tui") {
     home: root,
     env: isolatedEnv(root),
   }).config;
+}
+
+function jsonResponse(payload, init = {}) {
+  return new Response(JSON.stringify(payload), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+    ...init,
+  });
 }
 
 function lineReader(stream) {
@@ -1449,6 +1458,80 @@ test("agent request tools do not fetch catalogs without a preset", async () => {
   const tools = await resolveAgentRequestTools(client, undefined, localTools);
 
   assert.deepEqual(tools, localTools);
+});
+
+test("local knowledge does not break nested local workdir execution", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-tui-local-registry-"));
+  await writeFile(join(root, "README.md"), "local registry test\n", "utf8");
+  const storage = createMemoryStorage();
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  configureAgentAppRuntime({ appName: "local-registry-test", legacyAppName: null, storage });
+  globalThis.fetch = async (url, init = {}) => {
+    requests.push({
+      url: String(url),
+      body: init.body ? JSON.parse(String(init.body)) : undefined,
+    });
+    if (requests.length === 1) {
+      return jsonResponse({
+        id: "resp_call_workdir",
+        object: "response",
+        created_at: 1,
+        status: "requires_action",
+        model: "test/model",
+        output: [
+          {
+            type: "function_call",
+            id: "fc_workdir",
+            status: "completed",
+            name: "local_workdir",
+            call_id: "call_workdir",
+            arguments: JSON.stringify({ action: "list", path: ".", options: { max_depth: 1 } }),
+          },
+        ],
+      });
+    }
+    return jsonResponse({
+      id: "resp_done",
+      object: "response",
+      created_at: 2,
+      status: "completed",
+      model: "test/model",
+      output: [],
+      output_text: "done",
+    });
+  };
+  try {
+    await loginWithAPIKey({ profile: "local-registry", baseURL: "https://api.test", apiKey: "sk-local" });
+    const result = await runAgentTurn({
+      promptParts: ["list files"],
+      profile: "local-registry",
+      workdir: root,
+      includeLocalContext: true,
+      accessMode: "full",
+      stream: false,
+      localKnowledge: {
+        async ingestWorkdir() {},
+        async contextForPrompt() { return null; },
+        async search() { return { object: "local_knowledge_search_result", data: [] }; },
+      },
+    });
+
+    assert.equal(result.responseID, "resp_done");
+    assert.equal(requests.length, 2);
+    assert.ok(requests[0].body.tools.some((tool) => tool.name === "local_workdir"));
+    assert.ok(requests[0].body.tools.some((tool) => tool.name === "local_knowledge"));
+    const output = requests[1].body.input[0];
+    assert.equal(output.type, "function_call_output");
+    assert.equal(output.call_id, "call_workdir");
+    const payload = JSON.parse(output.output);
+    assert.equal(payload.ok, true);
+    assert.equal(/no local handler registered/.test(JSON.stringify(payload)), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+    configureAgentAppRuntime();
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("local shell isolation leaves isolator path explicit", () => {

@@ -913,6 +913,7 @@ function emptyLocalToolRegistry(): LocalToolRegistryBundle {
 
 type LocalRegistryLike = Pick<LocalToolRegistryBundle, "definitions" | "toolName"> & {
   execute(name: string, args: Record<string, unknown>, context?: unknown): Promise<Record<string, unknown>>;
+  has?(name: string): boolean;
 };
 
 function combineLocalToolRegistries(...registries: LocalRegistryLike[]): LocalToolRegistryBundle {
@@ -921,11 +922,11 @@ function combineLocalToolRegistries(...registries: LocalRegistryLike[]): LocalTo
       ...registries.flatMap((registry) => registry.definitions()),
     ],
     execute: async (name, args, abortSignal) => {
-      const registry = registries.find((item) => item.toolName === name);
+      const registry = registries.find((item) => item.toolName === name || item.has?.(name));
       if (registry) return await registry.execute(name, args, { signal: abortSignal });
       throw new Error(`no local handler registered for function ${name}`);
     },
-    has: (name) => registries.some((registry) => registry.toolName === name),
+    has: (name) => registries.some((registry) => registry.toolName === name || registry.has?.(name)),
   };
 }
 
