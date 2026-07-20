@@ -4117,6 +4117,50 @@ test("cli sqlite transcript store persists messages on disk", async () => {
   reopened.dispose();
 });
 
+test("cli sqlite transcript store coalesces streamed local knowledge ingestion", async () => {
+  const { createSQLiteTranscriptStore } = await import("../dist/tui/transcript-store.js");
+  const root = await mkdtemp(join(tmpdir(), "agent-tui-transcript-knowledge-"));
+  const file = join(root, "transcripts.sqlite3");
+  const ingested = [];
+  const localKnowledge = {
+    ingestMessage(message) {
+      ingested.push({ ...message });
+    },
+    async search() {
+      return { object: "local_knowledge_search_result", data: [] };
+    },
+    async contextForPrompt() {
+      return null;
+    },
+  };
+  const store = createSQLiteTranscriptStore(file, {
+    localKnowledge,
+    localKnowledgeIngestDelayMs: 20,
+  });
+  await store.appendMessage("conv_sql", { id: "user-1", role: "user", text: "Hello" });
+  await store.appendMessage("conv_sql", { id: "tool-1", kind: "tool", role: "system", text: "Local execution completed." });
+  await store.appendMessage("conv_sql", { id: "assistant-1", role: "assistant", text: "" });
+  await store.appendMessageDelta("conv_sql", "assistant-1", "A");
+  await store.appendMessageDelta("conv_sql", "assistant-1", "B");
+  await store.appendMessageDelta("conv_sql", "assistant-1", "C");
+
+  assert.deepEqual(ingested, [
+    {
+      conversationId: "conv_sql",
+      kind: undefined,
+      messageId: "user-1",
+      role: "user",
+      text: "Hello",
+    },
+  ]);
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.deepEqual(ingested.map((message) => [message.messageId, message.text]), [
+    ["user-1", "Hello"],
+    ["assistant-1", "ABC"],
+  ]);
+  store.dispose();
+});
+
 test("workbench view model renders markdown transcript lines", () => {
   const lines = buildTranscriptLines([
     { id: "1", role: "assistant", text: "# Title\n- **item** [docs](https://example.test)\n> quoted" },

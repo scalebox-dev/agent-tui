@@ -13,6 +13,7 @@ import {
   parseWorkbenchCommand,
   type AuthGateState,
   type LocalKnowledgeService,
+  type WorkbenchState,
   type WorkbenchAuthController,
   type WorkbenchAuthGateController,
   type WorkbenchTranscriptStore,
@@ -249,13 +250,14 @@ function WorkbenchApp({
   const terminalController = terminalControllerRef.current;
   const state = useSyncExternalStore(agentEngine.subscribe, agentEngine.snapshot, agentEngine.snapshot);
   const dispatch = agentEngine.dispatch;
+  const renderModelSpinnerFrame = transcriptWaitingSpinnerFrame(state, spinnerFrame);
   const renderModel = useMemo(
     () => buildWorkbenchRenderModel({
       draft: terminalState.draft,
       cursor: terminalState.cursor,
       profileName,
       selectionAnchor: terminalState.selectionAnchor,
-      spinnerFrame,
+      spinnerFrame: renderModelSpinnerFrame,
       state,
       transcriptOffset: terminalState.transcriptOffset,
       viewport: {
@@ -264,7 +266,7 @@ function WorkbenchApp({
       },
       workdirFallback: options.workdir || process.cwd(),
     }),
-    [options.workdir, profileName, spinnerFrame, state, terminalSize.columns, terminalSize.rows, terminalState.cursor, terminalState.draft, terminalState.selectionAnchor, terminalState.transcriptOffset],
+    [options.workdir, profileName, renderModelSpinnerFrame, state, terminalSize.columns, terminalSize.rows, terminalState.cursor, terminalState.draft, terminalState.selectionAnchor, terminalState.transcriptOffset],
   );
 
   function commitTerminalState(next: WorkbenchTerminalState) {
@@ -552,6 +554,21 @@ function shouldLoadNewerTranscript(
     state.focusedPanel === "transcript" &&
     state.transcriptOffset <= 0,
   );
+}
+
+function transcriptWaitingSpinnerFrame(state: WorkbenchState, spinnerFrame: number) {
+  const runningRun = state.runs.find((run) => {
+    if (run.status !== "running") return false;
+    if (state.conversationId) return run.conversationId === state.conversationId;
+    return run.conversationName === state.currentConversation;
+  });
+  const activeAssistantMessageId = runningRun?.assistantMessageId ?? state.activeAssistantMessageId;
+  if (!activeAssistantMessageId) return 0;
+  const activeAssistantMessage = state.messages.find((message) =>
+    message.role === "assistant" &&
+    message.id === activeAssistantMessageId
+  );
+  return activeAssistantMessage && !activeAssistantMessage.text ? spinnerFrame : 0;
 }
 
 function useTerminalSize(stdout: NodeJS.WriteStream) {

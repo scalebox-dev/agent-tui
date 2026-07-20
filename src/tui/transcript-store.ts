@@ -15,6 +15,7 @@ import {
 
 export interface DefaultTranscriptStoreOptions {
   localKnowledge?: LocalKnowledgeService;
+  localKnowledgeIngestDelayMs?: number;
 }
 
 export function createDefaultTranscriptStore(options: DefaultTranscriptStoreOptions = {}): WorkbenchTranscriptStore {
@@ -103,6 +104,12 @@ export function createSQLiteTranscriptStore(file: string, options: DefaultTransc
     FROM transcript_messages
     WHERE conversation_id = ? AND message_id = ?
   `);
+  const knowledgeIngestDelayMs = Math.max(0, options.localKnowledgeIngestDelayMs ?? 1500);
+  const pendingKnowledgeIngests = new Map<string, {
+    conversationId: string;
+    message: WorkbenchMessage;
+    timer: ReturnType<typeof setTimeout>;
+  }>();
 
   return {
     async appendMessage(conversationId, message) {
@@ -114,6 +121,7 @@ export function createSQLiteTranscriptStore(file: string, options: DefaultTransc
         text: message.text,
         now: nowSeconds(),
       });
+      cancelPendingKnowledgeIngest(conversationId, message.id);
       ingestKnowledgeMessage(options.localKnowledge, conversationId, message);
     },
     async appendMessageDelta(conversationId, messageId, delta) {
@@ -124,10 +132,16 @@ export function createSQLiteTranscriptStore(file: string, options: DefaultTransc
         delta,
         now: nowSeconds(),
       });
+      const pending = pendingKnowledgeIngests.get(knowledgeIngestKey(conversationId, messageId));
+      if (pending) {
+        scheduleKnowledgeIngest(conversationId, { ...pending.message, text: pending.message.text + delta });
+        return;
+      }
       const rows = rowsToMessages([messageByID.get(conversationId, messageId)].filter(Boolean));
-      if (rows[0]) ingestKnowledgeMessage(options.localKnowledge, conversationId, rows[0]);
+      if (rows[0]) scheduleKnowledgeIngest(conversationId, rows[0]);
     },
     async clearConversation(conversationId) {
+      cancelConversationKnowledgeIngests(conversationId);
       deleteConversation.run(conversationId);
       try {
         await options.localKnowledge?.forgetConversation?.(conversationId);
@@ -154,9 +168,58 @@ export function createSQLiteTranscriptStore(file: string, options: DefaultTransc
       return rowsToMessages(recentMessages.all(conversationId, Math.max(0, limit))).reverse();
     },
     dispose() {
+      flushPendingKnowledgeIngests();
       db.close();
     },
   };
+
+  function scheduleKnowledgeIngest(conversationId: string, message: WorkbenchMessage) {
+    if (!isKnowledgeIngestible(options.localKnowledge, message)) return;
+    const key = knowledgeIngestKey(conversationId, message.id);
+    const pending = pendingKnowledgeIngests.get(key);
+    if (pending) clearTimeout(pending.timer);
+    if (knowledgeIngestDelayMs === 0) {
+      ingestKnowledgeMessage(options.localKnowledge, conversationId, message);
+      return;
+    }
+    const timer = setTimeout(() => flushPendingKnowledgeIngest(key), knowledgeIngestDelayMs);
+    pendingKnowledgeIngests.set(key, {
+      conversationId,
+      message: { ...message },
+      timer,
+    });
+  }
+
+  function flushPendingKnowledgeIngest(key: string) {
+    const pending = pendingKnowledgeIngests.get(key);
+    if (!pending) return;
+    pendingKnowledgeIngests.delete(key);
+    clearTimeout(pending.timer);
+    ingestKnowledgeMessage(options.localKnowledge, pending.conversationId, pending.message);
+  }
+
+  function flushPendingKnowledgeIngests() {
+    for (const key of [...pendingKnowledgeIngests.keys()]) {
+      flushPendingKnowledgeIngest(key);
+    }
+  }
+
+  function cancelPendingKnowledgeIngest(conversationId: string, messageId: string) {
+    const key = knowledgeIngestKey(conversationId, messageId);
+    const pending = pendingKnowledgeIngests.get(key);
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    pendingKnowledgeIngests.delete(key);
+  }
+
+  function cancelConversationKnowledgeIngests(conversationId: string) {
+    const prefix = `${conversationId}\0`;
+    for (const [key, pending] of pendingKnowledgeIngests.entries()) {
+      if (!key.startsWith(prefix)) continue;
+      clearTimeout(pending.timer);
+      pendingKnowledgeIngests.delete(key);
+    }
+  }
 }
 
 function ingestKnowledgeMessage(
@@ -164,17 +227,31 @@ function ingestKnowledgeMessage(
   conversationId: string,
   message: WorkbenchMessage,
 ) {
+  if (!isKnowledgeIngestible(localKnowledge, message)) return;
   try {
-    localKnowledge?.ingestMessage?.({
+    const ingestMessage = localKnowledge?.ingestMessage;
+    if (!ingestMessage) return;
+    const result = ingestMessage({
       conversationId,
       messageId: message.id,
       role: message.role,
       kind: message.kind,
       text: message.text,
     });
+    if (result && typeof (result as Promise<void>).catch === "function") {
+      (result as Promise<void>).catch(() => {});
+    }
   } catch {
     // Transcript persistence should not fail because the opportunistic local index is unavailable.
   }
+}
+
+function isKnowledgeIngestible(localKnowledge: LocalKnowledgeService | undefined, message: WorkbenchMessage) {
+  return Boolean(localKnowledge?.ingestMessage && message.kind !== "tool" && message.text.trim());
+}
+
+function knowledgeIngestKey(conversationId: string, messageId: string) {
+  return `${conversationId}\0${messageId}`;
 }
 
 function rowsToMessages(rows: unknown[]): WorkbenchMessage[] {
