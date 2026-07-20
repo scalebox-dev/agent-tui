@@ -1609,6 +1609,75 @@ test("local knowledge tool searches with active run scope", async () => {
   }
 });
 
+test("local knowledge does not wrap local shell abort context twice", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-local-knowledge-shell-signal-"));
+  const storage = createMemoryStorage();
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  let calls = 0;
+  configureAgentAppRuntime({ appName: "local-knowledge-shell-signal-test", legacyAppName: null, storage });
+  globalThis.fetch = async (_url, init = {}) => {
+    calls += 1;
+    requests.push(JSON.parse(String(init.body ?? "{}")));
+    if (calls === 1) {
+      return jsonResponse({
+        id: "resp_needs_shell",
+        object: "response",
+        created_at: 1,
+        status: "requires_action",
+        model: "test/model",
+        output: [
+          {
+            type: "function_call",
+            id: "fc_shell",
+            status: "completed",
+            name: "local_shell",
+            call_id: "call_shell",
+            arguments: JSON.stringify({ command: "printf shell-ok", description: "Smoke local shell" }),
+          },
+        ],
+      });
+    }
+    return jsonResponse({
+      id: "resp_done",
+      object: "response",
+      created_at: 2,
+      status: "completed",
+      model: "test/model",
+      output: [],
+      output_text: "done",
+    });
+  };
+
+  try {
+    await loginWithAPIKey({ profile: "local-knowledge-shell-signal", baseURL: "https://api.test", apiKey: "sk-local" });
+    await runAgentTurn({
+      promptParts: ["run shell"],
+      profile: "local-knowledge-shell-signal",
+      workdir: root,
+      includeLocalContext: true,
+      accessMode: "full",
+      stream: false,
+      localKnowledge: {
+        async ingestWorkdir() {},
+        async contextForPrompt() { return null; },
+        async search() { return { object: "local_knowledge_search_result", data: [] }; },
+      },
+    });
+
+    const output = requests[1].input[0];
+    assert.equal(output.type, "function_call_output");
+    assert.equal(output.call_id, "call_shell");
+    const payload = JSON.parse(output.output);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.output, "shell-ok");
+  } finally {
+    globalThis.fetch = originalFetch;
+    configureAgentAppRuntime();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("local shell isolation leaves isolator path explicit", () => {
   const previousPath = process.env.AGENT_ISOLATOR_PATH;
   delete process.env.AGENT_ISOLATOR_PATH;

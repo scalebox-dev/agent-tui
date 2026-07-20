@@ -922,7 +922,7 @@ function localToolAccessMode(options: AgentRunOptions): "approval" | "full" {
 interface LocalToolRegistryBundle {
   toolName?: string;
   definitions(): Tool[];
-  execute(name: string, args: Record<string, unknown>, abortSignal?: AbortSignal): Promise<Record<string, unknown>>;
+  execute(name: string, args: Record<string, unknown>, context?: AbortSignal | { signal?: AbortSignal }): Promise<Record<string, unknown>>;
   has(name: string): boolean;
 }
 
@@ -952,13 +952,29 @@ function combineLocalToolRegistries(...registries: LocalRegistryLike[]): LocalTo
     definitions: () => [
       ...registries.flatMap((registry) => registry.definitions()),
     ],
-    execute: async (name, args, abortSignal) => {
+    execute: async (name, args, context) => {
       const registry = registries.find((item) => item.toolName === name || item.has?.(name));
-      if (registry) return await registry.execute(name, args, { signal: abortSignal });
+      if (registry) return await registry.execute(name, args, { signal: localToolAbortSignal(context) });
       throw new Error(`no local handler registered for function ${name}`);
     },
     has: (name) => registries.some((registry) => registry.toolName === name || registry.has?.(name)),
   };
+}
+
+function localToolAbortSignal(context?: AbortSignal | { signal?: AbortSignal }): AbortSignal | undefined {
+  if (!context) return undefined;
+  if (isAbortSignal(context)) return context;
+  return isAbortSignal(context.signal) ? context.signal : undefined;
+}
+
+function isAbortSignal(value: unknown): value is AbortSignal {
+  return Boolean(
+    value &&
+      typeof value === "object" &&
+      typeof (value as AbortSignal).aborted === "boolean" &&
+      typeof (value as AbortSignal).addEventListener === "function" &&
+      typeof (value as AbortSignal).removeEventListener === "function",
+  );
 }
 
 async function executeLocalFunctionCalls(
