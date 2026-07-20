@@ -63,7 +63,7 @@ export function insertText(state: TextEditorState, input: string): TextEditorSta
   return normalizeTextEditorState({ text, cursor: current.cursor + normalizedInput.length, selectionAnchor: null });
 }
 
-export function deleteTextBeforeCursor(state: TextEditorState): TextEditorState {
+export function deleteTextBeforeCursor(state: TextEditorState, count = 1): TextEditorState {
   const current = normalizeTextEditorState(state);
   const selected = selectedRange(current);
   if (selected) {
@@ -74,9 +74,11 @@ export function deleteTextBeforeCursor(state: TextEditorState): TextEditorState 
     });
   }
   if (current.cursor <= 0) return current;
+  const deleteCount = Math.max(1, Math.floor(count));
+  const start = Math.max(0, current.cursor - deleteCount);
   return normalizeTextEditorState({
-    text: `${current.text.slice(0, current.cursor - 1)}${current.text.slice(current.cursor)}`,
-    cursor: current.cursor - 1,
+    text: `${current.text.slice(0, start)}${current.text.slice(current.cursor)}`,
+    cursor: start,
     selectionAnchor: null,
   });
 }

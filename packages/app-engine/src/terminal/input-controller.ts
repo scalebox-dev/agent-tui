@@ -108,9 +108,10 @@ function handleBusyInput(
     if (command) return editorResult(emptyEditor(), { type: "ignored_busy" });
     return editorResult(emptyEditor());
   }
-  if (isBackwardDelete(input, key)) {
+  const backwardDeleteCount = countBackwardDelete(input, key);
+  if (backwardDeleteCount > 0) {
     history.reset();
-    return editorResult(deleteTextBeforeCursor(editor));
+    return editorResult(deleteTextBeforeCursor(editor, backwardDeleteCount));
   }
   if (key.delete) {
     history.reset();
@@ -139,9 +140,10 @@ function handleReadyInput(
     history.record(prompt);
     return editorResult(emptyEditor(), { type: "submit", input: prompt });
   }
-  if (isBackwardDelete(input, key)) {
+  const backwardDeleteCount = countBackwardDelete(input, key);
+  if (backwardDeleteCount > 0) {
     history.reset();
-    return editorResult(deleteTextBeforeCursor(editor));
+    return editorResult(deleteTextBeforeCursor(editor, backwardDeleteCount));
   }
   if (key.delete) {
     history.reset();
@@ -194,6 +196,14 @@ function isCopyCommand(command: string) {
   return command === "/copy" || command.startsWith("/copy ");
 }
 
-function isBackwardDelete(input: string, key: WorkbenchInputKey) {
-  return Boolean(key.backspace || input === "\x7f" || input === "\b" || input === "\x08" || (key.ctrl && input === "h"));
+function countBackwardDelete(input: string, key: WorkbenchInputKey) {
+  if (key.ctrl && input === "h") return 1;
+  if (isRepeatedBackwardDeleteInput(input)) return input.length;
+  return key.backspace ? 1 : 0;
+}
+
+function isRepeatedBackwardDeleteInput(input: string) {
+  return input.length > 0 && Array.from(input).every((char) =>
+    char === "\x7f" || char === "\b" || char === "\x08"
+  );
 }

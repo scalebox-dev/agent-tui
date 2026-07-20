@@ -2965,6 +2965,34 @@ test("workbench terminal controller allows submit when only another conversation
   }).effects, [{ type: "submit", input: "new task" }]);
 });
 
+test("workbench terminal controller handles repeated backspace input batches", () => {
+  const controller = createWorkbenchTerminalController();
+  const state = createInitialWorkbenchState({});
+  const terminalState = {
+    ...initialWorkbenchTerminalState(),
+    cursor: "abcdef".length,
+    draft: "abcdef",
+  };
+  const renderModel = buildWorkbenchRenderModel({
+    cursor: terminalState.cursor,
+    draft: terminalState.draft,
+    profileName: "default",
+    spinnerFrame: 0,
+    state,
+    transcriptOffset: 0,
+    viewport: { rows: 24, columns: 120 },
+    workdirFallback: "/fallback",
+  });
+
+  const result = controller.handle("\x7f\x7f\x7f", { delete: true }, terminalState, {
+    busy: renderModel.input.busy,
+    renderModel,
+  });
+  assert.equal(result.state.draft, "abc");
+  assert.equal(result.state.cursor, 3);
+  assert.deepEqual(result.effects, []);
+});
+
 test("tui mouse parser accepts Ink-delivered SGR reports without ESC", () => {
   assert.deepEqual(parseMouseEvent("[<0;51;41M"), {
     button: "left",
@@ -3849,6 +3877,18 @@ test("workbench input controller maps navigation and busy abort policy", () => {
   assert.deepEqual(controller.handle("\b", {}, { busy: false, cursor: 4, draft: "abcd", viewportHeight: 11 }), {
     cursor: 3,
     draft: "abc",
+    effects: [],
+    selectionAnchor: null,
+  });
+  assert.deepEqual(controller.handle("\x7f\x7f\x7f", {}, { busy: false, cursor: 6, draft: "abcdef", viewportHeight: 11 }), {
+    cursor: 3,
+    draft: "abc",
+    effects: [],
+    selectionAnchor: null,
+  });
+  assert.deepEqual(controller.handle("\x7f\x7f", { delete: true }, { busy: false, cursor: 4, draft: "abcd", viewportHeight: 11 }), {
+    cursor: 2,
+    draft: "ab",
     effects: [],
     selectionAnchor: null,
   });
