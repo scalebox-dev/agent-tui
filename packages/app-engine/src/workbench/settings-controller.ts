@@ -25,6 +25,7 @@ export interface WorkbenchSettingsSnapshot {
   defaultAutomaticContinuationLimit?: number | null;
   automaticContinuationLimit?: number | null;
   runPreset?: string;
+  localKnowledgeEnabled?: boolean;
   shellIsolation?: ShellIsolationPreferences;
   activity?: string;
   notice?: string;
@@ -39,6 +40,7 @@ export interface WorkbenchSettingsController {
     options: Pick<AgentRunOptions, "modelExplicit" | "preset" | "presetExplicit">;
   }): Promise<WorkbenchSettingsSnapshot & { message: string; activity: string }>;
   saveAutomaticContinuationLimit(value: string): Promise<WorkbenchSettingsSnapshot & { message: string; activity: string }>;
+  saveLocalKnowledgeEnabled(value: string): Promise<WorkbenchSettingsSnapshot & { message: string; activity: string }>;
   saveShellIsolationMode(value: string): Promise<WorkbenchSettingsSnapshot & { message: string; activity: string }>;
   saveIsolatorPath(value: string): Promise<WorkbenchSettingsSnapshot & { message: string; activity: string }>;
   saveIsolatorSource(value: string): Promise<WorkbenchSettingsSnapshot & { message: string; activity: string }>;
@@ -50,6 +52,7 @@ export interface WorkbenchSettingsController {
     defaultPreset?: string | null;
     currentAutomaticContinuationLimit?: number | null;
     automaticContinuationLimit?: number | null;
+    localKnowledgeEnabled: boolean;
     localSkillsEnabled: boolean;
     memoryRead: boolean;
     memoryTenantSearch: boolean;
@@ -63,6 +66,7 @@ export interface WorkbenchSettingsController {
   }): string;
   defaultPresetHelp(defaultPreset?: string | null): string;
   automaticContinuationLimitHelp(automaticContinuationLimit?: number | null): string;
+  localKnowledgeHelp(localKnowledgeEnabled: boolean): string;
   shellIsolationHelp(shellIsolation?: ShellIsolationPreferences): string;
   isolatorPathHelp(shellIsolation?: ShellIsolationPreferences): string;
   clearPresetToolCatalogCache(baseURL?: string): void;
@@ -101,6 +105,7 @@ export function createWorkbenchSettingsController(options: WorkbenchSettingsCont
         ...("automaticContinuationLimit" in preferences ? { defaultAutomaticContinuationLimit: preferences.automaticContinuationLimit } : {}),
         ...("automaticContinuationLimit" in preferences ? { automaticContinuationLimit: preferences.automaticContinuationLimit } : {}),
         ...(preferences.isolation ? { shellIsolation: preferences.isolation } : {}),
+        ...("localKnowledgeEnabled" in preferences ? { localKnowledgeEnabled: preferences.localKnowledgeEnabled !== false } : {}),
         ...(activity ? { activity } : {}),
         ...(isolatorSetupNotice(preferences.isolation) ? { notice: isolatorSetupNotice(preferences.isolation) } : {}),
         ...(warning ? { warning } : {}),
@@ -132,6 +137,16 @@ export function createWorkbenchSettingsController(options: WorkbenchSettingsCont
         ...settingsSnapshot(preferences),
         message: `Saved automatic continuation limit: ${formatAutomaticContinuationLimit(preferences.automaticContinuationLimit)}.`,
         activity: `Automatic continuation limit saved: ${formatAutomaticContinuationLimit(preferences.automaticContinuationLimit)}`,
+      };
+    },
+
+    async saveLocalKnowledgeEnabled(value) {
+      const normalized = normalizeLocalKnowledgePreference(value);
+      const preferences = await updateWorkbenchPreferencesImpl({ localKnowledgeEnabled: normalized });
+      return {
+        ...settingsSnapshot(preferences),
+        message: `Saved local knowledge default: ${formatLocalKnowledgePreference(preferences.localKnowledgeEnabled)}.`,
+        activity: `Local knowledge default: ${formatLocalKnowledgePreference(preferences.localKnowledgeEnabled)}`,
       };
     },
 
@@ -254,6 +269,10 @@ export function createWorkbenchSettingsController(options: WorkbenchSettingsCont
       return `Automatic continuation limit: ${formatAutomaticContinuationLimit(automaticContinuationLimit)}. Use /config continuation-limit <n>, /config continuation-limit unlimited, or /config continuation-limit reset.`;
     },
 
+    localKnowledgeHelp(localKnowledgeEnabled) {
+      return `Local knowledge default: ${localKnowledgeEnabled ? "on" : "off"}. Use /config knowledge on, /config knowledge off, or /config knowledge reset.`;
+    },
+
     shellIsolationHelp(shellIsolation) {
       return `Shell isolation: ${formatShellIsolation(shellIsolation)}. Use /config isolation none, /config isolation auto, or /config isolation required.`;
     },
@@ -297,6 +316,7 @@ function settingsSnapshot(preferences: WorkbenchPreferences): WorkbenchSettingsS
     ...("defaultPreset" in preferences ? { defaultPreset: preferences.defaultPreset } : {}),
     ...("automaticContinuationLimit" in preferences ? { defaultAutomaticContinuationLimit: preferences.automaticContinuationLimit } : {}),
     ...("automaticContinuationLimit" in preferences ? { automaticContinuationLimit: preferences.automaticContinuationLimit } : {}),
+    ...("localKnowledgeEnabled" in preferences ? { localKnowledgeEnabled: preferences.localKnowledgeEnabled !== false } : {}),
     ...(preferences.isolation ? { shellIsolation: preferences.isolation } : {}),
   };
 }
@@ -316,6 +336,18 @@ export function normalizeAutomaticContinuationLimitPreference(value: string): nu
 export function formatAutomaticContinuationLimit(value: number | null | undefined) {
   if (value === undefined) return "built-in (8)";
   return value === null ? "unlimited" : String(value);
+}
+
+export function normalizeLocalKnowledgePreference(value: string): boolean | undefined {
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed || ["reset", "default", "builtin"].includes(trimmed)) return undefined;
+  if (["on", "true", "yes", "enable", "enabled"].includes(trimmed)) return true;
+  if (["off", "false", "no", "disable", "disabled"].includes(trimmed)) return false;
+  throw new Error("Unknown local knowledge setting. Use on, off, or reset.");
+}
+
+export function formatLocalKnowledgePreference(value: boolean | undefined) {
+  return value === false ? "off" : "on";
 }
 
 export function normalizeShellIsolationMode(value: string): ShellIsolationMode {
@@ -378,6 +410,7 @@ function runConfigText({
   contextEnabled,
   currentAutomaticContinuationLimit,
   defaultPreset,
+  localKnowledgeEnabled,
   localSkillsEnabled,
   memoryRead,
   memoryTenantSearch,
@@ -394,6 +427,7 @@ function runConfigText({
   contextEnabled: boolean;
   currentAutomaticContinuationLimit?: number | null;
   defaultPreset?: string | null;
+  localKnowledgeEnabled: boolean;
   localSkillsEnabled: boolean;
   memoryRead: boolean;
   memoryTenantSearch: boolean;
@@ -413,6 +447,7 @@ function runConfigText({
     `Default automatic continuation limit: ${formatAutomaticContinuationLimit(automaticContinuationLimit)}`,
     `Model: ${runModel || "auto"}`,
     `Render mode: ${renderMode}`,
+    `Local knowledge: ${localKnowledgeEnabled ? "on" : "off"}`,
     `Shell isolation: ${formatShellIsolation(shellIsolation)}`,
     `Isolator path: ${formatIsolatorPath(shellIsolation)}`,
     `Isolator source: ${formatIsolatorSource(shellIsolation)}`,

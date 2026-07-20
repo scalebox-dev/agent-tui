@@ -45,7 +45,7 @@
     "pack:local": "npm pack --pack-destination ./artifacts"
   },
   "dependencies": {
-    "@agent-api/sdk": "^1.4.9",
+    "@agent-api/sdk": "^1.4.10",
     "zod": "^4.4.3"
   },
   "devDependencies": {

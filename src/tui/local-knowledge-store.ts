@@ -41,14 +41,140 @@ interface SourceStateRow {
   mtime_ms: number | null;
 }
 
+interface SourcePruneRow {
+  source_id: number;
+  source_type: string;
+  size: number | null;
+  indexed_at: number;
+  deleted_at: number | null;
+}
+
+interface SourceStatsRow {
+  source_type: string;
+  sources: number;
+  chunks: number;
+  bytes: number | null;
+}
+
 const schemaVersion = 3;
 const defaultSearchLimit = 8;
 const maxSearchLimit = 30;
 const defaultContextBytes = 10 * 1024;
+const maxContextBytes = 64 * 1024;
 const defaultChunkBytes = 4 * 1024;
 const defaultChunkOverlapLines = 4;
 const maxTranscriptBytes = 64 * 1024;
 const maxWorkdirFileBytes = 128 * 1024;
+const secondsPerDay = 24 * 60 * 60;
+
+export interface LocalKnowledgeRetentionPolicy {
+  transcriptTtlSeconds?: number;
+  workdirTtlSeconds?: number;
+  maxBytes?: number;
+  maxTranscriptSources?: number;
+  maxWorkdirSources?: number;
+  deletedTtlSeconds?: number;
+}
+
+export interface LocalKnowledgeRetrievalPolicy {
+  defaultLimit?: number;
+  maxLimit?: number;
+  defaultContextBytes?: number;
+  maxContextBytes?: number;
+  scopeMode?: "prefer" | "filter";
+  includeConversationSiblings?: boolean;
+}
+
+export interface LocalKnowledgeIngestionPolicy {
+  maxTranscriptBytes?: number;
+  maxWorkdirFiles?: number;
+  maxWorkdirFileBytes?: number;
+  maxChunkBytes?: number;
+  includeWorkdir?: boolean;
+  includeTranscripts?: boolean;
+}
+
+export interface LocalKnowledgePolicy {
+  enabled?: boolean;
+  retention?: LocalKnowledgeRetentionPolicy;
+  retrieval?: LocalKnowledgeRetrievalPolicy;
+  ingestion?: LocalKnowledgeIngestionPolicy;
+}
+
+export interface LocalKnowledgeStats {
+  object: "local_knowledge_stats";
+  sources: number;
+  chunks: number;
+  bytes: number;
+  deletedSources: number;
+  oldestIndexedAt?: number;
+  newestIndexedAt?: number;
+  bySourceType: Partial<Record<LocalKnowledgeSourceType, { sources: number; chunks: number; bytes: number }>>;
+}
+
+export interface LocalKnowledgePruneParams {
+  policy?: LocalKnowledgePolicy;
+  scope?: LocalKnowledgeScope;
+  dryRun?: boolean;
+}
+
+export interface LocalKnowledgePruneResult {
+  object: "local_knowledge_prune_result";
+  dryRun?: boolean;
+  deletedSources: number;
+  deletedChunks: number;
+  reclaimedBytes: number;
+}
+
+export interface LocalKnowledgeForgetParams {
+  conversationId?: string;
+  workspaceId?: string;
+  profile?: string;
+  workdir?: string;
+  sourceUri?: string;
+  sourceType?: LocalKnowledgeSourceType;
+}
+
+export interface SQLiteLocalKnowledgeService extends LocalKnowledgeService {
+  forget(params: LocalKnowledgeForgetParams): void;
+  prune(params?: LocalKnowledgePruneParams): LocalKnowledgePruneResult;
+  stats(scope?: LocalKnowledgeScope): LocalKnowledgeStats;
+}
+
+interface NormalizedLocalKnowledgePolicy {
+  enabled: boolean;
+  retention: Required<LocalKnowledgeRetentionPolicy>;
+  retrieval: Required<LocalKnowledgeRetrievalPolicy>;
+  ingestion: Required<LocalKnowledgeIngestionPolicy>;
+}
+
+const defaultPolicy: NormalizedLocalKnowledgePolicy = {
+  enabled: true,
+  retention: {
+    transcriptTtlSeconds: 90 * secondsPerDay,
+    workdirTtlSeconds: 30 * secondsPerDay,
+    maxBytes: 128 * 1024 * 1024,
+    maxTranscriptSources: 20_000,
+    maxWorkdirSources: 2_000,
+    deletedTtlSeconds: 7 * secondsPerDay,
+  },
+  retrieval: {
+    defaultLimit: defaultSearchLimit,
+    maxLimit: maxSearchLimit,
+    defaultContextBytes,
+    maxContextBytes,
+    scopeMode: "filter",
+    includeConversationSiblings: true,
+  },
+  ingestion: {
+    maxTranscriptBytes,
+    maxWorkdirFiles: 80,
+    maxWorkdirFileBytes,
+    maxChunkBytes: defaultChunkBytes,
+    includeWorkdir: true,
+    includeTranscripts: true,
+  },
+};
 
 const priorityFileNames = new Set([
   "AGENTS.md",
@@ -63,12 +189,13 @@ const priorityFileNames = new Set([
 
 export interface SQLiteLocalKnowledgeStoreOptions {
   maxChunkBytes?: number;
+  policy?: LocalKnowledgePolicy;
 }
 
 export function createSQLiteLocalKnowledgeStore(
   file: string,
   options: SQLiteLocalKnowledgeStoreOptions = {},
-): LocalKnowledgeService {
+): SQLiteLocalKnowledgeService {
   mkdirSync(path.dirname(file), { recursive: true });
   const db = new Database(file);
   db.pragma("journal_mode = WAL");
@@ -76,7 +203,7 @@ export function createSQLiteLocalKnowledgeStore(
   db.pragma("busy_timeout = 2500");
   migrate(db);
 
-  const maxChunkBytes = positiveInt(options.maxChunkBytes, defaultChunkBytes);
+  const policy = normalizePolicy(options.policy, options.maxChunkBytes);
 
   const sourceByKey = db.prepare(`
     SELECT source_id, content_hash, size, mtime_ms
@@ -120,38 +247,6 @@ export function createSQLiteLocalKnowledgeStore(
     SET deleted_at = @deletedAt
     WHERE source_type = 'transcript' AND conversation_id = @conversationId
   `);
-  const searchStatement = db.prepare(`
-    SELECT
-      c.chunk_id,
-      c.chunk_index,
-      s.source_type,
-      s.source_uri,
-      s.title,
-      c.text,
-      s.conversation_id,
-      s.workspace_id,
-      s.profile,
-      s.workdir,
-      s.metadata_json,
-      c.start_line,
-      c.end_line,
-      s.indexed_at,
-      bm25(local_knowledge_chunks_fts) AS rank
-    FROM local_knowledge_chunks_fts
-    JOIN local_knowledge_chunks c ON c.rowid = local_knowledge_chunks_fts.rowid
-    JOIN local_knowledge_sources s ON s.source_id = c.source_id
-    WHERE local_knowledge_chunks_fts MATCH @match
-      AND s.deleted_at IS NULL
-    ORDER BY
-      CASE WHEN s.conversation_id = @conversationId THEN 0 ELSE 1 END,
-      CASE WHEN s.workspace_id = @workspaceId THEN 0 ELSE 1 END,
-      CASE WHEN s.profile = @profile THEN 0 ELSE 1 END,
-      CASE WHEN s.workdir = @workdir THEN 0 ELSE 1 END,
-      rank,
-      s.indexed_at DESC
-    LIMIT @limit
-  `);
-
   const replaceSource = db.transaction((record: SourceRecord, chunks: TextChunk[]) => {
     const source = upsertSource.get({
       sourceKey: record.sourceKey,
@@ -182,11 +277,12 @@ export function createSQLiteLocalKnowledgeStore(
     }
   });
 
-  const service: LocalKnowledgeService = {
+  const service: SQLiteLocalKnowledgeService = {
     ingestMessage(message) {
+      if (policy.enabled === false || policy.ingestion.includeTranscripts === false) return;
       const text = message.text.trim();
       if (!text || message.kind === "tool") return;
-      const clipped = trimText(text, maxTranscriptBytes);
+      const clipped = trimText(text, policy.ingestion.maxTranscriptBytes);
       const sourceKey = `transcript:${message.conversationId}:${message.messageId}`;
       const scope = normalizedScope({
         ...message.scope,
@@ -206,16 +302,18 @@ export function createSQLiteLocalKnowledgeStore(
         },
         contentHash: stableID(clipped),
         size: Buffer.byteLength(clipped, "utf8"),
-      }, chunkText(clipped, maxChunkBytes));
+      }, chunkText(clipped, policy.ingestion.maxChunkBytes));
+      pruneBestEffort();
     },
     async ingestWorkdir(ingestOptions) {
+      if (policy.enabled === false || policy.ingestion.includeWorkdir === false) return;
       const root = path.resolve(ingestOptions.root);
       const scope = normalizedScope({
         ...ingestOptions.scope,
         workdir: ingestOptions.scope?.workdir ?? root,
       });
-      const scan = await priorityFiles(root, ingestOptions.maxFiles ?? 80);
-      const maxBytes = Math.min(positiveInt(ingestOptions.maxBytesPerFile, maxWorkdirFileBytes), maxWorkdirFileBytes);
+      const scan = await priorityFiles(root, ingestOptions.maxFiles ?? policy.ingestion.maxWorkdirFiles);
+      const maxBytes = Math.min(positiveInt(ingestOptions.maxBytesPerFile, policy.ingestion.maxWorkdirFileBytes), policy.ingestion.maxWorkdirFileBytes);
       const seenKeys = new Set<string>();
       for (const relativePath of scan.files) {
         const sourceKey = `file:${root}:${relativePath}`;
@@ -250,27 +348,30 @@ export function createSQLiteLocalKnowledgeStore(
             contentHash,
             size: info.size,
             mtimeMs: Math.trunc(info.mtimeMs),
-          }, chunkText(text, maxChunkBytes));
+          }, chunkText(text, policy.ingestion.maxChunkBytes));
           seenKeys.add(sourceKey);
         } catch {
           // Keep indexing best-effort; a locked or non-text file should not break a turn.
         }
       }
       markStaleWorkdirSources(root, seenKeys, scan.scanned);
+      pruneBestEffort();
     },
     async search(params) {
       const match = ftsQuery(params.query);
       if (!match) return { object: "local_knowledge_search_result", data: [] };
       let rows: SearchRow[];
       const scope = normalizedScope(params.scope, params);
+      const scopedSearch = searchStatementForScope(policy, scope);
       try {
-        rows = searchStatement.all({
+        rows = scopedSearch.statement.all({
           match,
-          limit: clampInt(params.limit, defaultSearchLimit, 1, maxSearchLimit),
+          limit: clampInt(params.limit, policy.retrieval.defaultLimit, 1, policy.retrieval.maxLimit),
           conversationId: scope.conversationId ?? "",
           workspaceId: scope.workspaceId ?? "",
           profile: scope.profile ?? "",
           workdir: scope.workdir ? path.resolve(scope.workdir) : "",
+          ...scopedSearch.params,
         }) as SearchRow[];
       } catch {
         return { object: "local_knowledge_search_result", data: [] };
@@ -287,15 +388,321 @@ export function createSQLiteLocalKnowledgeStore(
         scope: normalizedScope(params.scope, params),
       });
       if (result.data.length === 0) return null;
-      return buildContext(result, params);
+      return buildContext(result, params, policy);
     },
     forgetConversation(conversationId: string) {
       deleteConversationSources.run({ conversationId, deletedAt: nowSeconds() });
+    },
+    forget(params) {
+      softForget(params);
+    },
+    prune(params = {}) {
+      return pruneLocalKnowledge(params);
+    },
+    stats(scope) {
+      return localKnowledgeStats(scope);
     },
     dispose() {
       db.close();
     },
   };
+
+  function pruneBestEffort() {
+    try {
+      pruneLocalKnowledge({ policy });
+    } catch {
+      // Retention is protective and should never break ingestion.
+    }
+  }
+
+  function searchStatementForScope(
+    effectivePolicy: NormalizedLocalKnowledgePolicy,
+    scope: NormalizedLocalKnowledgeScope,
+  ): { statement: Database.Statement; params: Record<string, unknown> } {
+    const scoped = retrievalScopeWhere(effectivePolicy, scope);
+    return {
+      statement: db.prepare(`
+        SELECT
+          c.chunk_id,
+          c.chunk_index,
+          s.source_type,
+          s.source_uri,
+          s.title,
+          c.text,
+          s.conversation_id,
+          s.workspace_id,
+          s.profile,
+          s.workdir,
+          s.metadata_json,
+          c.start_line,
+          c.end_line,
+          s.indexed_at,
+          bm25(local_knowledge_chunks_fts) AS rank
+        FROM local_knowledge_chunks_fts
+        JOIN local_knowledge_chunks c ON c.rowid = local_knowledge_chunks_fts.rowid
+        JOIN local_knowledge_sources s ON s.source_id = c.source_id
+        WHERE local_knowledge_chunks_fts MATCH @match
+          AND s.deleted_at IS NULL
+          ${scoped.sql}
+        ORDER BY
+          CASE WHEN s.conversation_id = @conversationId THEN 0 ELSE 1 END,
+          CASE WHEN s.workspace_id = @workspaceId THEN 0 ELSE 1 END,
+          CASE WHEN s.profile = @profile THEN 0 ELSE 1 END,
+          CASE WHEN s.workdir = @workdir THEN 0 ELSE 1 END,
+          rank,
+          s.indexed_at DESC
+        LIMIT @limit
+      `),
+      params: scoped.params,
+    };
+  }
+
+  function retrievalScopeWhere(
+    effectivePolicy: NormalizedLocalKnowledgePolicy,
+    scope: NormalizedLocalKnowledgeScope,
+  ): { sql: string; params: Record<string, unknown> } {
+    if (effectivePolicy.retrieval.scopeMode !== "filter") return { sql: "", params: {} };
+
+    const branches: string[] = [];
+    const params: Record<string, unknown> = {};
+    if (scope.conversationId) {
+      branches.push("s.conversation_id = @filterConversationId");
+      params.filterConversationId = scope.conversationId;
+    }
+
+    const siblingClauses: string[] = [];
+    if (!scope.conversationId || effectivePolicy.retrieval.includeConversationSiblings) {
+      if (scope.workspaceId) {
+        siblingClauses.push("s.workspace_id = @filterWorkspaceId");
+        params.filterWorkspaceId = scope.workspaceId;
+      }
+      if (scope.profile) {
+        siblingClauses.push("s.profile = @filterProfile");
+        params.filterProfile = scope.profile;
+      }
+      if (scope.workdir) {
+        siblingClauses.push("(s.source_type != 'workdir_file' OR s.workdir = @filterWorkdir)");
+        params.filterWorkdir = path.resolve(scope.workdir);
+      }
+      if (siblingClauses.length > 0) {
+        branches.push(`(${siblingClauses.join(" AND ")})`);
+      }
+    }
+
+    if (branches.length === 0) return { sql: "", params };
+    return { sql: `AND (${branches.join(" OR ")})`, params };
+  }
+
+  function localKnowledgeStats(scope?: LocalKnowledgeScope): LocalKnowledgeStats {
+    const filter = sourceFilter(normalizedScope(scope), "s");
+    const total = db.prepare(`
+      SELECT
+        COUNT(*) AS sources,
+        COALESCE(SUM(s.size), 0) AS bytes,
+        MIN(s.indexed_at) AS oldestIndexedAt,
+        MAX(s.indexed_at) AS newestIndexedAt,
+        COALESCE(SUM((SELECT COUNT(*) FROM local_knowledge_chunks c WHERE c.source_id = s.source_id)), 0) AS chunks
+      FROM local_knowledge_sources s
+      WHERE s.deleted_at IS NULL${filter.sql}
+    `).get(...filter.params) as {
+      sources: number;
+      chunks: number;
+      bytes: number | null;
+      oldestIndexedAt: number | null;
+      newestIndexedAt: number | null;
+    };
+    const deleted = db.prepare(`
+      SELECT COUNT(*) AS count
+      FROM local_knowledge_sources s
+      WHERE s.deleted_at IS NOT NULL${filter.sql}
+    `).get(...filter.params) as { count: number };
+    const rows = db.prepare(`
+      SELECT
+        s.source_type,
+        COUNT(*) AS sources,
+        COALESCE(SUM(s.size), 0) AS bytes,
+        COALESCE(SUM((SELECT COUNT(*) FROM local_knowledge_chunks c WHERE c.source_id = s.source_id)), 0) AS chunks
+      FROM local_knowledge_sources s
+      WHERE s.deleted_at IS NULL${filter.sql}
+      GROUP BY s.source_type
+    `).all(...filter.params) as SourceStatsRow[];
+    const bySourceType: LocalKnowledgeStats["bySourceType"] = {};
+    for (const row of rows) {
+      bySourceType[sourceType(row.source_type)] = {
+        sources: row.sources,
+        chunks: row.chunks,
+        bytes: row.bytes ?? 0,
+      };
+    }
+    return {
+      object: "local_knowledge_stats",
+      sources: total.sources,
+      chunks: total.chunks,
+      bytes: total.bytes ?? 0,
+      deletedSources: deleted.count,
+      ...(total.oldestIndexedAt ? { oldestIndexedAt: total.oldestIndexedAt } : {}),
+      ...(total.newestIndexedAt ? { newestIndexedAt: total.newestIndexedAt } : {}),
+      bySourceType,
+    };
+  }
+
+  function pruneLocalKnowledge(params: LocalKnowledgePruneParams): LocalKnowledgePruneResult {
+    const effective = mergePolicy(policy, params.policy);
+    const scope = normalizedScope(params.scope);
+    const dryRun = Boolean(params.dryRun);
+    const sourceIds = new Set<number>();
+    const now = nowSeconds();
+
+    if (effective.retention.deletedTtlSeconds > 0) {
+      for (const row of selectSources({
+        scope,
+        where: "deleted_at IS NOT NULL AND deleted_at <= ?",
+        params: [now - effective.retention.deletedTtlSeconds],
+      })) sourceIds.add(row.source_id);
+    }
+    if (effective.retention.transcriptTtlSeconds > 0) {
+      for (const row of selectSources({
+        scope,
+        where: "deleted_at IS NULL AND source_type = 'transcript' AND indexed_at <= ?",
+        params: [now - effective.retention.transcriptTtlSeconds],
+      })) sourceIds.add(row.source_id);
+    }
+    if (effective.retention.workdirTtlSeconds > 0) {
+      for (const row of selectSources({
+        scope,
+        where: "deleted_at IS NULL AND source_type = 'workdir_file' AND indexed_at <= ?",
+        params: [now - effective.retention.workdirTtlSeconds],
+      })) sourceIds.add(row.source_id);
+    }
+    addOverLimitSources(sourceIds, "transcript", effective.retention.maxTranscriptSources, scope);
+    addOverLimitSources(sourceIds, "workdir_file", effective.retention.maxWorkdirSources, scope);
+    addOverBudgetSources(sourceIds, effective.retention.maxBytes, scope);
+
+    return deleteSources([...sourceIds], dryRun);
+  }
+
+  function addOverLimitSources(target: Set<number>, sourceTypeName: LocalKnowledgeSourceType, maxSources: number, scope: NormalizedLocalKnowledgeScope) {
+    if (maxSources <= 0) return;
+    const filter = sourceFilter(scope);
+    const rows = db.prepare(`
+      SELECT source_id, source_type, size, indexed_at, deleted_at
+      FROM local_knowledge_sources
+      WHERE deleted_at IS NULL AND source_type = ?${filter.sql}
+      ORDER BY indexed_at DESC, source_id DESC
+      LIMIT -1 OFFSET ?
+    `).all(sourceTypeName, ...filter.params, maxSources) as SourcePruneRow[];
+    for (const row of rows) target.add(row.source_id);
+  }
+
+  function addOverBudgetSources(target: Set<number>, maxBytes: number, scope: NormalizedLocalKnowledgeScope) {
+    if (maxBytes <= 0) return;
+    const filter = sourceFilter(scope);
+    const rows = db.prepare(`
+      SELECT source_id, source_type, size, indexed_at, deleted_at
+      FROM local_knowledge_sources
+      WHERE deleted_at IS NULL${filter.sql}
+      ORDER BY indexed_at DESC, source_id DESC
+    `).all(...filter.params) as SourcePruneRow[];
+    let kept = 0;
+    for (const row of rows) {
+      const size = Math.max(0, row.size ?? 0);
+      if (kept + size <= maxBytes) {
+        kept += size;
+      } else {
+        target.add(row.source_id);
+      }
+    }
+  }
+
+  function selectSources(input: {
+    scope: NormalizedLocalKnowledgeScope;
+    where: string;
+    params: unknown[];
+  }) {
+    const filter = sourceFilter(input.scope);
+    return db.prepare(`
+      SELECT source_id, source_type, size, indexed_at, deleted_at
+      FROM local_knowledge_sources
+      WHERE ${input.where}${filter.sql}
+    `).all(...input.params, ...filter.params) as SourcePruneRow[];
+  }
+
+  function deleteSources(sourceIds: number[], dryRun: boolean): LocalKnowledgePruneResult {
+    if (sourceIds.length === 0) {
+      return { object: "local_knowledge_prune_result", ...(dryRun ? { dryRun } : {}), deletedSources: 0, deletedChunks: 0, reclaimedBytes: 0 };
+    }
+    const placeholders = sourceIds.map(() => "?").join(",");
+    const summary = db.prepare(`
+      SELECT COUNT(DISTINCT s.source_id) AS sources,
+        COALESCE(SUM(s.size), 0) AS bytes,
+        COALESCE(SUM((SELECT COUNT(*) FROM local_knowledge_chunks c WHERE c.source_id = s.source_id)), 0) AS chunks
+      FROM local_knowledge_sources s
+      WHERE s.source_id IN (${placeholders})
+    `).get(...sourceIds) as { sources: number; bytes: number | null; chunks: number };
+    if (!dryRun) {
+      db.prepare(`DELETE FROM local_knowledge_sources WHERE source_id IN (${placeholders})`).run(...sourceIds);
+    }
+    return {
+      object: "local_knowledge_prune_result",
+      ...(dryRun ? { dryRun } : {}),
+      deletedSources: summary.sources,
+      deletedChunks: summary.chunks,
+      reclaimedBytes: summary.bytes ?? 0,
+    };
+  }
+
+  function softForget(params: LocalKnowledgeForgetParams) {
+    const scope = normalizedScope({
+      conversationId: params.conversationId,
+      workspaceId: params.workspaceId,
+      profile: params.profile,
+      workdir: params.workdir,
+    });
+    const filters: string[] = [];
+    const values: unknown[] = [];
+    const scoped = sourceFilter(scope);
+    if (scoped.sql) {
+      filters.push(scoped.sql.replace(/^ AND /, ""));
+      values.push(...scoped.params);
+    }
+    if (params.sourceUri) {
+      filters.push("source_uri = ?");
+      values.push(params.sourceUri);
+    }
+    if (params.sourceType) {
+      filters.push("source_type = ?");
+      values.push(params.sourceType);
+    }
+    if (filters.length === 0) return;
+    db.prepare(`
+      UPDATE local_knowledge_sources
+      SET deleted_at = ?
+      WHERE deleted_at IS NULL AND ${filters.join(" AND ")}
+    `).run(nowSeconds(), ...values);
+  }
+
+  function sourceFilter(scope: NormalizedLocalKnowledgeScope, alias = ""): { sql: string; params: unknown[] } {
+    const prefix = alias ? `${alias}.` : "";
+    const clauses: string[] = [];
+    const params: unknown[] = [];
+    if (scope.conversationId) {
+      clauses.push(`${prefix}conversation_id = ?`);
+      params.push(scope.conversationId);
+    }
+    if (scope.workspaceId) {
+      clauses.push(`${prefix}workspace_id = ?`);
+      params.push(scope.workspaceId);
+    }
+    if (scope.profile) {
+      clauses.push(`${prefix}profile = ?`);
+      params.push(scope.profile);
+    }
+    if (scope.workdir) {
+      clauses.push(`${prefix}workdir = ?`);
+      params.push(path.resolve(scope.workdir));
+    }
+    return { sql: clauses.length ? ` AND ${clauses.join(" AND ")}` : "", params };
+  }
 
   function markStaleWorkdirSources(root: string, seenKeys: Set<string>, scanned: boolean) {
     if (seenKeys.size === 0) {
@@ -425,8 +832,12 @@ function migrate(db: Database.Database) {
   db.pragma(`user_version = ${schemaVersion}`);
 }
 
-function buildContext(result: LocalKnowledgeSearchResult, params: LocalKnowledgeContextParams): LocalKnowledgeContext | null {
-  const maxBytes = positiveInt(params.maxBytes, defaultContextBytes);
+function buildContext(
+  result: LocalKnowledgeSearchResult,
+  params: LocalKnowledgeContextParams,
+  policy: NormalizedLocalKnowledgePolicy,
+): LocalKnowledgeContext | null {
+  const maxBytes = clampInt(params.maxBytes, policy.retrieval.defaultContextBytes, 1024, policy.retrieval.maxContextBytes);
   let used = 0;
   const hits: LocalKnowledgeHit[] = [];
   const sections: string[] = [];
@@ -623,6 +1034,58 @@ function positiveInt(value: number | undefined, fallback: number): number {
 
 function clampInt(value: number | undefined, fallback: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, positiveInt(value, fallback)));
+}
+
+function normalizePolicy(policy: LocalKnowledgePolicy | undefined, legacyMaxChunkBytes?: number): NormalizedLocalKnowledgePolicy {
+  return mergePolicy({
+    ...defaultPolicy,
+    ingestion: {
+      ...defaultPolicy.ingestion,
+      maxChunkBytes: positiveInt(legacyMaxChunkBytes, defaultPolicy.ingestion.maxChunkBytes),
+    },
+  }, policy);
+}
+
+function mergePolicy(
+  base: NormalizedLocalKnowledgePolicy,
+  patch: LocalKnowledgePolicy | undefined,
+): NormalizedLocalKnowledgePolicy {
+  const retentionPatch = patch?.retention ?? {};
+  const retrievalPatch = patch?.retrieval ?? {};
+  const ingestionPatch = patch?.ingestion ?? {};
+  const retrievalMaxLimit = positiveInt(retrievalPatch.maxLimit, base.retrieval.maxLimit);
+  const maxContext = positiveInt(retrievalPatch.maxContextBytes, base.retrieval.maxContextBytes);
+  return {
+    enabled: patch?.enabled ?? base.enabled,
+    retention: {
+      transcriptTtlSeconds: nonNegativeInt(retentionPatch.transcriptTtlSeconds, base.retention.transcriptTtlSeconds),
+      workdirTtlSeconds: nonNegativeInt(retentionPatch.workdirTtlSeconds, base.retention.workdirTtlSeconds),
+      maxBytes: nonNegativeInt(retentionPatch.maxBytes, base.retention.maxBytes),
+      maxTranscriptSources: nonNegativeInt(retentionPatch.maxTranscriptSources, base.retention.maxTranscriptSources),
+      maxWorkdirSources: nonNegativeInt(retentionPatch.maxWorkdirSources, base.retention.maxWorkdirSources),
+      deletedTtlSeconds: nonNegativeInt(retentionPatch.deletedTtlSeconds, base.retention.deletedTtlSeconds),
+    },
+    retrieval: {
+      defaultLimit: clampInt(retrievalPatch.defaultLimit, base.retrieval.defaultLimit, 1, retrievalMaxLimit),
+      maxLimit: retrievalMaxLimit,
+      defaultContextBytes: clampInt(retrievalPatch.defaultContextBytes, base.retrieval.defaultContextBytes, 1024, maxContext),
+      maxContextBytes: maxContext,
+      scopeMode: retrievalPatch.scopeMode === "prefer" ? "prefer" : retrievalPatch.scopeMode === "filter" ? "filter" : base.retrieval.scopeMode,
+      includeConversationSiblings: retrievalPatch.includeConversationSiblings ?? base.retrieval.includeConversationSiblings,
+    },
+    ingestion: {
+      maxTranscriptBytes: positiveInt(ingestionPatch.maxTranscriptBytes, base.ingestion.maxTranscriptBytes),
+      maxWorkdirFiles: positiveInt(ingestionPatch.maxWorkdirFiles, base.ingestion.maxWorkdirFiles),
+      maxWorkdirFileBytes: positiveInt(ingestionPatch.maxWorkdirFileBytes, base.ingestion.maxWorkdirFileBytes),
+      maxChunkBytes: positiveInt(ingestionPatch.maxChunkBytes, base.ingestion.maxChunkBytes),
+      includeWorkdir: ingestionPatch.includeWorkdir ?? base.ingestion.includeWorkdir,
+      includeTranscripts: ingestionPatch.includeTranscripts ?? base.ingestion.includeTranscripts,
+    },
+  };
+}
+
+function nonNegativeInt(value: number | undefined, fallback: number): number {
+  return Number.isFinite(value) && Number(value) >= 0 ? Math.trunc(Number(value)) : fallback;
 }
 
 function trimText(text: string, maxBytes: number): string {

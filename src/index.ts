@@ -19,6 +19,7 @@ import {
   listProfiles,
   loadConfig,
   loadConversationConfiguration,
+  loadWorkbenchPreferences,
   loginWithAPIKey,
   loginWithBrowser,
   normalizeChatOptions,
@@ -194,7 +195,7 @@ async function runWorkbench(options: { workdir?: string }) {
     return;
   }
   const chatOptions = normalizeChatOptions([], launchWorkdir ? { workdir: launchWorkdir } : {});
-  const app = render(React.createElement(ChatApp, { options: chatOptions }));
+  const app = render(React.createElement(ChatApp, { options: await withGlobalLocalKnowledgeDefault(chatOptions) }));
   await app.waitUntilExit();
   clearTerminalAfterTUI();
 }
@@ -260,7 +261,7 @@ function engineHostCommand() {
     .option("--model <name>", "model name")
     .option("--access <mode>", "local workdir access mode: off, approval, or full")
     .action(async (options) => {
-      startEngineHost({
+      await startEngineHost({
         profile: options.profile,
         workdir: options.workdir ? await validateLaunchWorkdir(options.workdir) : undefined,
         conversation: options.conversation,
@@ -386,7 +387,7 @@ function agentChatCommand() {
     .action(async (prompt: string[], options: ChatOptions) => {
       const promptParts = prompt ?? [];
       const hasOneShotInput = promptParts.length > 0 || options.file || options.stdin;
-      const normalized = normalizeChatOptions(promptParts, options);
+      const normalized = await withGlobalLocalKnowledgeDefault(normalizeChatOptions(promptParts, options));
       const shouldUseWorkbench = process.stdin.isTTY && (
         !hasOneShotInput ||
         Boolean(normalized.workdir && normalized.accessMode === "approval" && promptParts.length > 0 && !options.file && !options.stdin)
@@ -398,6 +399,15 @@ function agentChatCommand() {
       }
       await runAgent(normalized);
     });
+}
+
+async function withGlobalLocalKnowledgeDefault<T extends { localKnowledgeEnabled?: boolean }>(options: T): Promise<T> {
+  try {
+    const preferences = await loadWorkbenchPreferences();
+    return { ...options, localKnowledgeEnabled: preferences.localKnowledgeEnabled !== false };
+  } catch {
+    return options;
+  }
 }
 
 function agentListCommand() {

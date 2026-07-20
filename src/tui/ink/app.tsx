@@ -209,11 +209,15 @@ function WorkbenchApp({
   const agentEngineRef = useRef<AgentEngineClient | null>(null);
   const localKnowledgeRef = useRef<LocalKnowledgeService | null | undefined>(undefined);
   if (localKnowledgeRef.current === undefined) {
-    try {
-      const dataDir = currentAgentAppRuntime().runtime.dirs.data;
-      localKnowledgeRef.current = createSQLiteLocalKnowledgeStore(path.join(dataDir, "local-knowledge.sqlite3"));
-    } catch {
+    if (options.localKnowledgeEnabled === false) {
       localKnowledgeRef.current = null;
+    } else {
+      try {
+        const dataDir = currentAgentAppRuntime().runtime.dirs.data;
+        localKnowledgeRef.current = createSQLiteLocalKnowledgeStore(path.join(dataDir, "local-knowledge.sqlite3"));
+      } catch {
+        localKnowledgeRef.current = null;
+      }
     }
   }
   const transcriptStoreRef = useRef<WorkbenchTranscriptStore | null | undefined>(undefined);

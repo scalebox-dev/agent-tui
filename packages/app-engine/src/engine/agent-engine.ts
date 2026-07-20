@@ -180,6 +180,7 @@ export function createAgentEngine(options: AgentEngineAppOptions): AgentEngineAp
           defaultAutomaticContinuationLimit: settings.defaultAutomaticContinuationLimit ?? settings.automaticContinuationLimit,
           ...(state.runPreset ? { runPreset: state.runPreset } : {}),
           ...(state.automaticContinuationLimit !== undefined ? { automaticContinuationLimit: state.automaticContinuationLimit } : {}),
+          ...(state.conversationId ? { localKnowledgeEnabled: state.localKnowledgeEnabled } : {}),
         },
       });
       if (settings.activity) {

@@ -75,6 +75,9 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
         case "continuation_limit":
           await runContinuationLimitCommand(command.value);
           return;
+        case "knowledge":
+          await runKnowledgeCommand(command.enabled);
+          return;
         case "summary":
           await showSummary();
           return;
@@ -174,6 +177,7 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
           defaultPreset: state.defaultPreset,
           currentAutomaticContinuationLimit: state.automaticContinuationLimit,
           automaticContinuationLimit: state.defaultAutomaticContinuationLimit,
+          localKnowledgeEnabled: state.localKnowledgeEnabled,
           localSkillsEnabled: state.localSkillsEnabled,
           memoryRead: state.memoryRead,
           memoryTenantSearch: state.memoryTenantSearch,
@@ -240,6 +244,27 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
       } catch (error) {
         dispatch({ type: "message.add", role: "system", text: `Could not save automatic continuation limit: ${userFacingError(error)}` });
         dispatch({ type: "activity.add", level: "error", text: "Automatic continuation limit save failed" });
+      }
+      return;
+    }
+
+    if (command.field === "knowledge") {
+      if (!command.value) {
+        dispatch({
+          type: "message.add",
+          role: "system",
+          text: options.settingsController.localKnowledgeHelp(state.localKnowledgeEnabled),
+        });
+        return;
+      }
+      try {
+        const settings = await options.settingsController.saveLocalKnowledgeEnabled(command.value);
+        dispatch({ type: "settings.set", settings: { localKnowledgeEnabled: settings.localKnowledgeEnabled ?? true } });
+        dispatch({ type: "message.add", role: "system", text: settings.message });
+        dispatch({ type: "activity.add", level: "success", text: settings.activity });
+      } catch (error) {
+        dispatch({ type: "message.add", role: "system", text: `Could not save local knowledge default: ${userFacingError(error)}` });
+        dispatch({ type: "activity.add", level: "error", text: "Local knowledge default save failed" });
       }
       return;
     }
@@ -336,6 +361,26 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
       dispatch({ type: "message.add", role: "system", text: `Could not set continuation limit: ${userFacingError(error)}` });
       dispatch({ type: "activity.add", level: "error", text: "Continuation limit update failed" });
     }
+  }
+
+  async function runKnowledgeCommand(enabled?: boolean) {
+    const state = options.engine.snapshot();
+    if (enabled === undefined) {
+      dispatch({
+        type: "message.add",
+        role: "system",
+        text: [
+          `Local knowledge: ${state.localKnowledgeEnabled ? "on" : "off"}`,
+          "Use /knowledge on or /knowledge off for this conversation.",
+          "Use /config knowledge on|off|reset to change the saved default.",
+        ].join("\n"),
+      });
+      return;
+    }
+    dispatch({ type: "settings.set", settings: { localKnowledgeEnabled: enabled } });
+    dispatch({ type: "message.add", role: "system", text: `Local knowledge set to ${enabled ? "on" : "off"} for this conversation.` });
+    dispatch({ type: "activity.add", level: enabled ? "success" : "warning", text: `Local knowledge: ${enabled ? "on" : "off"}` });
+    await persistCurrentRunSettings();
   }
 
   async function validatePresetName(preset: string) {
@@ -676,6 +721,7 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
   function handledCommandUpdatesRunSettings(command: WorkbenchCommand) {
     if (command.kind === "access") return Boolean(command.mode);
     if (command.kind === "context") return true;
+    if (command.kind === "knowledge") return command.enabled !== undefined;
     if (command.kind === "memory") return Boolean(command.field) || command.enabled === false;
     if (command.kind === "model") return Boolean(command.value);
     if (command.kind === "skills") return Boolean(command.field) || command.enabled !== undefined;
@@ -688,6 +734,7 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
       accessMode: state.accessMode,
       automaticContinuationLimit: state.automaticContinuationLimit ?? null,
       contextEnabled: state.contextEnabled,
+      localKnowledgeEnabled: state.localKnowledgeEnabled,
       localSkillsEnabled: state.localSkillsEnabled,
       memoryRead: state.memoryRead,
       memoryTenantSearch: state.memoryTenantSearch,

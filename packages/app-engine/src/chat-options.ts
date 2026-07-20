@@ -19,6 +19,7 @@ export type ChatOptions = {
   memoryWrite?: boolean;
   memoryTenantSearch?: boolean;
   workspaceSkills?: boolean;
+  localKnowledge?: boolean;
   automaticContinuationLimit?: string;
   access?: string;
   restart?: boolean;
@@ -54,6 +55,7 @@ export function normalizeChatOptions(promptParts: string[], options: ChatOptions
     discoverLocalSkills: options.localSkills !== false,
     memory: memoryOptions(options),
     skillTool: options.workspaceSkills ? { tenant_search: true } : undefined,
+    localKnowledgeEnabled: options.localKnowledge !== false,
     automaticContinuationLimit: optionalLimit(options.automaticContinuationLimit ?? process.env.AGENT_AUTOMATIC_CONTINUATION_LIMIT, "--automatic-continuation-limit"),
     accessMode,
   };

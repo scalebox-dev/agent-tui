@@ -76,6 +76,7 @@ export interface AgentRunOptions {
   abortSignal?: AbortSignal;
   localPause?: LocalPauseHooks;
   localKnowledge?: LocalKnowledgeService;
+  localKnowledgeEnabled?: boolean;
 }
 
 export type WorkdirAccessMode = "off" | "approval" | "full";
@@ -497,6 +498,7 @@ function conversationRunSettingsFromOptions(options: AgentRunOptions): Conversat
     accessMode: options.accessMode,
     automaticContinuationLimit: options.automaticContinuationLimit ?? null,
     contextEnabled: Boolean(options.includeLocalContext),
+    localKnowledgeEnabled: options.localKnowledgeEnabled !== false,
     localSkillsEnabled: options.discoverLocalSkills !== false,
     memoryRead: Boolean(options.memory?.read || options.memory?.enabled || options.memory?.tenant_search),
     memoryTenantSearch: Boolean(options.memory?.tenant_search),
@@ -833,7 +835,9 @@ async function prepareLocalWorkdirTools(options: AgentRunOptions): Promise<{
 async function prepareLocalContext(options: AgentRunOptions): Promise<LocalExecutionContext | null> {
   const localWorkdir = await prepareLocalWorkdirTools(options);
   const localSkills = await prepareLocalSkills(options);
-  const localKnowledge = options.localKnowledge ? createLocalKnowledgeToolRegistry(options.localKnowledge) : null;
+  const localKnowledge = options.localKnowledge
+    ? createLocalKnowledgeToolRegistry(scopedLocalKnowledgeService(options.localKnowledge, localKnowledgeScope(options)))
+    : null;
   if (!localWorkdir && localSkills.length === 0 && !localKnowledge) {
     return null;
   }
@@ -844,6 +848,33 @@ async function prepareLocalContext(options: AgentRunOptions): Promise<LocalExecu
     ),
     instructions: localWorkdir?.instructions,
     localSkills,
+  };
+}
+
+function scopedLocalKnowledgeService(
+  service: LocalKnowledgeService,
+  scope: LocalKnowledgeScope,
+): LocalKnowledgeService {
+  return {
+    ...service,
+    search(params) {
+      return service.search({
+        ...params,
+        scope: {
+          ...scope,
+          ...params.scope,
+        },
+      });
+    },
+    contextForPrompt(params) {
+      return service.contextForPrompt({
+        ...params,
+        scope: {
+          ...scope,
+          ...params.scope,
+        },
+      });
+    },
   };
 }
 

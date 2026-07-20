@@ -4,13 +4,14 @@ import path from "node:path";
 import {
   currentAgentAppRuntime,
 } from "@agent-api/app-engine/core";
-import type { LocalKnowledgeService } from "@agent-api/sdk/local";
+import type { LocalKnowledgeScope, LocalKnowledgeService } from "@agent-api/sdk/local";
 import {
   createFileTranscriptStore,
   formatTranscript,
   summarizeMessages,
   type WorkbenchMessage,
   type WorkbenchTranscriptStore,
+  type WorkbenchTranscriptWriteOptions,
 } from "@agent-api/app-engine/workbench";
 
 export interface DefaultTranscriptStoreOptions {
@@ -108,11 +109,12 @@ export function createSQLiteTranscriptStore(file: string, options: DefaultTransc
   const pendingKnowledgeIngests = new Map<string, {
     conversationId: string;
     message: WorkbenchMessage;
+    scope?: LocalKnowledgeScope;
     timer: ReturnType<typeof setTimeout>;
   }>();
 
   return {
-    async appendMessage(conversationId, message) {
+    async appendMessage(conversationId, message, writeOptions?: WorkbenchTranscriptWriteOptions) {
       insertMessage.run({
         conversationId,
         messageId: message.id,
@@ -122,9 +124,9 @@ export function createSQLiteTranscriptStore(file: string, options: DefaultTransc
         now: nowSeconds(),
       });
       cancelPendingKnowledgeIngest(conversationId, message.id);
-      ingestKnowledgeMessage(options.localKnowledge, conversationId, message);
+      ingestKnowledgeMessage(options.localKnowledge, conversationId, message, writeOptions?.localKnowledgeScope);
     },
-    async appendMessageDelta(conversationId, messageId, delta) {
+    async appendMessageDelta(conversationId, messageId, delta, writeOptions?: WorkbenchTranscriptWriteOptions) {
       if (!delta) return;
       appendDelta.run({
         conversationId,
@@ -134,11 +136,11 @@ export function createSQLiteTranscriptStore(file: string, options: DefaultTransc
       });
       const pending = pendingKnowledgeIngests.get(knowledgeIngestKey(conversationId, messageId));
       if (pending) {
-        scheduleKnowledgeIngest(conversationId, { ...pending.message, text: pending.message.text + delta });
+        scheduleKnowledgeIngest(conversationId, { ...pending.message, text: pending.message.text + delta }, writeOptions?.localKnowledgeScope ?? pending.scope);
         return;
       }
       const rows = rowsToMessages([messageByID.get(conversationId, messageId)].filter(Boolean));
-      if (rows[0]) scheduleKnowledgeIngest(conversationId, rows[0]);
+      if (rows[0]) scheduleKnowledgeIngest(conversationId, rows[0], writeOptions?.localKnowledgeScope);
     },
     async clearConversation(conversationId) {
       cancelConversationKnowledgeIngests(conversationId);
@@ -173,19 +175,20 @@ export function createSQLiteTranscriptStore(file: string, options: DefaultTransc
     },
   };
 
-  function scheduleKnowledgeIngest(conversationId: string, message: WorkbenchMessage) {
+  function scheduleKnowledgeIngest(conversationId: string, message: WorkbenchMessage, scope?: LocalKnowledgeScope) {
     if (!isKnowledgeIngestible(options.localKnowledge, message)) return;
     const key = knowledgeIngestKey(conversationId, message.id);
     const pending = pendingKnowledgeIngests.get(key);
     if (pending) clearTimeout(pending.timer);
     if (knowledgeIngestDelayMs === 0) {
-      ingestKnowledgeMessage(options.localKnowledge, conversationId, message);
+      ingestKnowledgeMessage(options.localKnowledge, conversationId, message, scope);
       return;
     }
     const timer = setTimeout(() => flushPendingKnowledgeIngest(key), knowledgeIngestDelayMs);
     pendingKnowledgeIngests.set(key, {
       conversationId,
       message: { ...message },
+      scope,
       timer,
     });
   }
@@ -195,7 +198,7 @@ export function createSQLiteTranscriptStore(file: string, options: DefaultTransc
     if (!pending) return;
     pendingKnowledgeIngests.delete(key);
     clearTimeout(pending.timer);
-    ingestKnowledgeMessage(options.localKnowledge, pending.conversationId, pending.message);
+    ingestKnowledgeMessage(options.localKnowledge, pending.conversationId, pending.message, pending.scope);
   }
 
   function flushPendingKnowledgeIngests() {
@@ -226,6 +229,7 @@ function ingestKnowledgeMessage(
   localKnowledge: LocalKnowledgeService | undefined,
   conversationId: string,
   message: WorkbenchMessage,
+  scope?: LocalKnowledgeScope,
 ) {
   if (!isKnowledgeIngestible(localKnowledge, message)) return;
   try {
@@ -237,6 +241,7 @@ function ingestKnowledgeMessage(
       role: message.role,
       kind: message.kind,
       text: message.text,
+      scope,
     });
     if (result && typeof (result as Promise<void>).catch === "function") {
       (result as Promise<void>).catch(() => {});

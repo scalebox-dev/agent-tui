@@ -50,6 +50,7 @@ export interface ConversationRunSettings {
   accessMode?: "off" | "approval" | "full";
   automaticContinuationLimit?: number | null;
   contextEnabled?: boolean;
+  localKnowledgeEnabled?: boolean;
   localSkillsEnabled?: boolean;
   memoryRead?: boolean;
   memoryTenantSearch?: boolean;
@@ -62,6 +63,7 @@ export interface ConversationRunSettings {
 export interface WorkbenchPreferences {
   defaultPreset?: string | null;
   automaticContinuationLimit?: number | null;
+  localKnowledgeEnabled?: boolean;
   isolation?: ShellIsolationPreferences;
 }
 
@@ -98,6 +100,7 @@ const conversationSchema = z.object({
     accessMode: z.enum(["off", "approval", "full"]).optional(),
     automaticContinuationLimit: z.number().int().min(0).nullable().optional(),
     contextEnabled: z.boolean().optional(),
+    localKnowledgeEnabled: z.boolean().optional(),
     localSkillsEnabled: z.boolean().optional(),
     memoryRead: z.boolean().optional(),
     memoryTenantSearch: z.boolean().optional(),
@@ -113,6 +116,7 @@ const conversationSchema = z.object({
 const workbenchPreferencesSchema = z.object({
   defaultPreset: z.string().nullable().optional(),
   automaticContinuationLimit: z.number().int().min(0).nullable().optional(),
+  localKnowledgeEnabled: z.boolean().optional(),
   isolation: z.object({
     mode: z.enum(["none", "auto", "required"]).optional(),
     executablePath: z.string().nullable().optional(),
@@ -274,6 +278,7 @@ export async function loadWorkbenchPreferences(): Promise<WorkbenchPreferences> 
 export async function updateWorkbenchPreferences(patch: {
   defaultPreset?: string | null | undefined;
   automaticContinuationLimit?: number | null | undefined;
+  localKnowledgeEnabled?: boolean | null | undefined;
   isolation?: {
     mode?: ShellIsolationMode | null | undefined;
     executablePath?: string | null | undefined;
@@ -306,6 +311,13 @@ export async function updateWorkbenchPreferences(patch: {
       next.automaticContinuationLimit = null;
     } else {
       next.automaticContinuationLimit = Math.floor(patch.automaticContinuationLimit);
+    }
+  }
+  if ("localKnowledgeEnabled" in patch) {
+    if (patch.localKnowledgeEnabled === null || patch.localKnowledgeEnabled === undefined) {
+      delete next.localKnowledgeEnabled;
+    } else {
+      next.localKnowledgeEnabled = patch.localKnowledgeEnabled;
     }
   }
   if ("isolation" in patch) {

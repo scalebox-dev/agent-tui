@@ -1534,6 +1534,81 @@ test("local knowledge does not break nested local workdir execution", async () =
   }
 });
 
+test("local knowledge tool searches with active run scope", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-local-knowledge-tool-scope-"));
+  const storage = createMemoryStorage();
+  const originalFetch = globalThis.fetch;
+  const searchCalls = [];
+  let calls = 0;
+  configureAgentAppRuntime({ appName: "local-knowledge-scope-test", legacyAppName: null, storage });
+  globalThis.fetch = async () => {
+    calls += 1;
+    if (calls === 1) {
+      return jsonResponse({
+        id: "resp_needs_knowledge",
+        object: "response",
+        created_at: 1,
+        status: "requires_action",
+        model: "test/model",
+        output: [
+          {
+            type: "function_call",
+            id: "fc_knowledge",
+            status: "completed",
+            name: "local_knowledge",
+            call_id: "call_knowledge",
+            arguments: JSON.stringify({ action: "search", query: "scoped fact", limit: 2 }),
+          },
+        ],
+      });
+    }
+    return jsonResponse({
+      id: "resp_done",
+      object: "response",
+      created_at: 2,
+      status: "completed",
+      model: "test/model",
+      output: [],
+      output_text: "done",
+    });
+  };
+
+  try {
+    await loginWithAPIKey({ profile: "local-knowledge-scope", baseURL: "https://api.test", apiKey: "sk-local" });
+    await runAgentTurn({
+      promptParts: ["use local knowledge"],
+      profile: "local-knowledge-scope",
+      conversation: "conv_scope",
+      workspaceId: "wrk_scope",
+      workspaceName: "Workspace",
+      workdir: root,
+      includeLocalContext: false,
+      accessMode: "off",
+      stream: false,
+      localKnowledge: {
+        async contextForPrompt() { return null; },
+        async search(params) {
+          searchCalls.push(params);
+          return { object: "local_knowledge_search_result", data: [] };
+        },
+      },
+    });
+
+    assert.equal(searchCalls.length, 1);
+    assert.deepEqual(searchCalls[0].scope, {
+      conversationId: "conv_scope",
+      workspaceId: "wrk_scope",
+      profile: "local-knowledge-scope",
+      workdir: root,
+    });
+    assert.equal(searchCalls[0].limit, 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+    configureAgentAppRuntime();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("local shell isolation leaves isolator path explicit", () => {
   const previousPath = process.env.AGENT_ISOLATOR_PATH;
   delete process.env.AGENT_ISOLATOR_PATH;
@@ -2143,6 +2218,39 @@ test("workbench turn controller applies sticky automatic continuation limit", as
   await controller.startPrompt("hello");
 
   assert.equal(seenOptions[0].automaticContinuationLimit, 13);
+});
+
+test("workbench turn controller gates local knowledge by conversation state", async () => {
+  const localKnowledge = {
+    async search() {
+      return { object: "local_knowledge_search_result", data: [] };
+    },
+    async contextForPrompt() {
+      return { object: "local_knowledge_context", entries: [] };
+    },
+  };
+  const seenOptions = [];
+  const engine = createWorkbenchEngine({ contextEnabled: true, localKnowledgeEnabled: false });
+  const controller = createWorkbenchTurnController({
+    baseOptions: { promptParts: [], profile: "default" },
+    dispatch: engine.dispatch,
+    engine,
+    flushTextDeltaBuffer() {},
+    getState: engine.snapshot,
+    localKnowledge,
+    runRuntimeEffects() {},
+    async runAgentTurnImpl(options) {
+      seenOptions.push(options);
+      return { text: "done", responseID: `resp_${seenOptions.length}` };
+    },
+  });
+
+  await controller.startPrompt("without knowledge");
+  engine.dispatch({ type: "settings.set", settings: { localKnowledgeEnabled: true } });
+  await controller.startPrompt("with knowledge");
+
+  assert.equal(seenOptions[0].localKnowledge, undefined);
+  assert.equal(seenOptions[1].localKnowledge, localKnowledge);
 });
 
 test("workbench command controller applies pending local approvals", async () => {
@@ -4095,7 +4203,8 @@ test("cli sqlite transcript store persists messages on disk", async () => {
   const root = await mkdtemp(join(tmpdir(), "agent-tui-transcript-"));
   const file = join(root, "transcripts.sqlite3");
   const store = createSQLiteTranscriptStore(file);
-  await store.appendMessage("conv_sql", { id: "user-1", role: "user", text: "Hello" });
+  const scope = { conversationId: "conv_sql", workspaceId: "wrk_sql", profile: "default", workdir: root };
+  await store.appendMessage("conv_sql", { id: "user-1", role: "user", text: "Hello" }, { localKnowledgeScope: scope });
   await store.appendMessage("conv_sql", { id: "tool-1", kind: "tool", role: "system", text: "Local execution completed." });
   await store.appendMessage("conv_sql", { id: "assistant-1", role: "assistant", text: "" });
   await store.appendMessageDelta("conv_sql", "assistant-1", "Stored");
@@ -4137,10 +4246,11 @@ test("cli sqlite transcript store coalesces streamed local knowledge ingestion",
     localKnowledge,
     localKnowledgeIngestDelayMs: 20,
   });
-  await store.appendMessage("conv_sql", { id: "user-1", role: "user", text: "Hello" });
+  const scope = { conversationId: "conv_sql", workspaceId: "wrk_sql", profile: "default", workdir: root };
+  await store.appendMessage("conv_sql", { id: "user-1", role: "user", text: "Hello" }, { localKnowledgeScope: scope });
   await store.appendMessage("conv_sql", { id: "tool-1", kind: "tool", role: "system", text: "Local execution completed." });
   await store.appendMessage("conv_sql", { id: "assistant-1", role: "assistant", text: "" });
-  await store.appendMessageDelta("conv_sql", "assistant-1", "A");
+  await store.appendMessageDelta("conv_sql", "assistant-1", "A", { localKnowledgeScope: scope });
   await store.appendMessageDelta("conv_sql", "assistant-1", "B");
   await store.appendMessageDelta("conv_sql", "assistant-1", "C");
 
@@ -4150,6 +4260,7 @@ test("cli sqlite transcript store coalesces streamed local knowledge ingestion",
       kind: undefined,
       messageId: "user-1",
       role: "user",
+      scope,
       text: "Hello",
     },
   ]);
@@ -4158,6 +4269,7 @@ test("cli sqlite transcript store coalesces streamed local knowledge ingestion",
     ["user-1", "Hello"],
     ["assistant-1", "ABC"],
   ]);
+  assert.deepEqual(ingested[1].scope, scope);
   store.dispose();
 });
 
@@ -4581,6 +4693,7 @@ test("workbench turn controller runs prompt turns through engine state", async (
   assert.equal(seenOptions[0].discoverLocalSkills, false);
   assert.deepEqual(seenOptions[0].memory, { read: true, tenant_search: true });
   assert.deepEqual(seenOptions[0].skillTool, { tenant_search: true });
+  assert.equal(seenOptions[0].localKnowledge, undefined);
   assert.equal(engine.snapshot().busy, false);
   assert.equal(engine.snapshot().activeAssistantMessageId, null);
   assert.equal(engine.snapshot().runs[0].status, "completed");

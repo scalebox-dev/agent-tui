@@ -1,10 +1,15 @@
 import { formatTranscript, type WorkbenchMessage } from "./state.js";
 import { appendFile, mkdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
+import type { LocalKnowledgeScope } from "@agent-api/sdk/local";
+
+export interface WorkbenchTranscriptWriteOptions {
+  localKnowledgeScope?: LocalKnowledgeScope;
+}
 
 export interface WorkbenchTranscriptStore {
-  appendMessage(conversationId: string, message: WorkbenchMessage): Promise<void>;
-  appendMessageDelta(conversationId: string, messageId: string, delta: string): Promise<void>;
+  appendMessage(conversationId: string, message: WorkbenchMessage, options?: WorkbenchTranscriptWriteOptions): Promise<void>;
+  appendMessageDelta(conversationId: string, messageId: string, delta: string, options?: WorkbenchTranscriptWriteOptions): Promise<void>;
   clearConversation(conversationId: string): Promise<void>;
   exportConversation(conversationId: string): Promise<string>;
   getConversationSummary(conversationId: string): Promise<WorkbenchTranscriptSummary>;

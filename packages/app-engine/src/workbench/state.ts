@@ -125,12 +125,14 @@ export interface WorkbenchState {
   workspaceAuthType?: "api_key" | "browser";
   workspaceSwitchable: boolean;
   workspaceSummaries: WorkbenchWorkspaceSummary[];
+  profile?: string;
   runPreset?: string;
   runModel?: string;
   runs: WorkbenchRunSummary[];
   memoryRead: boolean;
   memoryWrite: boolean;
   memoryTenantSearch: boolean;
+  localKnowledgeEnabled: boolean;
   localSkillsEnabled: boolean;
   workspaceSkillsEnabled: boolean;
   renderMode: RenderMode;
@@ -177,7 +179,7 @@ export type WorkbenchAction =
   | { type: "conversations.set"; conversations: WorkbenchConversationSummary[] }
   | { type: "workspace.set"; workspace: { authType?: "api_key" | "browser"; id: string; name: string; role?: string; switchable?: boolean } }
   | { type: "workspaces.set"; workspaces: WorkbenchWorkspaceSummary[] }
-  | { type: "settings.set"; settings: Partial<Pick<WorkbenchState, "runPreset" | "runModel" | "memoryRead" | "memoryWrite" | "memoryTenantSearch" | "localSkillsEnabled" | "workspaceSkillsEnabled" | "renderMode" | "defaultPreset" | "defaultAutomaticContinuationLimit" | "automaticContinuationLimit" | "shellIsolation">> };
+  | { type: "settings.set"; settings: Partial<Pick<WorkbenchState, "runPreset" | "runModel" | "memoryRead" | "memoryWrite" | "memoryTenantSearch" | "localKnowledgeEnabled" | "localSkillsEnabled" | "workspaceSkillsEnabled" | "renderMode" | "defaultPreset" | "defaultAutomaticContinuationLimit" | "automaticContinuationLimit" | "shellIsolation">> };
 
 export type WorkbenchCommand =
   | { kind: "invalid"; command: string }
@@ -191,8 +193,9 @@ export type WorkbenchCommand =
   | { kind: "delete_profile" }
   | { kind: "switch_profile"; name?: string }
   | { kind: "auth_status" }
-  | { kind: "config"; field?: "preset" | "continuation-limit" | "isolation" | "isolator"; value?: string }
+  | { kind: "config"; field?: "preset" | "continuation-limit" | "knowledge" | "isolation" | "isolator"; value?: string }
   | { kind: "continuation_limit"; value?: string }
+  | { kind: "knowledge"; enabled?: boolean }
   | { kind: "memory"; field?: "read" | "write" | "workspace"; enabled?: boolean }
   | { kind: "skills"; field?: "local" | "workspace"; enabled?: boolean }
   | { kind: "render"; mode?: RenderMode }
@@ -225,11 +228,13 @@ export function createInitialWorkbenchState(options: {
   contextEnabled: boolean;
   accessMode?: WorkdirAccessMode;
   conversation?: string;
+  profile?: string;
   preset?: string;
   model?: string;
   memoryRead?: boolean;
   memoryWrite?: boolean;
   memoryTenantSearch?: boolean;
+  localKnowledgeEnabled?: boolean;
   localSkillsEnabled?: boolean;
   workspaceSkillsEnabled?: boolean;
   renderMode?: RenderMode;
@@ -267,12 +272,14 @@ export function createInitialWorkbenchState(options: {
     workspaceAuthType: undefined,
     workspaceSwitchable: false,
     workspaceSummaries: [],
+    profile: options.profile,
     runPreset: options.preset,
     runModel: options.model,
     runs: [],
     memoryRead: Boolean(options.memoryRead),
     memoryWrite: Boolean(options.memoryWrite),
     memoryTenantSearch: Boolean(options.memoryTenantSearch),
+    localKnowledgeEnabled: options.localKnowledgeEnabled !== false,
     localSkillsEnabled: options.localSkillsEnabled !== false,
     workspaceSkillsEnabled: Boolean(options.workspaceSkillsEnabled),
     renderMode: options.renderMode ?? "markdown",
@@ -655,6 +662,7 @@ function stateFromConversationRunSettings(runSettings?: ConversationRunSettings)
   if (runSettings.accessMode) state.accessMode = runSettings.accessMode;
   if ("automaticContinuationLimit" in runSettings) state.automaticContinuationLimit = runSettings.automaticContinuationLimit;
   if (typeof runSettings.contextEnabled === "boolean") state.contextEnabled = runSettings.contextEnabled;
+  if (typeof runSettings.localKnowledgeEnabled === "boolean") state.localKnowledgeEnabled = runSettings.localKnowledgeEnabled;
   if (typeof runSettings.localSkillsEnabled === "boolean") state.localSkillsEnabled = runSettings.localSkillsEnabled;
   if (typeof runSettings.memoryRead === "boolean") state.memoryRead = runSettings.memoryRead;
   if (typeof runSettings.memoryTenantSearch === "boolean") state.memoryTenantSearch = runSettings.memoryTenantSearch;
@@ -717,9 +725,11 @@ export function parseWorkbenchCommand(input: string): WorkbenchCommand | null {
     case "settings": {
       const [field, ...valueParts] = rest;
       if (!field) return { kind: "config" };
-      if (field === "preset" || field === "continuation-limit" || field === "continuation" || field === "automatic-continuation-limit" || field === "isolator") {
+      if (field === "preset" || field === "continuation-limit" || field === "continuation" || field === "automatic-continuation-limit" || field === "knowledge" || field === "local-knowledge" || field === "local_knowledge" || field === "isolator") {
         const normalizedField = field === "continuation" || field === "automatic-continuation-limit"
           ? "continuation-limit"
+          : field === "local-knowledge" || field === "local_knowledge"
+            ? "knowledge"
           : field;
         return { kind: "config", field: normalizedField, value: valueParts.join(" ").trim() || undefined };
       }
@@ -771,6 +781,10 @@ export function parseWorkbenchCommand(input: string): WorkbenchCommand | null {
       const value = rest.join(" ").trim();
       return { kind: "continuation_limit", value: value || undefined };
     }
+    case "knowledge":
+    case "local-knowledge":
+    case "local_knowledge":
+      return { kind: "knowledge", enabled: parseOnOff(rest[0]) };
     case "memory": {
       const [fieldOrValue, maybeValue, maybeToggle] = rest;
       if (fieldOrValue === "on") {
@@ -897,6 +911,7 @@ export function helpText() {
     ["/export", "[file]", "save the plain-text transcript to a file"],
     ["/config", "preset", "save default preset; use none/off for no preset, reset for built-in"],
     ["/config", "continuation-limit", "save automatic continuation checkpoint limit"],
+    ["/config", "knowledge", "save default local knowledge setting: on, off, or reset"],
     ["/config", "isolation", "save shell isolation mode: none, auto, or required"],
     ["/config", "isolator", "save agent-isolator path; use none/off to clear"],
     ["/preset", "[name]", "show or set preset; use none/off to clear"],
@@ -907,6 +922,7 @@ export function helpText() {
     ["/memory", "read workspace [on|off]", "toggle read-scoped workspace memory search"],
     ["/skills", "", "show or toggle local/workspace skill discovery"],
     ["/skills", "local|workspace [on|off]", "toggle skill discovery scopes"],
+    ["/knowledge", "[on|off]", "show or set this conversation's local knowledge tool/context"],
     ["/access", "[mode]", "show or set local tool access: off, approval, or full"],
     ["/workdir", "", "show local workdir status"],
     ["/workdir", "on", "shortcut for /access approval; /workdir off hides local tools"],

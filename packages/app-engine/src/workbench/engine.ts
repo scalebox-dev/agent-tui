@@ -23,11 +23,13 @@ export interface WorkbenchEngineOptions {
   contextEnabled: boolean;
   accessMode?: WorkdirAccessMode;
   conversation?: string;
+  profile?: string;
   preset?: string;
   model?: string;
   memoryRead?: boolean;
   memoryWrite?: boolean;
   memoryTenantSearch?: boolean;
+  localKnowledgeEnabled?: boolean;
   localSkillsEnabled?: boolean;
   workspaceSkillsEnabled?: boolean;
   renderMode?: RenderMode;
@@ -572,7 +574,7 @@ async function persistTranscriptAction(
         text: action.text,
       };
       if (message && shouldPersistTranscriptMessage(message)) {
-        await store.appendMessage(conversationId, message);
+        await store.appendMessage(conversationId, message, { localKnowledgeScope: transcriptLocalKnowledgeScope(state, conversationId) });
       }
       return;
     }
@@ -585,11 +587,11 @@ async function persistTranscriptAction(
             kind: message.kind,
             role: message.role,
             text: message.text,
-          });
+          }, { localKnowledgeScope: transcriptLocalKnowledgeScope(state, conversationId) });
         }
         return;
       }
-      await store.appendMessageDelta(conversationId, action.id, action.delta);
+      await store.appendMessageDelta(conversationId, action.id, action.delta, { localKnowledgeScope: transcriptLocalKnowledgeScope(state, conversationId) });
     }
   } catch (error) {
     dispatch({
@@ -598,6 +600,15 @@ async function persistTranscriptAction(
       text: `Transcript persistence unavailable: ${userFacingError(error)}`,
     });
   }
+}
+
+function transcriptLocalKnowledgeScope(state: WorkbenchState, conversationId: string) {
+  return {
+    conversationId,
+    workspaceId: state.currentWorkspaceId,
+    profile: state.profile,
+    workdir: state.workdir?.root,
+  };
 }
 
 function transcriptConversationId(action: WorkbenchAction, state: WorkbenchState) {

@@ -102,7 +102,7 @@ export function createWorkbenchTurnController(options: WorkbenchTurnControllerOp
             restartConversation: false,
             abortSignal: abortController.signal,
             localPause: localPauseHooks(runContext.runId),
-            localKnowledge: options.localKnowledge,
+            localKnowledge: localKnowledgeForState(state),
           },
           (event) => handleAgentEvent(event, assistantId, runContext),
         );
@@ -162,7 +162,7 @@ export function createWorkbenchTurnController(options: WorkbenchTurnControllerOp
             restartConversation: false,
             abortSignal: abortController.signal,
             localPause: localPauseHooks(runContext.runId),
-            localKnowledge: options.localKnowledge,
+            localKnowledge: localKnowledgeForState(state),
           },
           input.approval,
           input.result,
@@ -225,7 +225,7 @@ export function createWorkbenchTurnController(options: WorkbenchTurnControllerOp
             bypassAutomaticContinuationLimit: input.bypassAutomaticContinuationLimit,
             abortSignal: abortController.signal,
             localPause: localPauseHooks(runContext.runId),
-            localKnowledge: options.localKnowledge,
+            localKnowledge: localKnowledgeForState(state),
           },
           input.continuation,
           (event) => handleAgentEvent(event, assistantId, runContext),
@@ -397,6 +397,10 @@ export function createWorkbenchTurnController(options: WorkbenchTurnControllerOp
       ...(state.memoryWrite ? { write: true } : {}),
       ...(state.memoryTenantSearch ? { tenant_search: true } : {}),
     };
+  }
+
+  function localKnowledgeForState(state: WorkbenchState) {
+    return state.localKnowledgeEnabled ? options.localKnowledge : undefined;
   }
 }
 

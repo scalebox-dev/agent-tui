@@ -2,23 +2,35 @@ import {
   bindLineDelimitedAgentEngineRpcHandler,
   createAgentEngineRpcHandler,
   createInProcessAgentEngineClient,
+  currentAgentAppRuntime,
+  loadWorkbenchPreferences,
   normalizeChatOptions,
   type ChatOptions,
 } from "@agent-api/app-engine/core";
-import { createWorkbenchAuthController } from "@agent-api/app-engine/workbench";
+import { createWorkbenchAuthController, type LocalKnowledgeService } from "@agent-api/app-engine/workbench";
+import path from "node:path";
+import { createSQLiteLocalKnowledgeStore } from "./tui/local-knowledge-store.js";
 import { createDefaultTranscriptStore } from "./tui/transcript-store.js";
 
 export interface EngineHostOptions extends ChatOptions {
   profile?: string;
 }
 
-export function startEngineHost(options: EngineHostOptions = {}) {
-  const transcriptStore = safeTranscriptStore();
+export async function startEngineHost(options: EngineHostOptions = {}) {
+  const localKnowledge = await safeLocalKnowledgeStore();
+  const transcriptStore = safeTranscriptStore(localKnowledge ?? undefined);
+  const baseOptions = {
+    ...normalizeChatOptions([], options),
+    localKnowledgeEnabled: Boolean(localKnowledge),
+  };
   const client = createInProcessAgentEngineClient({
     authController: createWorkbenchAuthController(),
-    baseOptions: normalizeChatOptions([], options),
+    baseOptions,
     profileName: options.profile || "default",
-    services: transcriptStore ? { transcriptStore } : undefined,
+    services: {
+      ...(transcriptStore ? { transcriptStore } : {}),
+      ...(localKnowledge ? { localKnowledge } : {}),
+    },
     async onDeleteProfile() {},
     onExit() {
       process.exitCode = 0;
@@ -58,9 +70,20 @@ export function startEngineHost(options: EngineHostOptions = {}) {
   };
 }
 
-function safeTranscriptStore() {
+async function safeLocalKnowledgeStore() {
   try {
-    return createDefaultTranscriptStore();
+    const preferences = await loadWorkbenchPreferences();
+    if (preferences.localKnowledgeEnabled === false) return null;
+    const dataDir = currentAgentAppRuntime().runtime.dirs.data;
+    return createSQLiteLocalKnowledgeStore(path.join(dataDir, "local-knowledge.sqlite3"));
+  } catch {
+    return null;
+  }
+}
+
+function safeTranscriptStore(localKnowledge?: LocalKnowledgeService) {
+  try {
+    return createDefaultTranscriptStore({ localKnowledge });
   } catch {
     return null;
   }
