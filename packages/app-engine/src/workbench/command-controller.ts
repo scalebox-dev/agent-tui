@@ -16,6 +16,14 @@ import type { WorkbenchSettingsController } from "./settings-controller.js";
 import type { WorkbenchTranscriptStore } from "./transcript-store.js";
 import type { WorkbenchTurnController } from "./turn-controller.js";
 import type { WorkbenchWorkspaceController } from "./workspace-controller.js";
+import type {
+  LocalKnowledgePruneResult,
+  LocalKnowledgeScope,
+  LocalKnowledgeSearchResult,
+  LocalKnowledgeService,
+  LocalKnowledgeSourceType,
+  LocalKnowledgeStats,
+} from "@agent-api/sdk/local";
 
 export interface WorkbenchCommandController {
   run(command: WorkbenchCommand): Promise<void>;
@@ -27,6 +35,7 @@ export interface WorkbenchCommandControllerOptions {
   conversationController: WorkbenchConversationController;
   engine: WorkbenchEngine;
   localController: WorkbenchLocalController;
+  localKnowledge?: LocalKnowledgeService;
   options: AgentRunOptions;
   profileName: string;
   settingsController: WorkbenchSettingsController;
@@ -76,7 +85,7 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
           await runContinuationLimitCommand(command.value);
           return;
         case "knowledge":
-          await runKnowledgeCommand(command.enabled);
+          await runKnowledgeCommand(command);
           return;
         case "summary":
           await showSummary();
@@ -363,24 +372,104 @@ export function createWorkbenchCommandController(options: WorkbenchCommandContro
     }
   }
 
-  async function runKnowledgeCommand(enabled?: boolean) {
+  async function runKnowledgeCommand(command: Extract<WorkbenchCommand, { kind: "knowledge" }>) {
     const state = options.engine.snapshot();
-    if (enabled === undefined) {
+    if (command.enabled !== undefined) {
+      dispatch({ type: "settings.set", settings: { localKnowledgeEnabled: command.enabled } });
+      dispatch({ type: "message.add", role: "system", text: `Local knowledge set to ${command.enabled ? "on" : "off"} for this conversation.` });
+      dispatch({ type: "activity.add", level: command.enabled ? "success" : "warning", text: `Local knowledge: ${command.enabled ? "on" : "off"}` });
+      await persistCurrentRunSettings();
+      return;
+    }
+
+    if (command.action === "search") {
+      await searchLocalKnowledge(command.query ?? "");
+      return;
+    }
+    if (command.action === "prune") {
+      await pruneLocalKnowledge(Boolean(command.dryRun));
+      return;
+    }
+    if (command.action === "status" || command.action === undefined) {
       dispatch({
         type: "message.add",
         role: "system",
-        text: [
-          `Local knowledge: ${state.localKnowledgeEnabled ? "on" : "off"}`,
-          "Use /knowledge on or /knowledge off for this conversation.",
-          "Use /config knowledge on|off|reset to change the saved default.",
-        ].join("\n"),
+        text: await localKnowledgeStatusText(state),
       });
       return;
     }
-    dispatch({ type: "settings.set", settings: { localKnowledgeEnabled: enabled } });
-    dispatch({ type: "message.add", role: "system", text: `Local knowledge set to ${enabled ? "on" : "off"} for this conversation.` });
-    dispatch({ type: "activity.add", level: enabled ? "success" : "warning", text: `Local knowledge: ${enabled ? "on" : "off"}` });
-    await persistCurrentRunSettings();
+  }
+
+  async function localKnowledgeStatusText(state: ReturnType<WorkbenchEngine["snapshot"]>) {
+    const service = options.localKnowledge;
+    const lines = [
+      `Local knowledge: ${state.localKnowledgeEnabled ? "on" : "off"}`,
+      `Store: ${service ? "available" : "unavailable"}`,
+      `Scope: ${formatLocalKnowledgeScope(localKnowledgeScopeFromState(state))}`,
+    ];
+    if (!service) {
+      lines.push("The local knowledge store is not wired for this session.");
+      return lines.join("\n");
+    }
+    if (!service.stats) {
+      lines.push("Stats: unavailable for this local knowledge provider.");
+      lines.push("Use /knowledge search <query> to query the provider.");
+      return lines.join("\n");
+    }
+    try {
+      lines.push(...formatLocalKnowledgeStats(await service.stats(localKnowledgeScopeFromState(state))));
+    } catch (error) {
+      lines.push(`Stats unavailable: ${userFacingError(error)}`);
+    }
+    lines.push("Use /knowledge search <query>, /knowledge prune dry-run, or /knowledge prune.");
+    return lines.join("\n");
+  }
+
+  async function searchLocalKnowledge(query: string) {
+    const trimmed = query.trim();
+    if (!trimmed) {
+      dispatch({ type: "message.add", role: "system", text: "Usage: /knowledge search <query>" });
+      dispatch({ type: "activity.add", level: "warning", text: "Local knowledge search missing query" });
+      return;
+    }
+    const service = options.localKnowledge;
+    if (!service) {
+      dispatch({ type: "message.add", role: "system", text: "Local knowledge store is not available for this session." });
+      dispatch({ type: "activity.add", level: "warning", text: "Local knowledge unavailable" });
+      return;
+    }
+    try {
+      const result = await service.search({
+        query: trimmed,
+        limit: 8,
+        scope: localKnowledgeScopeFromState(options.engine.snapshot()),
+      });
+      dispatch({ type: "message.add", role: "system", text: formatLocalKnowledgeSearchResult(trimmed, result) });
+      dispatch({ type: "activity.add", level: "success", text: `Local knowledge search: ${result.data.length} hit${result.data.length === 1 ? "" : "s"}` });
+    } catch (error) {
+      dispatch({ type: "message.add", role: "system", text: `Local knowledge search failed: ${userFacingError(error)}` });
+      dispatch({ type: "activity.add", level: "error", text: "Local knowledge search failed" });
+    }
+  }
+
+  async function pruneLocalKnowledge(dryRun: boolean) {
+    const service = options.localKnowledge;
+    if (!service?.prune) {
+      dispatch({ type: "message.add", role: "system", text: "Local knowledge prune is not available for this session." });
+      dispatch({ type: "activity.add", level: "warning", text: "Local knowledge prune unavailable" });
+      return;
+    }
+    try {
+      const result = await service.prune({
+        dryRun,
+        scope: localKnowledgeScopeFromState(options.engine.snapshot()),
+      });
+      dispatch({ type: "message.add", role: "system", text: formatLocalKnowledgePruneResult(result) });
+      dispatch({ type: "activity.add", level: "success", text: dryRun ? "Local knowledge prune preview ready" : "Local knowledge pruned" });
+    } catch (error) {
+      dispatch({ type: "message.add", role: "system", text: `Local knowledge prune failed: ${userFacingError(error)}` });
+      dispatch({ type: "activity.add", level: "error", text: "Local knowledge prune failed" });
+    }
   }
 
   async function validatePresetName(preset: string) {
@@ -1038,6 +1127,72 @@ export function normalizeOptionalSetting(value: string, clearValues: string[]) {
   const trimmed = value.trim();
   if (!trimmed) return undefined;
   return clearValues.includes(trimmed.toLowerCase()) ? undefined : trimmed;
+}
+
+function localKnowledgeScopeFromState(state: ReturnType<WorkbenchEngine["snapshot"]>): LocalKnowledgeScope {
+  return {
+    conversationId: state.conversationId,
+    workspaceId: state.currentWorkspaceId,
+    profile: state.profile,
+    workdir: state.workdir?.root,
+  };
+}
+
+function formatLocalKnowledgeScope(scope: LocalKnowledgeScope) {
+  return [
+    scope.conversationId ? `conversation=${scope.conversationId}` : "conversation=unknown",
+    scope.workspaceId ? `workspace=${scope.workspaceId}` : "workspace=unknown",
+    scope.profile ? `profile=${scope.profile}` : "profile=default",
+    scope.workdir ? `workdir=${scope.workdir}` : "workdir=unloaded",
+  ].join(" ");
+}
+
+function formatLocalKnowledgeStats(stats: LocalKnowledgeStats) {
+  const lines = [
+    `Sources: ${stats.sources}`,
+    `Chunks: ${stats.chunks}`,
+    `Bytes: ${formatBytes(stats.bytes)}`,
+    `Deleted sources: ${stats.deletedSources}`,
+  ];
+  const sourceLines = (Object.entries(stats.bySourceType ?? {}) as Array<[LocalKnowledgeSourceType, { sources: number; chunks: number; bytes: number } | undefined]>)
+    .filter((entry): entry is [LocalKnowledgeSourceType, { sources: number; chunks: number; bytes: number }] => Boolean(entry[1]))
+    .map(([type, value]) => `- ${type}: ${value.sources} source${value.sources === 1 ? "" : "s"}, ${value.chunks} chunk${value.chunks === 1 ? "" : "s"}, ${formatBytes(value.bytes)}`);
+  if (sourceLines.length > 0) lines.push("By source type:", ...sourceLines);
+  return lines;
+}
+
+function formatLocalKnowledgeSearchResult(query: string, result: LocalKnowledgeSearchResult) {
+  if (result.data.length === 0) return `Local knowledge search: no hits for "${query}".`;
+  return [
+    `Local knowledge search: ${result.data.length} hit${result.data.length === 1 ? "" : "s"} for "${query}".`,
+    "",
+    ...result.data.slice(0, 8).flatMap((hit, index) => [
+      `${index + 1}. ${hit.title || hit.sourceUri} (${hit.sourceType})`,
+      hit.sourceUri,
+      snippet(hit.text),
+      "",
+    ]),
+  ].join("\n").trimEnd();
+}
+
+function formatLocalKnowledgePruneResult(result: LocalKnowledgePruneResult) {
+  return [
+    result.dryRun ? "Local knowledge prune preview:" : "Local knowledge pruned:",
+    `Deleted sources: ${result.deletedSources}`,
+    `Deleted chunks: ${result.deletedChunks}`,
+    `Reclaimed bytes: ${formatBytes(result.reclaimedBytes)}`,
+  ].join("\n");
+}
+
+function snippet(text: string, maxLength = 500) {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 3)}...` : normalized;
+}
+
+function formatBytes(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
 }
 
 function userFacingError(error: unknown) {

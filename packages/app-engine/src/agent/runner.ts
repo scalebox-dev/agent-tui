@@ -846,9 +846,20 @@ async function prepareLocalContext(options: AgentRunOptions): Promise<LocalExecu
       ...(localWorkdir ? [localWorkdir.registry] : []),
       ...(localKnowledge ? [localKnowledge] : []),
     ),
-    instructions: localWorkdir?.instructions,
+    instructions: [
+      localWorkdir?.instructions,
+      localKnowledge ? localKnowledgeInstructions() : undefined,
+    ].filter(Boolean).join("\n\n") || undefined,
     localSkills,
   };
+}
+
+function localKnowledgeInstructions() {
+  return [
+    "Local knowledge is available through the `local_knowledge` function tool.",
+    "Use local_knowledge.search when the task may depend on prior conversation context, durable project decisions, local conventions, earlier debugging findings, or indexed local documentation.",
+    "Local knowledge is a scoped local index and may be incomplete. Treat results as contextual hints, and verify exact current file contents with local_workdir before making file edits.",
+  ].join(" ");
 }
 
 function scopedLocalKnowledgeService(

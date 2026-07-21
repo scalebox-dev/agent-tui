@@ -195,7 +195,7 @@ export type WorkbenchCommand =
   | { kind: "auth_status" }
   | { kind: "config"; field?: "preset" | "continuation-limit" | "knowledge" | "isolation" | "isolator"; value?: string }
   | { kind: "continuation_limit"; value?: string }
-  | { kind: "knowledge"; enabled?: boolean }
+  | { kind: "knowledge"; action?: "prune" | "search" | "status"; dryRun?: boolean; enabled?: boolean; query?: string }
   | { kind: "memory"; field?: "read" | "write" | "workspace"; enabled?: boolean }
   | { kind: "skills"; field?: "local" | "workspace"; enabled?: boolean }
   | { kind: "render"; mode?: RenderMode }
@@ -783,8 +783,20 @@ export function parseWorkbenchCommand(input: string): WorkbenchCommand | null {
     }
     case "knowledge":
     case "local-knowledge":
-    case "local_knowledge":
-      return { kind: "knowledge", enabled: parseOnOff(rest[0]) };
+    case "local_knowledge": {
+      const [subcommand = "", ...valueParts] = rest;
+      const enabled = parseOnOff(subcommand);
+      if (enabled !== undefined) return { kind: "knowledge", enabled };
+      if (subcommand === "status" || subcommand === "stats") return { kind: "knowledge", action: "status" };
+      if (subcommand === "search" || subcommand === "query") {
+        return { kind: "knowledge", action: "search", query: valueParts.join(" ").trim() };
+      }
+      if (subcommand === "prune") {
+        const value = valueParts.join(" ").trim().toLowerCase();
+        return { kind: "knowledge", action: "prune", dryRun: value === "dry-run" || value === "dryrun" || value === "preview" };
+      }
+      return { kind: "knowledge" };
+    }
     case "memory": {
       const [fieldOrValue, maybeValue, maybeToggle] = rest;
       if (fieldOrValue === "on") {
@@ -923,6 +935,9 @@ export function helpText() {
     ["/skills", "", "show or toggle local/workspace skill discovery"],
     ["/skills", "local|workspace [on|off]", "toggle skill discovery scopes"],
     ["/knowledge", "[on|off]", "show or set this conversation's local knowledge tool/context"],
+    ["/knowledge", "status", "show local knowledge index health and retention stats"],
+    ["/knowledge", "search <query>", "search the scoped local knowledge index"],
+    ["/knowledge", "prune [dry-run]", "apply or preview local knowledge retention cleanup"],
     ["/access", "[mode]", "show or set local tool access: off, approval, or full"],
     ["/workdir", "", "show local workdir status"],
     ["/workdir", "on", "shortcut for /access approval; /workdir off hides local tools"],

@@ -64,6 +64,7 @@ export function createAgentEngine(options: AgentEngineAppOptions): AgentEngineAp
     conversationController: session.conversation,
     engine: session.engine,
     localController: session.local,
+    localKnowledge: options.services?.localKnowledge,
     options: options.baseOptions,
     profileName: options.profileName,
     settingsController: session.settings,

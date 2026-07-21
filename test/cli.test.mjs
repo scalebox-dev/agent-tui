@@ -1154,6 +1154,14 @@ test("workbench command parser and reducer handle local workflow state", () => {
   assert.deepEqual(parseWorkbenchCommand("/workdir on"), { kind: "workdir", enabled: true });
   assert.deepEqual(parseWorkbenchCommand("/workdir off"), { kind: "workdir", enabled: false });
   assert.deepEqual(parseWorkbenchCommand("/local on"), { kind: "workdir", enabled: true });
+  assert.deepEqual(parseWorkbenchCommand("/knowledge"), { kind: "knowledge" });
+  assert.deepEqual(parseWorkbenchCommand("/knowledge on"), { kind: "knowledge", enabled: true });
+  assert.deepEqual(parseWorkbenchCommand("/knowledge off"), { kind: "knowledge", enabled: false });
+  assert.deepEqual(parseWorkbenchCommand("/knowledge status"), { kind: "knowledge", action: "status" });
+  assert.deepEqual(parseWorkbenchCommand("/knowledge stats"), { kind: "knowledge", action: "status" });
+  assert.deepEqual(parseWorkbenchCommand("/knowledge search scoped fact"), { kind: "knowledge", action: "search", query: "scoped fact" });
+  assert.deepEqual(parseWorkbenchCommand("/knowledge prune dry-run"), { kind: "knowledge", action: "prune", dryRun: true });
+  assert.deepEqual(parseWorkbenchCommand("/knowledge prune"), { kind: "knowledge", action: "prune", dryRun: false });
   assert.deepEqual(parseWorkbenchCommand("/update"), { kind: "update" });
   assert.deepEqual(parseWorkbenchCommand("/upgrade"), { kind: "update" });
   assert.deepEqual(parseWorkbenchCommand("/resume"), { kind: "resume", message: undefined });
@@ -1538,11 +1546,13 @@ test("local knowledge tool searches with active run scope", async () => {
   const root = await mkdtemp(join(tmpdir(), "agent-local-knowledge-tool-scope-"));
   const storage = createMemoryStorage();
   const originalFetch = globalThis.fetch;
+  const requests = [];
   const searchCalls = [];
   let calls = 0;
   configureAgentAppRuntime({ appName: "local-knowledge-scope-test", legacyAppName: null, storage });
-  globalThis.fetch = async () => {
+  globalThis.fetch = async (_url, init = {}) => {
     calls += 1;
+    requests.push(JSON.parse(String(init.body ?? "{}")));
     if (calls === 1) {
       return jsonResponse({
         id: "resp_needs_knowledge",
@@ -1595,6 +1605,8 @@ test("local knowledge tool searches with active run scope", async () => {
     });
 
     assert.equal(searchCalls.length, 1);
+    assert.ok(requests[0].tools.some((tool) => tool.name === "local_knowledge"));
+    assert.match(requests[0].instructions, /Local knowledge is available through the `local_knowledge` function tool/);
     assert.deepEqual(searchCalls[0].scope, {
       conversationId: "conv_scope",
       workspaceId: "wrk_scope",
@@ -2210,6 +2222,88 @@ test("workbench command controller saves automatic continuation limit", async ()
   await controller.run({ kind: "continuation_limit", value: "9" });
   assert.equal(engine.snapshot().automaticContinuationLimit, 9);
   assert.match(engine.snapshot().messages.at(-1).text, /Conversation continuation limit set to 9/);
+});
+
+test("workbench command controller manages local knowledge operations", async () => {
+  const calls = [];
+  const engine = createWorkbenchEngine({ contextEnabled: false, profile: "dev" });
+  engine.dispatch({ type: "conversation.set", id: "conv_knowledge", name: "knowledge", status: "fresh" });
+  engine.dispatch({ type: "workspace.set", workspace: { id: "wrk_knowledge", name: "Knowledge Workspace" } });
+  engine.dispatch({ type: "workdir.set", workdir: { root: "/tmp/knowledge", name: "knowledge", fileCount: 1, totalBytes: 42, scanTruncated: false } });
+  const localKnowledge = {
+    async search(params) {
+      calls.push(["search", params]);
+      return {
+        object: "local_knowledge_search_result",
+        data: [{
+          id: "hit-1",
+          sourceType: "transcript",
+          sourceUri: "transcript:conv_knowledge:message",
+          title: "Prior decision",
+          text: "Use the app-engine boundary for reusable TUI behavior.",
+        }],
+      };
+    },
+    async contextForPrompt() {
+      return null;
+    },
+    async stats(scope) {
+      calls.push(["stats", scope]);
+      return {
+        object: "local_knowledge_stats",
+        sources: 3,
+        chunks: 5,
+        bytes: 2048,
+        deletedSources: 1,
+        bySourceType: {
+          transcript: { sources: 2, chunks: 3, bytes: 1024 },
+          workdir_file: { sources: 1, chunks: 2, bytes: 1024 },
+        },
+      };
+    },
+    async prune(params) {
+      calls.push(["prune", params]);
+      return {
+        object: "local_knowledge_prune_result",
+        dryRun: params?.dryRun,
+        deletedSources: 1,
+        deletedChunks: 2,
+        reclaimedBytes: 512,
+      };
+    },
+  };
+  const controller = createWorkbenchCommandController({
+    authController: stubAuthController(),
+    conversationController: stubConversationController(),
+    engine,
+    localController: stubLocalController(),
+    localKnowledge,
+    options: { promptParts: [], profile: "dev" },
+    profileName: "dev",
+    settingsController: stubSettingsController(),
+    turnController: stubTurnController(),
+    workspaceController: stubWorkspaceController(),
+    async onDeleteProfile() {},
+    onExit() {},
+    onLogin() {},
+    onLogout() {},
+    onSwitchProfile() {},
+  });
+
+  await controller.run({ kind: "knowledge", action: "status" });
+  assert.match(engine.snapshot().messages.at(-1).text, /Sources: 3/);
+  await controller.run({ kind: "knowledge", action: "search", query: "prior decision" });
+  assert.match(engine.snapshot().messages.at(-1).text, /Prior decision/);
+  await controller.run({ kind: "knowledge", action: "prune", dryRun: true });
+  assert.match(engine.snapshot().messages.at(-1).text, /prune preview/);
+  assert.deepEqual(calls.map(([kind]) => kind), ["stats", "search", "prune"]);
+  assert.deepEqual(calls[1][1].scope, {
+    conversationId: "conv_knowledge",
+    workspaceId: "wrk_knowledge",
+    profile: "dev",
+    workdir: "/tmp/knowledge",
+  });
+  assert.equal(calls[2][1].dryRun, true);
 });
 
 test("workbench command controller resumes timed local pauses", async () => {
