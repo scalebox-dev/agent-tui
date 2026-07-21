@@ -489,6 +489,9 @@ function WorkbenchApp({
         case "switch_conversation":
           void submitInput(`/switch ${effect.name}`);
           break;
+        case "delete_conversation":
+          void submitInput(`/delete ${effect.name}`);
+          break;
         case "switch_workspace":
           void submitInput(`/workspace ${effect.id}`);
           break;

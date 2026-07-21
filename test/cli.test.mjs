@@ -2923,6 +2923,7 @@ test("workbench terminal controller routes focused panel operations", () => {
   apply("", { tab: true });
   assert.equal(terminalState.focusedPanel, "conversation");
   apply("", { downArrow: true });
+  assert.deepEqual(apply("", { delete: true, shift: true }).effects, [{ type: "delete_conversation", name: "oom" }]);
   assert.deepEqual(apply("", { return: true }).effects, [{ type: "switch_conversation", name: "oom" }]);
   apply("", { upArrow: true });
   apply("", { tab: true });

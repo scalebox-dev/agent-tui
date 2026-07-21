@@ -51,6 +51,7 @@ export interface WorkbenchTerminalState {
 export type WorkbenchTerminalEffect =
   | WorkbenchInputEffect
   | { type: "copy"; target: WorkbenchCopyTarget }
+  | { type: "delete_conversation"; name: string }
   | { type: "paste" }
   | { type: "switch_conversation"; name: string }
   | { type: "switch_workspace"; id: string };
@@ -288,6 +289,11 @@ function handleReadOnlyPanel(
     if (item && item.name !== renderModel.header.conversation) {
       return stateResult(state, { type: "switch_conversation", name: item.name });
     }
+    return stateResult(state);
+  }
+  if (state.focusedPanel === "conversation" && key.delete && key.shift) {
+    const item = renderModel.conversation.items[state.conversationCursor.line];
+    if (item) return stateResult(state, { type: "delete_conversation", name: item.name });
     return stateResult(state);
   }
   if (state.focusedPanel === "workspace" && key.return) {

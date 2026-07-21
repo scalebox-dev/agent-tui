@@ -218,6 +218,7 @@ export function buildWorkbenchRenderModel(input: BuildWorkbenchRenderModelInput)
     footerText: [
       "PgUp/PgDn page",
       "Shift+↑/↓ row",
+      "Shift+Del delete",
       "End live",
       "Alt+C copy",
       "Alt+V paste",
