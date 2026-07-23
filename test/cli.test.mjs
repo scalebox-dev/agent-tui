@@ -4535,10 +4535,12 @@ test("cli sqlite transcript store bounds local knowledge pending ingest text", a
   await store.appendMessageDelta("conv_knowledge_large", "assistant-large", longDelta);
   await store.appendMessageDelta("conv_knowledge_large", "assistant-large", longDelta);
   await new Promise((resolve) => setTimeout(resolve, 60));
+  await store.appendMessageDelta("conv_knowledge_large", "assistant-large", longDelta);
+  await new Promise((resolve) => setTimeout(resolve, 60));
 
-  assert.equal(ingested.length, 1);
-  assert.equal(Buffer.byteLength(ingested[0].text, "utf8"), 4096);
-  assert.equal((await store.exportConversation("conv_knowledge_large")).includes(longDelta + longDelta), true);
+  assert.equal(ingested.length, 2);
+  assert.deepEqual(ingested.map((message) => Buffer.byteLength(message.text, "utf8")), [4096, 4096]);
+  assert.equal((await store.exportConversation("conv_knowledge_large")).includes(longDelta + longDelta + longDelta), true);
   store.dispose();
 });
 

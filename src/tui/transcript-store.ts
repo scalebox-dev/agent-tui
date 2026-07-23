@@ -115,8 +115,8 @@ export function createSQLiteTranscriptStore(file: string, options: DefaultTransc
     LIMIT 1
   `);
   const deleteConversation = db.prepare("DELETE FROM transcript_messages WHERE conversation_id = ?");
-  const messageByID = db.prepare(`
-    SELECT seq, message_id, role, kind, text
+  const messageByIDForKnowledge = db.prepare(`
+    SELECT seq, message_id, role, kind, substr(text, 1, ?) AS text
     FROM transcript_messages
     WHERE conversation_id = ? AND message_id = ?
   `);
@@ -152,10 +152,13 @@ export function createSQLiteTranscriptStore(file: string, options: DefaultTransc
       });
       const pending = pendingKnowledgeIngests.get(knowledgeIngestKey(conversationId, messageId));
       if (pending) {
-        scheduleKnowledgeIngest(conversationId, { ...pending.message, text: pending.message.text + delta }, writeOptions?.localKnowledgeScope ?? pending.scope);
+        scheduleKnowledgeIngest(conversationId, {
+          ...pending.message,
+          text: appendTextByBytes(pending.message.text, delta, knowledgePendingMaxBytes),
+        }, writeOptions?.localKnowledgeScope ?? pending.scope);
         return;
       }
-      const rows = rowsToMessages([messageByID.get(conversationId, messageId)].filter(Boolean));
+      const rows = rowsToMessages([messageByIDForKnowledge.get(knowledgePendingMaxBytes, conversationId, messageId)].filter(Boolean));
       if (rows[0]) scheduleKnowledgeIngest(conversationId, rows[0], writeOptions?.localKnowledgeScope);
     },
     async clearConversation(conversationId) {
@@ -335,6 +338,12 @@ function trimTextByBytes(text: string, maxBytes: number) {
     bytes += charBytes;
   }
   return output;
+}
+
+function appendTextByBytes(text: string, delta: string, maxBytes: number) {
+  const currentBytes = Buffer.byteLength(text, "utf8");
+  if (currentBytes >= maxBytes) return text;
+  return `${text}${trimTextByBytes(delta, maxBytes - currentBytes)}`;
 }
 
 function escapeSqlString(value: string) {

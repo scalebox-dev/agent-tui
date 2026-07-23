@@ -218,10 +218,11 @@ export async function runAgentTurn(options: AgentRunOptions, onEvent?: (event: A
     const stream = await runtimeProfile.client.agent.create({ ...params, stream: true }, requestAbortOptions(options.abortSignal));
     let finalResponseID = "";
     let text = "";
+    const collectText = !onEvent;
     for await (const event of stream) {
       throwIfAborted(options.abortSignal);
       emitAgentTurnEvent(event, onEvent);
-      if (event.type === "response.output_text.delta" && event.delta) {
+      if (collectText && event.type === "response.output_text.delta" && event.delta) {
         text += event.delta;
       }
       if (event.response?.id) {
@@ -548,7 +549,7 @@ async function createAgentResponseWithOptionalStream(
       responseID = event.response.id;
     }
     if (event.type === "response.completed" && event.response) {
-      finalResponse = withOutputText(event.response);
+      finalResponse = event.response;
     }
     if (event.type === "response.failed") {
       throw new Error(event.error?.message || "agent run failed");
@@ -562,8 +563,11 @@ async function createAgentResponseWithOptionalStream(
   if (!finalResponse) {
     throw new Error("agent stream completed without a final response");
   }
-  if (!sawTextDelta && finalResponse.output_text) {
-    onEvent?.({ type: "text.delta", delta: finalResponse.output_text });
+  if (!sawTextDelta) {
+    finalResponse = withOutputText(finalResponse);
+    if (finalResponse.output_text) {
+      onEvent?.({ type: "text.delta", delta: finalResponse.output_text });
+    }
   }
   return finalResponse;
 }
