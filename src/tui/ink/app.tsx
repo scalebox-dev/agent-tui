@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useApp, useInput, useStdin, useStdout } from "ink";
 import {
   createInProcessAgentEngineClient,
@@ -7,6 +7,7 @@ import {
   diagnosticNowMs,
   diagnosticsEnabled,
   logDiagnostic,
+  maybeWriteHeapSnapshot,
   stateDiagnosticSummary,
   type AgentEngineClient,
   type AgentRunOptions,
@@ -204,11 +205,13 @@ function WorkbenchApp({
 }) {
   const app = useApp();
   const { stdout } = useStdout();
+  const { internal_eventEmitter: inkInputEventEmitter } = useStdin();
   const lastRawInputRef = useLastRawInputRef();
   const terminalSize = useTerminalSize(stdout);
   const [clipboardCapabilities, setClipboardCapabilities] = useState<ClipboardCapabilities | null>(null);
   const [terminalState, setTerminalState] = useState<WorkbenchTerminalState>(() => initialWorkbenchTerminalState());
   const terminalStateRef = useRef(terminalState);
+  const workbenchInputHandlerRef = useRef<(input: string, key: WorkbenchTerminalKey) => void>(() => {});
   const [spinnerFrame, setSpinnerFrame] = useState(0);
   const agentEngineRef = useRef<AgentEngineClient | null>(null);
   const renderBuildCountRef = useRef(0);
@@ -462,6 +465,20 @@ function WorkbenchApp({
           visibleTranscriptLines: latestInkRenderModel.transcript.visibleLines.length,
           droppedTranscriptLines: Math.max(0, latestRenderModel.transcript.lines.length - latestInkRenderModel.transcript.lines.length),
         },
+        inkInputListeners: inkInputEventEmitter?.listenerCount("input"),
+      });
+      maybeWriteHeapSnapshot("tui.memory.sample", {
+        state: stateDiagnosticSummary(latestState),
+        transcript: {
+          lines: latestRenderModel.transcript.lines.length,
+          visibleLines: latestRenderModel.transcript.visibleLines.length,
+          totalLines: latestRenderModel.transcript.totalLines,
+        },
+        inkPayload: {
+          transcriptLines: latestInkRenderModel.transcript.lines.length,
+          droppedTranscriptLines: Math.max(0, latestRenderModel.transcript.lines.length - latestInkRenderModel.transcript.lines.length),
+        },
+        inkInputListeners: inkInputEventEmitter?.listenerCount("input"),
       });
     }, intervalMs);
     return () => clearInterval(interval);
@@ -502,7 +519,7 @@ function WorkbenchApp({
     };
   }, [agentEngine, options.profile]);
 
-  useInput((input, key) => {
+  workbenchInputHandlerRef.current = (input, key) => {
     const currentTerminalState = terminalStateRef.current;
     const mouse = parseMouseEvent(input);
     if (mouse) {
@@ -580,7 +597,11 @@ function WorkbenchApp({
           break;
       }
     }
-  });
+  };
+  const handleWorkbenchInput = useCallback((input: string, key: WorkbenchTerminalKey) => {
+    workbenchInputHandlerRef.current(input, key);
+  }, []);
+  useInput(handleWorkbenchInput);
 
   useEffect(() => {
     void agentEngine.startInitialPrompt();

@@ -1,9 +1,13 @@
 import { appendFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { performance } from "node:perf_hooks";
+import { writeHeapSnapshot } from "node:v8";
 import type { WorkbenchState } from "./workbench/state.js";
 
 const enabledValues = new Set(["1", "true", "yes", "on"]);
 let sequence = 0;
+const writtenHeapSnapshotThresholds = new Set<number>();
 
 export function diagnosticsEnabled() {
   return enabledValues.has((process.env.AGENT_TUI_DEBUG_MEMORY || process.env.AGENT_TUI_DEBUG || "").toLowerCase());
@@ -41,6 +45,51 @@ export function memorySnapshot() {
     external: memory.external,
     arrayBuffers: memory.arrayBuffers,
   };
+}
+
+export function maybeWriteHeapSnapshot(reason: string, fields: Record<string, unknown> = {}) {
+  if (!diagnosticsEnabled() || !heapSnapshotsEnabled()) return;
+  const memory = process.memoryUsage();
+  const heapUsedMb = memory.heapUsed / 1024 / 1024;
+  for (const thresholdMb of heapSnapshotThresholds()) {
+    if (heapUsedMb < thresholdMb || writtenHeapSnapshotThresholds.has(thresholdMb)) continue;
+    writtenHeapSnapshotThresholds.add(thresholdMb);
+    try {
+      const file = join(tmpdir(), `agent-tui-heap-${process.pid}-${thresholdMb}mb-${Date.now()}.heapsnapshot`);
+      const path = writeHeapSnapshot(file);
+      logDiagnostic("tui.heap_snapshot.write", {
+        reason,
+        thresholdMb,
+        heapUsed: memory.heapUsed,
+        heapTotal: memory.heapTotal,
+        path,
+        ...fields,
+      });
+    } catch (error) {
+      logDiagnostic("tui.heap_snapshot.error", {
+        reason,
+        thresholdMb,
+        heapUsed: memory.heapUsed,
+        heapTotal: memory.heapTotal,
+        error: error instanceof Error ? error.message : String(error),
+        ...fields,
+      });
+    }
+  }
+}
+
+function heapSnapshotsEnabled() {
+  return enabledValues.has((process.env.AGENT_TUI_DEBUG_HEAP_SNAPSHOT || "").toLowerCase());
+}
+
+function heapSnapshotThresholds() {
+  const raw = process.env.AGENT_TUI_DEBUG_HEAP_SNAPSHOT_MB || "1024,2048,3072,3900";
+  const thresholds = raw
+    .split(",")
+    .map((value) => Number(value.trim()))
+    .filter((value) => Number.isFinite(value) && value > 0)
+    .map((value) => Math.round(value));
+  return thresholds.length > 0 ? thresholds : [1024, 2048, 3072, 3900];
 }
 
 export function stateDiagnosticSummary(state: WorkbenchState) {

@@ -12,6 +12,7 @@ export {
   diagnosticNowMs,
   diagnosticsEnabled,
   logDiagnostic,
+  maybeWriteHeapSnapshot,
   memorySnapshot,
   stateDiagnosticSummary,
 } from "./diagnostics.js";
