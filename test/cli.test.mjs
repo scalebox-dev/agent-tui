@@ -3992,6 +3992,12 @@ test("workbench input controller maps navigation and busy abort policy", () => {
   assert.deepEqual(controller.handle("", { escape: true }, { busy: true, draft: "ignored", viewportHeight: 11 }), {
     cursor: 7,
     draft: "ignored",
+    effects: [],
+    selectionAnchor: null,
+  });
+  assert.deepEqual(controller.handle("", { meta: true, escape: true }, { busy: true, draft: "ignored", viewportHeight: 11 }), {
+    cursor: 7,
+    draft: "ignored",
     effects: [{ type: "abort" }],
     selectionAnchor: null,
   });

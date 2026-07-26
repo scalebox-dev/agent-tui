@@ -98,7 +98,9 @@ function handleBusyInput(
   editor: TextEditorState,
   history: ReturnType<typeof createInputHistory>,
 ): WorkbenchInputResult {
-  if (key.escape) return editorResult(editor, { type: "abort" });
+  if (key.escape) {
+    return key.meta ? editorResult(editor, { type: "abort" }) : editorResult(editor);
+  }
   if (key.return) {
     const command = editor.text.trim();
     history.record(command);
