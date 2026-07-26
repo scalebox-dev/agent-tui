@@ -504,7 +504,7 @@ function WorkbenchApp({
   }, [agentEngine, state.busy, state.contextEnabled, state.currentWorkspaceId, state.workdir]);
 
   useEffect(() => {
-    if (!state.busy) {
+    if (!shouldAnimateWorkbenchSpinner(state)) {
       setSpinnerFrame(0);
       return;
     }
@@ -537,6 +537,28 @@ function WorkbenchApp({
       workdirSelection={selectedPanelRange(terminalState.workdirSelectionAnchor, terminalState.workdirCursor)}
     />
   );
+}
+
+function shouldAnimateWorkbenchSpinner(state: WorkbenchState) {
+  if (!state.busy) return false;
+  const runningRun = selectedConversationRunningRunForSpinner(state);
+  const activeAssistantMessageId = runningRun?.assistantMessageId ?? state.activeAssistantMessageId;
+  if (!activeAssistantMessageId) {
+    return state.runs.some((run) => run.status === "running");
+  }
+  const activeAssistantMessage = state.messages.find((message) =>
+    message.role === "assistant" &&
+    message.id === activeAssistantMessageId
+  );
+  return !activeAssistantMessage?.text;
+}
+
+function selectedConversationRunningRunForSpinner(state: WorkbenchState) {
+  return state.runs.find((run) => {
+    if (run.status !== "running") return false;
+    if (state.conversationId) return run.conversationId === state.conversationId;
+    return run.conversationName === state.currentConversation;
+  });
 }
 
 function shouldLoadOlderTranscript(

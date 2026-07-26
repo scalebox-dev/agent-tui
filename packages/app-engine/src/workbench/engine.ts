@@ -75,6 +75,22 @@ export type WorkbenchRuntimeEffect =
   | { type: "set_active_response_id"; responseID: string }
   | { type: "flush_text_delta_buffer" };
 
+type TranscriptPersistJob =
+  | {
+    type: "append";
+    conversationId: string;
+    delta: string;
+    localKnowledgeScope: ReturnType<typeof transcriptLocalKnowledgeScope>;
+    messageId: string;
+    seedMessage?: Pick<WorkbenchState["messages"][number], "id" | "kind" | "role" | "text">;
+  }
+  | {
+    type: "message";
+    conversationId: string;
+    localKnowledgeScope: ReturnType<typeof transcriptLocalKnowledgeScope>;
+    message: Pick<WorkbenchState["messages"][number], "id" | "kind" | "role" | "text">;
+  };
+
 export interface WorkbenchCommandResult {
   handled: boolean;
   effects: WorkbenchEffect[];
@@ -108,8 +124,9 @@ export function createWorkbenchEngine(options: WorkbenchEngineOptions): Workbenc
     const next = workbenchReducer(state, action);
     const changed = !Object.is(next, state);
     if (changed) state = next;
+    const transcriptJob = createTranscriptPersistJob(previous, state, action);
     transcriptPersistQueue = transcriptPersistQueue.then(() =>
-      persistTranscriptAction(options.transcriptStore, previous, state, action, dispatch),
+      persistTranscriptAction(options.transcriptStore, transcriptJob, dispatch),
     );
     if (changed) notify();
   };
@@ -556,43 +573,67 @@ function engineMessageId() {
   return `message-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-async function persistTranscriptAction(
-  store: WorkbenchTranscriptStore | undefined,
+function createTranscriptPersistJob(
   previousState: WorkbenchState,
   state: WorkbenchState,
   action: WorkbenchAction,
-  dispatch: (action: WorkbenchAction) => void,
-) {
+): TranscriptPersistJob | null {
   const conversationId = transcriptConversationId(action, state);
-  if (!store || !conversationId) return;
-  try {
-    if (action.type === "message.add") {
-      const message = {
+  if (!conversationId) return null;
+  const localKnowledgeScope = transcriptLocalKnowledgeScope(state, conversationId);
+  if (action.type === "message.add") {
+    return {
+      type: "message",
+      conversationId,
+      localKnowledgeScope,
+      message: {
         id: action.id ?? "",
         kind: action.kind,
         role: action.role,
         text: action.text,
-      };
-      if (message && shouldPersistTranscriptMessage(message)) {
-        await store.appendMessage(conversationId, message, { localKnowledgeScope: transcriptLocalKnowledgeScope(state, conversationId) });
+      },
+    };
+  }
+  if (action.type === "message.append") {
+    const existed = previousState.messages.some((message) => message.id === action.id);
+    const seed = existed ? undefined : state.messages.find((item) => item.id === action.id);
+    return {
+      type: "append",
+      conversationId,
+      delta: action.delta,
+      localKnowledgeScope,
+      messageId: action.id,
+      seedMessage: seed ? {
+        id: seed.id,
+        kind: seed.kind,
+        role: seed.role,
+        text: seed.text,
+      } : undefined,
+    };
+  }
+  return null;
+}
+
+async function persistTranscriptAction(
+  store: WorkbenchTranscriptStore | undefined,
+  job: TranscriptPersistJob | null,
+  dispatch: (action: WorkbenchAction) => void,
+) {
+  if (!store || !job) return;
+  try {
+    if (job.type === "message") {
+      if (shouldPersistTranscriptMessage(job.message)) {
+        await store.appendMessage(job.conversationId, job.message, { localKnowledgeScope: job.localKnowledgeScope });
       }
       return;
     }
-    if (action.type === "message.append") {
-      if (!previousState.messages.some((message) => message.id === action.id)) {
-        const message = state.messages.find((item) => item.id === action.id);
-        if (message && shouldPersistTranscriptMessage(message)) {
-          await store.appendMessage(conversationId, {
-            id: message.id,
-            kind: message.kind,
-            role: message.role,
-            text: message.text,
-          }, { localKnowledgeScope: transcriptLocalKnowledgeScope(state, conversationId) });
-        }
-        return;
+    if (job.seedMessage) {
+      if (shouldPersistTranscriptMessage(job.seedMessage)) {
+        await store.appendMessage(job.conversationId, job.seedMessage, { localKnowledgeScope: job.localKnowledgeScope });
       }
-      await store.appendMessageDelta(conversationId, action.id, action.delta, { localKnowledgeScope: transcriptLocalKnowledgeScope(state, conversationId) });
+      return;
     }
+    await store.appendMessageDelta(job.conversationId, job.messageId, job.delta, { localKnowledgeScope: job.localKnowledgeScope });
   } catch (error) {
     dispatch({
       type: "activity.add",

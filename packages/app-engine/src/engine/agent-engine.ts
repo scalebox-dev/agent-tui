@@ -427,7 +427,8 @@ async function buildConversationSummaries(
   conversations: readonly ConversationSelection[],
   transcriptStore?: WorkbenchTranscriptStore,
 ): Promise<WorkbenchConversationSummary[]> {
-  return Promise.all(conversations.map(async (conversation) => {
+  const visibleConversations = conversations.slice(0, maxConversationSummaries);
+  return Promise.all(visibleConversations.map(async (conversation) => {
     const transcript = transcriptStore
       ? await transcriptStore.getConversationSummary(conversation.id)
       : { latestSnippet: "", messageCount: 0, titleSnippet: "" };
@@ -443,6 +444,8 @@ async function buildConversationSummaries(
     };
   }));
 }
+
+const maxConversationSummaries = 20;
 
 function userFacingError(error: unknown) {
   if (error instanceof Error) return error.message;
