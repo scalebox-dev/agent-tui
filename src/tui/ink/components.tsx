@@ -14,6 +14,12 @@ import {
   type RenderMode,
 } from "@agent-api/app-engine/workbench";
 
+export type InkWorkbenchRenderModel = Omit<WorkbenchRenderModel, "transcript"> & {
+  transcript: Omit<WorkbenchRenderModel["transcript"], "lines"> & {
+    lines: TranscriptLine[];
+  };
+};
+
 export function InkWorkbenchScreen({
   activityCursor,
   activitySelection,
@@ -38,7 +44,7 @@ export function InkWorkbenchScreen({
   focusedPanel: "activity" | "conversation" | "header" | "input" | "transcript" | "workspace" | "workdir";
   headerCursor: WorkbenchPanelPosition;
   headerSelection: WorkbenchPanelSelection | null;
-  renderModel: WorkbenchRenderModel;
+  renderModel: InkWorkbenchRenderModel;
   spinnerFrame: number;
   transcriptCursor: WorkbenchPanelPosition;
   transcriptSelection: WorkbenchPanelSelection | null;

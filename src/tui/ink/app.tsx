@@ -37,7 +37,7 @@ import {
   type WorkbenchTerminalKey,
   type WorkbenchTerminalState,
 } from "@agent-api/app-engine/terminal";
-import { InkAuthGate, InkWorkbenchScreen } from "./components.js";
+import { InkAuthGate, InkWorkbenchScreen, type InkWorkbenchRenderModel } from "./components.js";
 import {
   detectClipboardCapabilities,
   formatClipboardCapabilities,
@@ -305,8 +305,29 @@ function WorkbenchApp({
   );
   const latestDiagnosticStateRef = useRef(state);
   const latestDiagnosticRenderModelRef = useRef(renderModel);
+  const inkRenderModel = useMemo(
+    () => {
+      const slim = slimRenderModelForInk(renderModel);
+      if (diagnosticsEnabled() && renderBuildCountRef.current % 25 === 0) {
+        logDiagnostic("tui.ink_payload.build", {
+          count: renderBuildCountRef.current,
+          fullTranscriptLines: renderModel.transcript.lines.length,
+          inkTranscriptLines: slim.transcript.lines.length,
+          visibleTranscriptLines: renderModel.transcript.visibleLines.length,
+          transcriptTotalLines: renderModel.transcript.totalLines,
+          transcriptOffset: renderModel.transcript.offset,
+          approximateDroppedTranscriptLines: Math.max(0, renderModel.transcript.lines.length - slim.transcript.lines.length),
+          state: stateDiagnosticSummary(state),
+        });
+      }
+      return slim;
+    },
+    [renderModel, state],
+  );
+  const latestDiagnosticInkRenderModelRef = useRef(inkRenderModel);
   latestDiagnosticStateRef.current = state;
   latestDiagnosticRenderModelRef.current = renderModel;
+  latestDiagnosticInkRenderModelRef.current = inkRenderModel;
 
   function commitTerminalState(next: WorkbenchTerminalState) {
     terminalStateRef.current = next;
@@ -426,6 +447,7 @@ function WorkbenchApp({
     const interval = setInterval(() => {
       const latestState = latestDiagnosticStateRef.current;
       const latestRenderModel = latestDiagnosticRenderModelRef.current;
+      const latestInkRenderModel = latestDiagnosticInkRenderModelRef.current;
       logDiagnostic("tui.memory.sample", {
         state: stateDiagnosticSummary(latestState),
         transcript: {
@@ -434,6 +456,11 @@ function WorkbenchApp({
           totalLines: latestRenderModel.transcript.totalLines,
           offset: latestRenderModel.transcript.offset,
           maxOffset: latestRenderModel.transcript.maxOffset,
+        },
+        inkPayload: {
+          transcriptLines: latestInkRenderModel.transcript.lines.length,
+          visibleTranscriptLines: latestInkRenderModel.transcript.visibleLines.length,
+          droppedTranscriptLines: Math.max(0, latestRenderModel.transcript.lines.length - latestInkRenderModel.transcript.lines.length),
         },
       });
     }, intervalMs);
@@ -583,7 +610,7 @@ function WorkbenchApp({
       focusedPanel={terminalState.focusedPanel}
       headerCursor={terminalState.headerCursor}
       headerSelection={selectedPanelRange(terminalState.headerSelectionAnchor, terminalState.headerCursor)}
-      renderModel={renderModel}
+      renderModel={inkRenderModel}
       spinnerFrame={spinnerFrame}
       transcriptCursor={terminalState.transcriptCursor}
       transcriptSelection={selectedPanelRange(terminalState.transcriptSelectionAnchor, terminalState.transcriptCursor)}
@@ -593,6 +620,16 @@ function WorkbenchApp({
       workdirSelection={selectedPanelRange(terminalState.workdirSelectionAnchor, terminalState.workdirCursor)}
     />
   );
+}
+
+function slimRenderModelForInk(renderModel: ReturnType<typeof buildWorkbenchRenderModel>): InkWorkbenchRenderModel {
+  return {
+    ...renderModel,
+    transcript: {
+      ...renderModel.transcript,
+      lines: renderModel.transcript.visibleLines,
+    },
+  };
 }
 
 function shouldAnimateWorkbenchSpinner(state: WorkbenchState) {
