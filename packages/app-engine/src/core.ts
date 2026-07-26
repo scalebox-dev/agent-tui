@@ -6,6 +6,15 @@ export type {
 export {
   createAgentEngine,
 } from "./engine/agent-engine.js";
+export {
+  approximateJSONBytes,
+  approximateStringBytes,
+  diagnosticNowMs,
+  diagnosticsEnabled,
+  logDiagnostic,
+  memorySnapshot,
+  stateDiagnosticSummary,
+} from "./diagnostics.js";
 export type {
   AgentEngineClient,
 } from "./engine/client.js";

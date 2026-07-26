@@ -41,6 +41,13 @@ import { buildWorkdirContextBlock, openWorkdir } from "../workdir/index.js";
 import { localShellIsolationOptions } from "../workbench/shell-isolation.js";
 import type { ShellIsolationPreferences } from "../workbench/shell-isolation.js";
 import type { ConversationRunSettings } from "../config.js";
+import {
+  approximateJSONBytes,
+  approximateStringBytes,
+  diagnosticNowMs,
+  diagnosticsEnabled,
+  logDiagnostic,
+} from "../diagnostics.js";
 
 export interface AgentRunOptions {
   profile?: string;
@@ -539,25 +546,63 @@ async function createAgentResponseWithOptionalStream(
   let finalResponse: AgentResponse | undefined;
   let responseID = "";
   let sawTextDelta = false;
+  let eventCount = 0;
+  let textDeltaBytes = 0;
+  const started = diagnosticNowMs();
+  logDiagnostic("agent.stream.start", {
+    preset: params.preset,
+    model: params.model,
+    previousResponseId: params.previous_response_id,
+    inputBytes: approximateJSONBytes(params.input),
+    instructionsBytes: approximateStringBytes(params.instructions),
+    toolCount: params.tools?.length ?? 0,
+  });
   for await (const event of stream) {
     throwIfAborted(abortSignal);
+    eventCount += 1;
     emitAgentTurnEvent(event, onEvent);
     if (event.type === "response.output_text.delta") {
       sawTextDelta = true;
+      textDeltaBytes += approximateStringBytes(event.delta);
     }
     if (event.response?.id) {
       responseID = event.response.id;
     }
     if (event.type === "response.completed" && event.response) {
       finalResponse = event.response;
+      logDiagnostic("agent.stream.completed_event", {
+        responseId: event.response.id,
+        eventCount,
+        eventBytes: diagnosticsEnabled() ? approximateJSONBytes(event) : undefined,
+        responseBytes: diagnosticsEnabled() ? approximateJSONBytes(event.response) : undefined,
+        textDeltaBytes,
+      });
     }
     if (event.type === "response.failed") {
+      logDiagnostic("agent.stream.failed_event", {
+        responseId: responseID,
+        eventCount,
+        message: event.error?.message,
+      });
       throw new Error(event.error?.message || "agent run failed");
+    }
+    if (diagnosticsEnabled() && eventCount % 50 === 0) {
+      logDiagnostic("agent.stream.progress", {
+        responseId: responseID,
+        eventCount,
+        textDeltaBytes,
+        latestEventType: event.type,
+      });
     }
   }
 
   throwIfAborted(abortSignal);
   if (!finalResponse && responseID) {
+    logDiagnostic("agent.stream.retrieve_final", {
+      responseId: responseID,
+      eventCount,
+      textDeltaBytes,
+    });
     finalResponse = await responses.retrieve(responseID, {}, requestAbortOptions(abortSignal));
   }
   if (!finalResponse) {
@@ -569,6 +614,15 @@ async function createAgentResponseWithOptionalStream(
       onEvent?.({ type: "text.delta", delta: finalResponse.output_text });
     }
   }
+  logDiagnostic("agent.stream.done", {
+    responseId: finalResponse.id,
+    durationMs: Math.round(diagnosticNowMs() - started),
+    eventCount,
+    sawTextDelta,
+    textDeltaBytes,
+    finalResponseBytes: diagnosticsEnabled() ? approximateJSONBytes(finalResponse) : undefined,
+    outputTextBytes: approximateStringBytes(finalResponse.output_text),
+  });
   return finalResponse;
 }
 

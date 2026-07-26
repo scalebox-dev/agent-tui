@@ -18,6 +18,13 @@ import type { AgentTurnEvent, WorkdirAccessMode } from "../agent.js";
 import { formatDisplayPreview, localToolDisplayArguments } from "../local-display.js";
 import { appVersion } from "../runtime/index.js";
 import { shouldPersistTranscriptMessage, type WorkbenchTranscriptStore } from "./transcript-store.js";
+import {
+  approximateStringBytes,
+  diagnosticNowMs,
+  diagnosticsEnabled,
+  logDiagnostic,
+  stateDiagnosticSummary,
+} from "../diagnostics.js";
 
 export interface WorkbenchEngineOptions {
   contextEnabled: boolean;
@@ -104,6 +111,7 @@ export function createWorkbenchEngine(options: WorkbenchEngineOptions): Workbenc
   let state = createInitialWorkbenchState(options);
   let pendingApprovalInvalidInputs = 0;
   let transcriptPersistQueue = Promise.resolve();
+  let transcriptPersistPending = 0;
   const listeners = new Set<() => void>();
   const notify = () => {
     for (const listener of listeners) listener();
@@ -125,9 +133,23 @@ export function createWorkbenchEngine(options: WorkbenchEngineOptions): Workbenc
     const changed = !Object.is(next, state);
     if (changed) state = next;
     const transcriptJob = createTranscriptPersistJob(previous, state, action);
-    transcriptPersistQueue = transcriptPersistQueue.then(() =>
-      persistTranscriptAction(options.transcriptStore, transcriptJob, dispatch),
-    );
+    const dispatchDiagnostic = createDispatchDiagnostic(previous, state, action, transcriptJob, transcriptPersistPending);
+    if (transcriptJob) transcriptPersistPending += 1;
+    transcriptPersistQueue = transcriptPersistQueue.then(async () => {
+      if (!transcriptJob) return;
+      const started = diagnosticNowMs();
+      try {
+        await persistTranscriptAction(options.transcriptStore, transcriptJob, dispatch);
+      } finally {
+        transcriptPersistPending = Math.max(0, transcriptPersistPending - 1);
+        logDiagnostic("transcript.persist.done", {
+          durationMs: Math.round(diagnosticNowMs() - started),
+          pending: transcriptPersistPending,
+          job: transcriptJobDiagnostic(transcriptJob),
+        });
+      }
+    });
+    if (dispatchDiagnostic) logDiagnostic("workbench.dispatch", dispatchDiagnostic);
     if (changed) notify();
   };
 
@@ -571,6 +593,56 @@ function normalizeWorkbenchAction(action: WorkbenchAction): WorkbenchAction {
 
 function engineMessageId() {
   return `message-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function createDispatchDiagnostic(
+  previousState: WorkbenchState,
+  state: WorkbenchState,
+  action: WorkbenchAction,
+  transcriptJob: TranscriptPersistJob | null,
+  transcriptPersistPending: number,
+) {
+  if (!diagnosticsEnabled()) return null;
+  if (!isDiagnosticAction(action) && transcriptPersistPending < 10) return null;
+  return {
+    action: action.type,
+    changed: !Object.is(previousState, state),
+    previous: stateDiagnosticSummary(previousState),
+    next: stateDiagnosticSummary(state),
+    transcriptPersistPending,
+    transcriptJob: transcriptJob ? transcriptJobDiagnostic(transcriptJob) : null,
+  };
+}
+
+function isDiagnosticAction(action: WorkbenchAction) {
+  return action.type === "message.add"
+    || action.type === "message.append"
+    || action.type === "messages.restore"
+    || action.type === "messages.appendPage"
+    || action.type === "messages.prepend"
+    || action.type === "run.started"
+    || action.type === "run.status.set"
+    || action.type === "run.response.set"
+    || action.type === "conversations.set";
+}
+
+function transcriptJobDiagnostic(job: TranscriptPersistJob) {
+  if (job.type === "message") {
+    return {
+      type: job.type,
+      conversationId: job.conversationId,
+      messageId: job.message.id,
+      role: job.message.role,
+      textBytes: approximateStringBytes(job.message.text),
+    };
+  }
+  return {
+    type: job.type,
+    conversationId: job.conversationId,
+    messageId: job.messageId,
+    deltaBytes: approximateStringBytes(job.delta),
+    seedMessageBytes: job.seedMessage ? approximateStringBytes(job.seedMessage.text) : 0,
+  };
 }
 
 function createTranscriptPersistJob(

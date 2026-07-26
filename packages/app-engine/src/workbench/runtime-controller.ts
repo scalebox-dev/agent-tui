@@ -1,5 +1,6 @@
 import type { WorkbenchAction } from "./state.js";
 import type { WorkbenchRunContext, WorkbenchRuntimeEffect } from "./engine.js";
+import { approximateStringBytes, logDiagnostic } from "../diagnostics.js";
 
 export interface WorkbenchRuntimeController {
   dispose(): void;
@@ -52,12 +53,24 @@ export function createWorkbenchRuntimeController(options: WorkbenchRuntimeContro
       flushTextDeltaBuffer();
       if (!startedMessageIds.has(id)) {
         startedMessageIds.add(id);
+        logDiagnostic("runtime.delta.first", {
+          assistantId: id,
+          conversationId: runContext?.conversationId,
+          deltaBytes: approximateStringBytes(delta),
+        });
         options.dispatch({ type: "message.add", id, role: "assistant", text: delta, conversationId: runContext?.conversationId });
         return;
       }
       textDeltaBuffer = { id, text: delta, conversationId: runContext?.conversationId };
     } else {
       textDeltaBuffer.text += delta;
+    }
+    if (textDeltaBuffer.text.length >= 32_000) {
+      logDiagnostic("runtime.delta.buffer.large", {
+        assistantId: id,
+        conversationId: runContext?.conversationId,
+        bufferedBytes: approximateStringBytes(textDeltaBuffer.text),
+      });
     }
     if (textDeltaFlushTimer) return;
     textDeltaFlushTimer = setTimeout(() => {
@@ -74,6 +87,11 @@ export function createWorkbenchRuntimeController(options: WorkbenchRuntimeContro
     if (!textDeltaBuffer || !textDeltaBuffer.text) return;
     const buffered = textDeltaBuffer;
     textDeltaBuffer = null;
+    logDiagnostic("runtime.delta.flush", {
+      assistantId: buffered.id,
+      conversationId: buffered.conversationId,
+      deltaBytes: approximateStringBytes(buffered.text),
+    });
     options.dispatch({ type: "message.append", id: buffered.id, delta: buffered.text, conversationId: buffered.conversationId });
   }
 }

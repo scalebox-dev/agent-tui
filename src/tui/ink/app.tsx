@@ -4,6 +4,10 @@ import {
   createInProcessAgentEngineClient,
   currentAgentAppRuntime,
   defaultBaseURL,
+  diagnosticNowMs,
+  diagnosticsEnabled,
+  logDiagnostic,
+  stateDiagnosticSummary,
   type AgentEngineClient,
   type AgentRunOptions,
 } from "@agent-api/app-engine/core";
@@ -207,6 +211,7 @@ function WorkbenchApp({
   const terminalStateRef = useRef(terminalState);
   const [spinnerFrame, setSpinnerFrame] = useState(0);
   const agentEngineRef = useRef<AgentEngineClient | null>(null);
+  const renderBuildCountRef = useRef(0);
   const localKnowledgeRef = useRef<LocalKnowledgeService | null | undefined>(undefined);
   if (localKnowledgeRef.current === undefined) {
     if (options.localKnowledgeEnabled === false) {
@@ -256,7 +261,9 @@ function WorkbenchApp({
   const dispatch = agentEngine.dispatch;
   const renderModelSpinnerFrame = transcriptWaitingSpinnerFrame(state, spinnerFrame);
   const renderModel = useMemo(
-    () => buildWorkbenchRenderModel({
+    () => {
+      const started = diagnosticNowMs();
+      const model = buildWorkbenchRenderModel({
       draft: terminalState.draft,
       cursor: terminalState.cursor,
       profileName,
@@ -269,9 +276,37 @@ function WorkbenchApp({
         columns: terminalSize.columns,
       },
       workdirFallback: options.workdir || process.cwd(),
-    }),
+      });
+      const durationMs = diagnosticNowMs() - started;
+      const count = renderBuildCountRef.current + 1;
+      renderBuildCountRef.current = count;
+      if (diagnosticsEnabled() && (durationMs >= 25 || count % 25 === 0)) {
+        logDiagnostic("tui.render_model.build", {
+          count,
+          durationMs: Math.round(durationMs),
+          state: stateDiagnosticSummary(state),
+          transcript: {
+            lines: model.transcript.lines.length,
+            visibleLines: model.transcript.visibleLines.length,
+            totalLines: model.transcript.totalLines,
+            offset: model.transcript.offset,
+            maxOffset: model.transcript.maxOffset,
+            width: model.transcriptWidth,
+          },
+          viewport: {
+            rows: terminalSize.rows,
+            columns: terminalSize.columns,
+          },
+        });
+      }
+      return model;
+    },
     [options.workdir, profileName, renderModelSpinnerFrame, state, terminalSize.columns, terminalSize.rows, terminalState.cursor, terminalState.draft, terminalState.selectionAnchor, terminalState.transcriptOffset],
   );
+  const latestDiagnosticStateRef = useRef(state);
+  const latestDiagnosticRenderModelRef = useRef(renderModel);
+  latestDiagnosticStateRef.current = state;
+  latestDiagnosticRenderModelRef.current = renderModel;
 
   function commitTerminalState(next: WorkbenchTerminalState) {
     terminalStateRef.current = next;
@@ -383,6 +418,27 @@ function WorkbenchApp({
       mounted = false;
     };
   }, [agentEngine]);
+
+  useEffect(() => {
+    if (!diagnosticsEnabled()) return;
+    const intervalMs = Math.max(1000, Number(process.env.AGENT_TUI_DEBUG_MEMORY_INTERVAL_MS || 5000));
+    logDiagnostic("tui.memory.sampler.start", { intervalMs });
+    const interval = setInterval(() => {
+      const latestState = latestDiagnosticStateRef.current;
+      const latestRenderModel = latestDiagnosticRenderModelRef.current;
+      logDiagnostic("tui.memory.sample", {
+        state: stateDiagnosticSummary(latestState),
+        transcript: {
+          lines: latestRenderModel.transcript.lines.length,
+          visibleLines: latestRenderModel.transcript.visibleLines.length,
+          totalLines: latestRenderModel.transcript.totalLines,
+          offset: latestRenderModel.transcript.offset,
+          maxOffset: latestRenderModel.transcript.maxOffset,
+        },
+      });
+    }, intervalMs);
+    return () => clearInterval(interval);
+  }, []);
 
   useEffect(() => {
     let mounted = true;

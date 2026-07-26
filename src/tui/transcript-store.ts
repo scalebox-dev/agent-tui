@@ -13,6 +13,7 @@ import {
   type WorkbenchTranscriptStore,
   type WorkbenchTranscriptWriteOptions,
 } from "@agent-api/app-engine/workbench";
+import { approximateStringBytes, diagnosticNowMs, logDiagnostic } from "@agent-api/app-engine/core";
 
 export interface DefaultTranscriptStoreOptions {
   localKnowledge?: LocalKnowledgeService;
@@ -131,6 +132,7 @@ export function createSQLiteTranscriptStore(file: string, options: DefaultTransc
 
   return {
     async appendMessage(conversationId, message, writeOptions?: WorkbenchTranscriptWriteOptions) {
+      const started = diagnosticNowMs();
       insertMessage.run({
         conversationId,
         messageId: message.id,
@@ -141,9 +143,18 @@ export function createSQLiteTranscriptStore(file: string, options: DefaultTransc
       });
       cancelPendingKnowledgeIngest(conversationId, message.id);
       ingestKnowledgeMessage(options.localKnowledge, conversationId, knowledgeBoundedMessage(message), writeOptions?.localKnowledgeScope);
+      logDiagnostic("transcript.sqlite.append_message", {
+        conversationId,
+        messageId: message.id,
+        role: message.role,
+        textBytes: approximateStringBytes(message.text),
+        pendingKnowledgeIngests: pendingKnowledgeIngests.size,
+        durationMs: Math.round(diagnosticNowMs() - started),
+      });
     },
     async appendMessageDelta(conversationId, messageId, delta, writeOptions?: WorkbenchTranscriptWriteOptions) {
       if (!delta) return;
+      const started = diagnosticNowMs();
       appendDelta.run({
         conversationId,
         messageId,
@@ -156,10 +167,26 @@ export function createSQLiteTranscriptStore(file: string, options: DefaultTransc
           ...pending.message,
           text: appendTextByBytes(pending.message.text, delta, knowledgePendingMaxBytes),
         }, writeOptions?.localKnowledgeScope ?? pending.scope);
+        logDiagnostic("transcript.sqlite.append_delta", {
+          conversationId,
+          messageId,
+          deltaBytes: approximateStringBytes(delta),
+          pendingKnowledgeIngests: pendingKnowledgeIngests.size,
+          knowledgePendingBytes: approximateStringBytes(pending.message.text),
+          durationMs: Math.round(diagnosticNowMs() - started),
+        });
         return;
       }
       const rows = rowsToMessages([messageByIDForKnowledge.get(knowledgePendingMaxBytes, conversationId, messageId)].filter(Boolean));
       if (rows[0]) scheduleKnowledgeIngest(conversationId, rows[0], writeOptions?.localKnowledgeScope);
+      logDiagnostic("transcript.sqlite.append_delta", {
+        conversationId,
+        messageId,
+        deltaBytes: approximateStringBytes(delta),
+        pendingKnowledgeIngests: pendingKnowledgeIngests.size,
+        knowledgePendingBytes: rows[0] ? approximateStringBytes(rows[0].text) : 0,
+        durationMs: Math.round(diagnosticNowMs() - started),
+      });
     },
     async clearConversation(conversationId) {
       cancelConversationKnowledgeIngests(conversationId);
@@ -216,6 +243,12 @@ export function createSQLiteTranscriptStore(file: string, options: DefaultTransc
       scope,
       timer,
     });
+    logDiagnostic("transcript.knowledge.schedule", {
+      conversationId,
+      messageId: message.id,
+      textBytes: approximateStringBytes(boundedMessage.text),
+      pendingKnowledgeIngests: pendingKnowledgeIngests.size,
+    });
   }
 
   function knowledgeBoundedMessage(message: WorkbenchMessage): WorkbenchMessage {
@@ -230,6 +263,12 @@ export function createSQLiteTranscriptStore(file: string, options: DefaultTransc
     if (!pending) return;
     pendingKnowledgeIngests.delete(key);
     clearTimeout(pending.timer);
+    logDiagnostic("transcript.knowledge.flush", {
+      conversationId: pending.conversationId,
+      messageId: pending.message.id,
+      textBytes: approximateStringBytes(pending.message.text),
+      pendingKnowledgeIngests: pendingKnowledgeIngests.size,
+    });
     ingestKnowledgeMessage(options.localKnowledge, pending.conversationId, pending.message, pending.scope);
   }
 
