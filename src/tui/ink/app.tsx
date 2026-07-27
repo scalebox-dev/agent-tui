@@ -49,6 +49,7 @@ import {
 import { disableMouseReporting, parseMouseEvent } from "../mouse.js";
 import { createDefaultTranscriptStore } from "../transcript-store.js";
 import { createSQLiteLocalKnowledgeStore } from "../local-knowledge-store.js";
+import { performance as nodePerformance } from "node:perf_hooks";
 import path from "node:path";
 
 export function ChatApp({ options }: { options: AgentRunOptions }) {
@@ -262,6 +263,7 @@ function WorkbenchApp({
   const terminalController = terminalControllerRef.current;
   const state = useSyncExternalStore(agentEngine.subscribe, agentEngine.snapshot, agentEngine.snapshot);
   const dispatch = agentEngine.dispatch;
+  useTuiPerformanceTimelineCleanup();
   const renderModelSpinnerFrame = transcriptWaitingSpinnerFrame(state, spinnerFrame);
   const renderModel = useMemo(
     () => {
@@ -452,6 +454,7 @@ function WorkbenchApp({
       const latestRenderModel = latestDiagnosticRenderModelRef.current;
       const latestInkRenderModel = latestDiagnosticInkRenderModelRef.current;
       logDiagnostic("tui.memory.sample", {
+        performanceTimeline: performanceTimelineSummary(),
         state: stateDiagnosticSummary(latestState),
         transcript: {
           lines: latestRenderModel.transcript.lines.length,
@@ -468,6 +471,7 @@ function WorkbenchApp({
         inkInputListeners: inkInputEventEmitter?.listenerCount("input"),
       });
       maybeWriteHeapSnapshot("tui.memory.sample", {
+        performanceTimeline: performanceTimelineSummary(),
         state: stateDiagnosticSummary(latestState),
         transcript: {
           lines: latestRenderModel.transcript.lines.length,
@@ -757,6 +761,26 @@ function useLastRawInputRef() {
   }, [internal_eventEmitter]);
 
   return lastRawInputRef;
+}
+
+function performanceTimelineSummary() {
+  return {
+    marks: nodePerformance.getEntriesByType("mark").length,
+    measures: nodePerformance.getEntriesByType("measure").length,
+  };
+}
+
+function useTuiPerformanceTimelineCleanup() {
+  useEffect(() => {
+    clearTuiPerformanceTimeline();
+    const interval = setInterval(clearTuiPerformanceTimeline, 5000);
+    return () => clearInterval(interval);
+  }, []);
+}
+
+function clearTuiPerformanceTimeline() {
+  nodePerformance.clearMeasures();
+  nodePerformance.clearMarks();
 }
 
 function normalizeInkTerminalKey(key: WorkbenchTerminalKey, rawInput: string): WorkbenchTerminalKey {
