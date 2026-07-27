@@ -759,11 +759,18 @@ function useLastRawInputRef() {
   return lastRawInputRef;
 }
 
-function normalizeInkTerminalKey(key: WorkbenchTerminalKey, rawInput: string): WorkbenchTerminalKey {
+export function normalizeInkTerminalKey(key: WorkbenchTerminalKey, rawInput: string): WorkbenchTerminalKey {
+  if (key.escape && key.meta && isRawPlainEscape(rawInput)) {
+    return { ...key, meta: false };
+  }
   if (key.delete && !key.backspace && isRawBackspace(rawInput)) {
     return { ...key, backspace: true, delete: false };
   }
   return key;
+}
+
+function isRawPlainEscape(rawInput: string) {
+  return rawInput === "\x1b";
 }
 
 function isRawBackspace(rawInput: string) {
