@@ -89,7 +89,6 @@ import {
   createSQLiteStorage,
 } from "@agent-api/app-engine/storage";
 import { localAppDirs } from "@agent-api/sdk/local";
-import { normalizeInkTerminalKey } from "../dist/tui/ink/app.js";
 import { parseMouseEvent } from "../dist/tui/mouse.js";
 
 const execFileAsync = promisify(execFile);
@@ -3993,12 +3992,6 @@ test("workbench input controller maps navigation and busy abort policy", () => {
   assert.deepEqual(controller.handle("", { escape: true }, { busy: true, draft: "ignored", viewportHeight: 11 }), {
     cursor: 7,
     draft: "ignored",
-    effects: [],
-    selectionAnchor: null,
-  });
-  assert.deepEqual(controller.handle("", { meta: true, escape: true }, { busy: true, draft: "ignored", viewportHeight: 11 }), {
-    cursor: 7,
-    draft: "ignored",
     effects: [{ type: "abort" }],
     selectionAnchor: null,
   });
@@ -4020,17 +4013,6 @@ test("workbench input controller maps navigation and busy abort policy", () => {
     effects: [{ type: "ignored_busy" }],
     selectionAnchor: null,
   });
-});
-
-test("ink key normalization keeps plain escape from looking like alt escape", () => {
-  assert.deepEqual(
-    normalizeInkTerminalKey({ escape: true, meta: true }, "\x1b"),
-    { escape: true, meta: false },
-  );
-  assert.deepEqual(
-    normalizeInkTerminalKey({ escape: true, meta: true }, "\x1b\x1b"),
-    { escape: true, meta: true },
-  );
 });
 
 test("workbench input controller supports visual-row movement and selected deletion", () => {

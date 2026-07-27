@@ -577,7 +577,7 @@ function WorkbenchApp({
           void submitInput(effect.input);
           break;
         case "ignored_busy":
-          dispatch({ type: "message.add", role: "system", text: "This conversation already has an active agent turn. Use /abort or Alt+Esc to cancel it." });
+          dispatch({ type: "message.add", role: "system", text: "This conversation already has an active agent turn. Use /abort or Esc to cancel it." });
           dispatch({ type: "activity.add", level: "warning", text: "Input ignored while selected conversation is running" });
           break;
         case "copy":
@@ -759,18 +759,11 @@ function useLastRawInputRef() {
   return lastRawInputRef;
 }
 
-export function normalizeInkTerminalKey(key: WorkbenchTerminalKey, rawInput: string): WorkbenchTerminalKey {
-  if (key.escape && key.meta && isRawPlainEscape(rawInput)) {
-    return { ...key, meta: false };
-  }
+function normalizeInkTerminalKey(key: WorkbenchTerminalKey, rawInput: string): WorkbenchTerminalKey {
   if (key.delete && !key.backspace && isRawBackspace(rawInput)) {
     return { ...key, backspace: true, delete: false };
   }
   return key;
-}
-
-function isRawPlainEscape(rawInput: string) {
-  return rawInput === "\x1b";
 }
 
 function isRawBackspace(rawInput: string) {
